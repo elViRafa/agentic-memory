@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
 
 
 Priority = Literal["high", "medium", "low"]
@@ -77,3 +77,56 @@ class DreamResult(TypedDict):
     snapshot: str | None
     warnings: list[str]
     checked_files: list[str]
+    evaluation: NotRequired["DreamEvalResult"]
+
+
+class EvalCheck(TypedDict):
+    id: str
+    status: Literal["pass", "warn", "fail"]
+    severity: Literal["info", "low", "medium", "high"]
+    message: str
+    recommendation: str
+    command: NotRequired[str]
+
+
+class EvalCategory(TypedDict):
+    name: str
+    score: int
+    status: Literal["pass", "warn", "fail"]
+    weight: int
+    checks: list[EvalCheck]
+
+
+class EvalResult(TypedDict):
+    kind: Literal["memory"]
+    generated_at: str
+    cwd: str
+    memory_dir: str
+    score: int
+    status: Literal["pass", "warn", "fail"]
+    categories: list[EvalCategory]
+    recommendations: list[str]
+    report_paths: list[str]
+    warnings: list[str]
+    llm_notes: list[str]
+
+
+class DreamEvalResult(TypedDict):
+    kind: Literal["dream"]
+    generated_at: str
+    cwd: str
+    memory_dir: str
+    baseline_snapshot: str
+    before_score: int
+    after_score: int
+    delta: int
+    score: int
+    status: Literal["pass", "warn", "fail"]
+    changed_files: list[str]
+    improvements: list[str]
+    regressions: list[str]
+    categories: list[EvalCategory]
+    recommendations: list[str]
+    report_paths: list[str]
+    warnings: list[str]
+    llm_notes: list[str]

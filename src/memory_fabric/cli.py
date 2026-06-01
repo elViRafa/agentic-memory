@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from memory_fabric import __version__
+from memory_fabric.eval import evaluate_dream_quality, evaluate_memory_fabric
 from memory_fabric.storage import (
     doctor,
     dream,
@@ -39,8 +40,31 @@ def main(argv: list[str] | None = None) -> int:
             return 0 if result["ok"] else 1
         if args.command == "dream":
             result = dream(cwd, mode=args.mode)
+            if args.eval:
+                result["evaluation"] = evaluate_dream_quality(
+                    cwd,
+                    snapshot=result["snapshot"] or "latest",
+                    save_report=True,
+                    llm_review=args.llm_review,
+                )
             _print_result(result, args.json)
             return 0
+        if args.command == "eval":
+            if args.dream_snapshot:
+                result = evaluate_dream_quality(
+                    cwd,
+                    snapshot=args.dream_snapshot,
+                    save_report=not args.no_save,
+                    llm_review=args.llm_review,
+                )
+            else:
+                result = evaluate_memory_fabric(
+                    cwd,
+                    save_report=not args.no_save,
+                    llm_review=args.llm_review,
+                )
+            _print_result(result, args.json)
+            return 0 if result["status"] != "fail" else 1
         if args.command == "query":
             result = keyword_search(cwd, args.query, max_results=args.max_results)
             _print_result(result, args.json)
@@ -83,6 +107,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     dream_parser = subparsers.add_parser("dream", help="Run local memory maintenance")
     dream_parser.add_argument("--mode", choices=["light", "deep"], default="light")
+    dream_parser.add_argument("--eval", action="store_true", help="Evaluate quality before and after Dreaming")
+    dream_parser.add_argument("--llm-review", action="store_true", help="Add optional qualitative LLM review notes")
+
+    eval_parser = subparsers.add_parser("eval", help="Evaluate memory and Dreaming quality")
+    eval_parser.add_argument("--llm-review", action="store_true", help="Add optional qualitative LLM review notes")
+    eval_parser.add_argument("--dream", dest="dream_snapshot", help="Evaluate a Dreaming run against a snapshot name or latest")
+    eval_parser.add_argument("--no-save", action="store_true", help="Do not save eval reports under .ai-memory/evals")
 
     query_parser = subparsers.add_parser("query", help="Search memory")
     query_parser.add_argument("query")
@@ -128,7 +159,7 @@ def _format_value(value: Any) -> str:
             return "[]"
         return "\n  - " + "\n  - ".join(str(item) for item in value)
     if isinstance(value, dict):
-        return json.dumps(value, ensure_ascii=False)
+        return "\n" + json.dumps(value, indent=2, ensure_ascii=False)
     return str(value)
 
 

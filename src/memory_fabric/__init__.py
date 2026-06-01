@@ -12,10 +12,18 @@ from memory_fabric.storage import (
     status,
     write_local_memory,
 )
+from memory_fabric.eval import (
+    evaluate_dream_quality,
+    evaluate_memory_fabric,
+    evaluate_memory_quality,
+)
 
 __all__ = [
     "doctor",
     "dream",
+    "evaluate_dream_quality",
+    "evaluate_memory_fabric",
+    "evaluate_memory_quality",
     "initialize_memory_fabric",
     "keyword_search",
     "propose_memory_patch",

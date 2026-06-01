@@ -2,7 +2,7 @@
 
 **File-first, local-first memory layer for MCP-compatible AI coding assistants.**
 
-Memory Fabric gives AI tools like Claude Code, Cursor, and GitHub Copilot a consistent, project-aware context layer — without locking you into one model, editor, cloud provider, or operating system.
+Memory Fabric gives AI tools like Claude Code, Cursor, and GitHub Copilot a consistent, project-aware context layer without locking you into one model, editor, cloud provider, or operating system.
 
 Memory is stored as human-readable Markdown with YAML frontmatter. No vector database. No cloud account. No embeddings required.
 
@@ -10,13 +10,14 @@ Memory is stored as human-readable Markdown with YAML frontmatter. No vector dat
 
 ## Features
 
-- **MCP-native** — exposes memory tools through the standard Model Context Protocol
-- **File-first** — Markdown files are the source of truth, inspectable and commit-ready
-- **Local-first** — core reads and writes work offline
-- **Secret-safe** — API keys and credentials are redacted before writing
-- **Token-budget aware** — assembles context within limits; never slices files mid-document
-- **Unicode-safe** — works with any human language
-- **Graceful degradation** — works without `rg`, git hooks, or Dreaming configured
+- **MCP-native**: exposes memory tools through the standard Model Context Protocol
+- **File-first**: Markdown files are the source of truth, inspectable and commit-ready
+- **Local-first**: core reads and writes work offline
+- **Secret-safe**: API keys and credentials are redacted before writing
+- **Token-budget aware**: assembles context within limits; never slices files mid-document
+- **Quality eval**: scores memory usefulness and Dreaming before/after results locally
+- **Unicode-safe**: works with any human language
+- **Graceful degradation**: works without `rg`, git hooks, or Dreaming configured
 
 ---
 
@@ -51,24 +52,53 @@ Creates `.ai-memory/` in the current directory with starter sections and a `.git
 ai-memory doctor
 ```
 
-### 3. Query memory
+### 3. Evaluate memory quality
+
+```sh
+ai-memory eval
+ai-memory eval --json
+```
+
+`eval` scores whether memories are useful for coding assistants. It checks section coverage, starter-template content, summary quality, metadata, retrieval readiness, and likely secrets.
+
+If `.ai-memory/` exists, reports are saved under ignored local files:
+
+```text
+.ai-memory/evals/latest.json
+.ai-memory/evals/latest.md
+.ai-memory/evals/<timestamp>-memory.json
+.ai-memory/evals/<timestamp>-memory.md
+```
+
+If `.ai-memory/` does not exist yet, eval prints a pre-init report only and creates no files.
+
+### 4. Query memory
 
 ```sh
 ai-memory query "authentication"
 ```
 
-### 4. Run maintenance (Dreaming)
+### 5. Run maintenance (Dreaming)
 
 ```sh
-ai-memory dream --mode light   # refresh index and summaries
-ai-memory dream --mode deep    # full review of all sections
+ai-memory dream --mode light
+ai-memory dream --mode deep
 ```
+
+Dreaming creates a snapshot before maintenance. You can evaluate whether a Dreaming run improved memory quality:
+
+```sh
+ai-memory eval --dream latest
+ai-memory dream --mode light --eval
+```
+
+Dream eval compares the pre-dream snapshot to current memory and reports score delta, changed files, improvements, and regressions.
 
 ---
 
 ## MCP Server
 
-Add to your MCP client configuration (e.g. Claude Code, Cursor):
+Add to your MCP client configuration (for example Claude Code or Cursor):
 
 ```json
 {
@@ -84,30 +114,35 @@ Add to your MCP client configuration (e.g. Claude Code, Cursor):
 
 | Tool | Description |
 |---|---|
-| `initialize_memory_fabric` | Create `.ai-memory/` scaffolding in a project |
-| `read_combined_context` | Load Tier 0 directives + prioritized memory within token budget |
-| `read_section` | Read a single memory section by name |
-| `keyword_search` | Search memory with ripgrep or Python fallback |
-| `write_local_memory` | Append or replace a section with secret scanning |
-| `propose_memory_patch` | Preview proposed memory changes without applying |
+| `initialize_memory_fabric_tool` | Create `.ai-memory/` scaffolding in a project |
+| `read_combined_context_tool` | Load Tier 0 directives + prioritized memory within token budget |
+| `read_section_tool` | Read a single memory section by name |
+| `keyword_search_tool` | Search memory with ripgrep or Python fallback |
+| `write_local_memory_tool` | Append or replace a section with secret scanning |
+| `propose_memory_patch_tool` | Preview proposed memory changes without applying |
+| `evaluate_memory_fabric_tool` | Evaluate local memory quality |
+| `evaluate_dream_quality_tool` | Evaluate a Dreaming run against a snapshot |
 
 ---
 
 ## Project Memory Layout
 
-```
+```text
 .ai-memory/
-├── index.md              # Section index and summary
-├── architecture.md       # System design decisions
-├── schemas.md            # Data models and contracts
-├── decisions.md          # ADRs and trade-off notes
-├── debt.md               # Known tech debt
-├── ubiquitous-language.md # Domain vocabulary
-├── framework-rules.md    # Framework-specific conventions
-└── .gitignore            # Excludes snapshots/, private/, logs
+|-- index.md
+|-- architecture.md
+|-- schemas.md
+|-- decisions.md
+|-- debt.md
+|-- ubiquitous-language.md
+|-- framework-rules.md
+|-- evals/       # ignored local quality reports
+|-- snapshots/   # ignored rollback baselines
+|-- private/     # ignored personal notes
+`-- .gitignore
 ```
 
-All files use YAML frontmatter:
+All shared memory files use YAML frontmatter:
 
 ```markdown
 ---
@@ -134,24 +169,37 @@ Developer-level preferences that apply across all projects are stored at:
 | macOS | `~/Library/Application Support/memory-fabric/global/` |
 | Linux | `$XDG_CONFIG_HOME/memory-fabric/global/` |
 
-`global/directives.md` is **Tier 0** — it is always loaded fully, bypassing token budgeting.
+`global/directives.md` is **Tier 0**: it is always loaded fully, bypassing token budgeting.
 
 ---
 
 ## CLI Reference
 
-```
+```text
 ai-memory [--cwd <path>] [--json] <command>
 
 Commands:
   init            Create .ai-memory/ scaffolding
   status          Show memory status
   doctor          Validate memory files and environment
+  eval            Score memory quality or Dreaming quality
   dream           Run memory maintenance (--mode light|deep)
   query           Search memory
   sync-global     Preview local-to-global promotions
   rollback        Restore from a snapshot
 ```
+
+Eval examples:
+
+```sh
+ai-memory eval
+ai-memory eval --json
+ai-memory eval --llm-review
+ai-memory eval --dream latest
+ai-memory eval --dream memory-20260601T140000_0400
+```
+
+Optional LLM review is never enabled by default. When requested, deterministic local scores remain the source of truth; LLM notes are secondary and inputs are sanitized before review.
 
 ---
 
@@ -159,13 +207,15 @@ Commands:
 
 Every write path runs secret detection before saving. Detected secrets are replaced with `[REDACTED_SECRET]` and returned in the `redactions` field of the response. File locking prevents concurrent write corruption.
 
+Eval scans existing memories for likely secrets but does not rewrite existing files. It reports what needs manual review.
+
 ---
 
 ## Requirements
 
-- Python ≥ 3.11
+- Python >= 3.11
 - `mcp >= 1.0.0` (optional, required for MCP server only)
-- `rg` (optional — ripgrep speeds up keyword search; Python fallback used when absent)
+- `rg` (optional; ripgrep speeds up keyword search, Python fallback used when absent)
 
 ---
 

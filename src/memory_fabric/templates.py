@@ -59,6 +59,7 @@ LOCAL_GITIGNORE = """*.patch
 *.tmp
 *.log
 *.lock
+evals/
 snapshots/
 private/
 .DS_Store

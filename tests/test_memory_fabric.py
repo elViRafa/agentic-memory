@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from memory_fabric.eval import evaluate_dream_quality, evaluate_memory_fabric, latest_snapshot
 from memory_fabric.frontmatter import parse_frontmatter
 from memory_fabric.paths import get_global_root
 from memory_fabric.storage import (
@@ -58,13 +59,13 @@ class MemoryFabricTests(unittest.TestCase):
             result = write_local_memory(
                 temp,
                 "decisions",
-                "Usar português. OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwxyz1234567890",
+                "Usar portugues. OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwxyz1234567890",
                 mode="replace",
             )
             section = read_section(temp, "decisions")
 
             self.assertEqual(result["redactions"], 1)
-            self.assertIn("Usar português", section["text"])
+            self.assertIn("Usar portugues", section["text"])
             self.assertIn("[REDACTED_SECRET]", section["text"])
             self.assertNotIn("sk-abcdefghijklmnopqrstuvwxyz1234567890", section["text"])
 
@@ -100,6 +101,76 @@ class MemoryFabricTests(unittest.TestCase):
 
             self.assertIn("Original debt note.", section["text"])
             self.assertNotIn("Changed debt note.", section["text"])
+
+    def test_pre_init_eval_creates_no_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            result = evaluate_memory_fabric(temp)
+
+            self.assertEqual(result["status"], "fail")
+            self.assertEqual(result["report_paths"], [])
+            self.assertFalse((Path(temp) / ".ai-memory").exists())
+            self.assertIn("ai-memory init", result["recommendations"][0])
+
+    def test_initialized_eval_saves_reports_and_ignores_evals(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            result = evaluate_memory_fabric(temp)
+            memory_dir = Path(temp) / ".ai-memory"
+
+            self.assertTrue((memory_dir / "evals" / "latest.json").exists())
+            self.assertTrue((memory_dir / "evals" / "latest.md").exists())
+            self.assertIn(str(memory_dir / "evals" / "latest.json"), result["report_paths"])
+            self.assertIn("evals/", (memory_dir / ".gitignore").read_text(encoding="utf-8"))
+
+    def test_memory_eval_detects_template_content_and_llm_review_warning(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            result = evaluate_memory_fabric(temp, save_report=False, llm_review=True)
+            check_ids = [
+                check["id"]
+                for category in result["categories"]
+                for check in category["checks"]
+            ]
+
+            self.assertIn("architecture_placeholder", check_ids)
+            self.assertTrue(any("MEMORY_FABRIC_LLM_PROVIDER" in note for note in result["llm_notes"]))
+
+    def test_dream_eval_compares_snapshot_and_current_memory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            snapshot = create_snapshot(temp, name="memory_before")
+            write_local_memory(
+                temp,
+                "architecture",
+                (
+                    "# Architecture\n\n"
+                    "Memory Fabric is a local-first MCP server with file-backed Markdown sections. "
+                    "The storage layer owns scaffolding, retrieval, snapshots, rollback, and safety checks. "
+                    "The CLI exposes these operations for local developer workflows."
+                ),
+                mode="replace",
+            )
+
+            result = evaluate_dream_quality(temp, snapshot=snapshot)
+
+            self.assertEqual(result["baseline_snapshot"], "memory_before")
+            self.assertGreaterEqual(result["after_score"], result["before_score"])
+            self.assertIn("architecture.md", result["changed_files"])
+            self.assertTrue((Path(temp) / ".ai-memory" / "evals" / "latest.json").exists())
+
+    def test_dream_eval_latest_snapshot_and_content_loss_regression(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            create_snapshot(temp, name="memory_old")
+            write_local_memory(temp, "schemas", "# Schemas\n\nCustomerProfile includes locale and timezone.", mode="replace")
+            latest = create_snapshot(temp, name="memory_new")
+            (Path(temp) / ".ai-memory" / "schemas.md").unlink()
+
+            self.assertEqual(latest_snapshot(temp), latest)
+            result = evaluate_dream_quality(temp, snapshot="latest", save_report=False)
+
+            self.assertEqual(result["baseline_snapshot"], "memory_new")
+            self.assertTrue(any("removed memory sections" in item for item in result["regressions"]))
 
 
 if __name__ == "__main__":

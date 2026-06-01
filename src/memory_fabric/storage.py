@@ -321,6 +321,8 @@ def create_snapshot(cwd: str, name: str | None = None) -> str:
     snapshot_dir = memory_dir / "snapshots" / snapshot_name
     snapshot_dir.mkdir(parents=True, exist_ok=False)
     for path in _iter_markdown_files(memory_dir):
+        if _is_ignored_local_memory_path(memory_dir, path):
+            continue
         relative = path.relative_to(memory_dir)
         target = snapshot_dir / relative
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -376,10 +378,11 @@ def _read_memory_path(path: Path) -> tuple[str, dict[str, Any], str, str | None]
 
 
 def _ordered_context_files(cwd: str) -> list[Path]:
+    memory_dir = local_memory_dir(cwd)
     local_files = [
         path
-        for path in _iter_markdown_files(local_memory_dir(cwd))
-        if "private" not in path.parts and "snapshots" not in path.parts
+        for path in _iter_markdown_files(memory_dir)
+        if not _is_ignored_local_memory_path(memory_dir, path)
     ]
     global_files = [
         path
@@ -410,6 +413,14 @@ def _iter_markdown_files(root: Path) -> Iterable[Path]:
     if not root.exists():
         return []
     return sorted(path for path in root.rglob("*.md") if path.is_file())
+
+
+def _is_ignored_local_memory_path(memory_dir: Path, path: Path) -> bool:
+    try:
+        relative_parts = path.relative_to(memory_dir).parts
+    except ValueError:
+        return False
+    return bool({"private", "snapshots", "evals"}.intersection(relative_parts))
 
 
 def _section_key(path: Path, section: str) -> str:
@@ -484,7 +495,11 @@ def _keyword_search_python(query: str, roots: list[Path], max_results: int) -> l
 
 def _regenerate_index(cwd: str, mode: str) -> list[str]:
     memory_dir = local_memory_dir(cwd)
-    checked_files = [str(path) for path in _iter_markdown_files(memory_dir) if path.name != "index.md"]
+    checked_files = [
+        str(path)
+        for path in _iter_markdown_files(memory_dir)
+        if path.name != "index.md" and not _is_ignored_local_memory_path(memory_dir, path)
+    ]
     lines = [
         "# Project Memory Index",
         "",
@@ -494,7 +509,7 @@ def _regenerate_index(cwd: str, mode: str) -> list[str]:
         "| --- | --- | --- |",
     ]
     for path in _iter_markdown_files(memory_dir):
-        if path.name == "index.md" or "snapshots" in path.parts:
+        if path.name == "index.md" or _is_ignored_local_memory_path(memory_dir, path):
             continue
         metadata, _body = parse_frontmatter(path.read_text(encoding="utf-8"))
         section = metadata.get("section", path.stem)

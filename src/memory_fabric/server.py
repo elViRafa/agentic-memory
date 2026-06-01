@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from memory_fabric.eval import evaluate_dream_quality, evaluate_memory_fabric
 from memory_fabric.storage import (
     initialize_memory_fabric,
     keyword_search,
@@ -43,6 +44,19 @@ if FastMCP is not None:
     @mcp.tool()
     def propose_memory_patch_tool(cwd: str, instructions: str):
         return propose_memory_patch(cwd, instructions=instructions)
+
+    @mcp.tool()
+    def evaluate_memory_fabric_tool(cwd: str, save_report: bool = False, llm_review: bool = False):
+        return evaluate_memory_fabric(cwd, save_report=save_report, llm_review=llm_review)
+
+    @mcp.tool()
+    def evaluate_dream_quality_tool(
+        cwd: str,
+        snapshot: str,
+        save_report: bool = False,
+        llm_review: bool = False,
+    ):
+        return evaluate_dream_quality(cwd, snapshot=snapshot, save_report=save_report, llm_review=llm_review)
 else:
     mcp = None
 
