@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "memory-fabric"
+version = "0.1.0"
+description = "File-first MCP memory fabric for AI coding assistants"
+readme = "plan.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Memory Fabric Contributors" }]
+dependencies = []
+
+[project.optional-dependencies]
+mcp = ["mcp>=1.0.0"]
+test = ["pytest>=8"]
+
+[project.scripts]
+ai-memory = "memory_fabric.cli:main"
+memory-fabric-mcp = "memory_fabric.server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+memory_fabric = ["py.typed"]
