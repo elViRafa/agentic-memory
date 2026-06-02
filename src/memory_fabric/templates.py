@@ -61,6 +61,7 @@ LOCAL_GITIGNORE = """*.patch
 *.lock
 evals/
 snapshots/
+candidates/
 private/
 .DS_Store
 Thumbs.db

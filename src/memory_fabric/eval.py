@@ -524,7 +524,7 @@ def _evaluate_safety_privacy(memory_dir: Path, sections: dict[str, dict[str, Any
     gitignore = memory_dir / ".gitignore"
     if gitignore.exists():
         ignored = gitignore.read_text(encoding="utf-8", errors="replace").splitlines()
-        for pattern in ["private/", "snapshots/", "*.log", "*.patch", "evals/"]:
+        for pattern in ["private/", "snapshots/", "candidates/", "*.log", "*.patch", "evals/"]:
             checks.append(
                 _check(
                     "gitignore_" + pattern.replace("*", "star").replace("/", ""),
@@ -687,7 +687,7 @@ def _is_ignored_memory_path(memory_dir: Path, path: Path) -> bool:
         relative_parts = path.relative_to(memory_dir).parts
     except ValueError:
         return False
-    return bool({"private", "snapshots", "evals"}.intersection(relative_parts))
+    return bool({"private", "snapshots", "evals", "candidates"}.intersection(relative_parts))
 
 
 def _section_load_warnings(sections: dict[str, dict[str, Any]]) -> list[str]:
@@ -794,9 +794,14 @@ def _ensure_evals_ignored(memory_dir: Path) -> None:
         return
     text = gitignore.read_text(encoding="utf-8", errors="replace")
     lines = text.splitlines()
+    missing: list[str] = []
     if "evals/" not in lines:
+        missing.append("evals/")
+    if "candidates/" not in lines:
+        missing.append("candidates/")
+    if missing:
         suffix = "" if text.endswith("\n") or not text else "\n"
-        gitignore.write_text(text + suffix + "evals/\n", encoding="utf-8")
+        gitignore.write_text(text + suffix + "\n".join(missing) + "\n", encoding="utf-8")
 
 
 def _report_timestamp(generated_at: str) -> str:
@@ -882,10 +887,36 @@ def _llm_notes(llm_review: bool, report_text: str) -> list[str]:
     if not provider:
         notes.append("LLM review requested, but MEMORY_FABRIC_LLM_PROVIDER is not configured.")
         return notes
-    if sanitized:
-        notes.append(
-            f"LLM review requested for provider `{provider}`, but no provider adapter is implemented in this local build."
+
+    if not sanitized.strip():
+        return notes
+
+    try:
+        from memory_fabric.llm import call_llm
+        prompt = (
+            "Review the following quality evaluation report for a software development memory system.\n"
+            "Identify areas of improvement, structural weaknesses, or documentation gaps in the memory.\n"
+            "Generate between 2 and 4 highly actionable, concise, qualitative recommendations to improve the memory.\n"
+            "Each recommendation must be a single sentence, starting with a bullet and without markdown formatting other than inline code symbols.\n\n"
+            f"Evaluation Report:\n{sanitized}"
         )
+        system_instruction = "You are a senior software architect specializing in technical documentation, repository design, and AI context optimization."
+        response = call_llm(prompt, system_instruction)
+
+        import re
+        for line in response.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            # Strip bullet/list prefix if any
+            if line.startswith("-") or line.startswith("*") or line.startswith("•"):
+                line = line[1:].strip()
+            line = re.sub(r'^\d+\.\s*', '', line)
+
+            if line:
+                notes.append(line)
+    except Exception as exc:
+        notes.append(f"Failed to generate qualitative LLM review: {exc}")
     return notes
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from memory_fabric.eval import evaluate_dream_quality, evaluate_memory_fabric
 from memory_fabric.storage import (
+    dream,
     initialize_memory_fabric,
     keyword_search,
     propose_memory_patch,
@@ -44,6 +45,35 @@ if FastMCP is not None:
     @mcp.tool()
     def propose_memory_patch_tool(cwd: str, instructions: str):
         return propose_memory_patch(cwd, instructions=instructions)
+
+    @mcp.tool()
+    def dream_tool(
+        cwd: str,
+        mode: str = "light",
+        apply: bool = False,
+        llm_rewrite: bool = False,
+        max_rewrite_tasks: int = 5,
+        with_eval: bool = False,
+        save_report: bool = False,
+        llm_review: bool = False,
+    ):
+        result = dream(
+            cwd,
+            mode=mode,
+            apply=apply,
+            llm_rewrite=llm_rewrite,
+            max_rewrite_tasks=max_rewrite_tasks,
+        )
+        if with_eval and apply and result["snapshot"]:
+            result["evaluation"] = evaluate_dream_quality(
+                cwd,
+                snapshot=result["snapshot"],
+                save_report=save_report,
+                llm_review=llm_review,
+            )
+        elif with_eval and not apply:
+            result["warnings"].append("Dream evaluation requires apply=true because candidate mode does not mutate live memory.")
+        return result
 
     @mcp.tool()
     def evaluate_memory_fabric_tool(cwd: str, save_report: bool = False, llm_review: bool = False):

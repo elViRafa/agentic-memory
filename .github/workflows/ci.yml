@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }} / Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install package with MCP extras
+        run: pip install -e ".[mcp,test]"
+
+      - name: Run tests
+        run: pytest tests/ -v
+
+      - name: Verify MCP entry point exists (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: which memory-fabric-mcp
+
+      - name: Verify MCP entry point exists (Windows)
+        if: runner.os == 'Windows'
+        run: where memory-fabric-mcp
+        shell: cmd

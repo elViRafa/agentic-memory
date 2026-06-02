@@ -70,6 +70,7 @@ class StatusResult(TypedDict):
     global_dir: str
     provider_configured: bool
     local_files: list[str]
+    memory_sizes: dict[str, dict[str, int]]
 
 
 class DreamResult(TypedDict):
@@ -77,7 +78,26 @@ class DreamResult(TypedDict):
     snapshot: str | None
     warnings: list[str]
     checked_files: list[str]
+    candidate_store: str
+    patch_preview: str
+    affected_files: list[str]
+    consolidation: "DreamConsolidation"
+    rewrite_tasks: list["DreamRewriteTask"]
+    apply_required: bool
+    redactions: int
     evaluation: NotRequired["DreamEvalResult"]
+
+
+class DreamConsolidation(TypedDict):
+    duplicates_found: int
+    lines_removed: int
+    files_touched: list[str]
+
+
+class DreamRewriteTask(TypedDict):
+    section: str
+    reason: str
+    instruction: str
 
 
 class EvalCheck(TypedDict):

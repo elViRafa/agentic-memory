@@ -10,6 +10,7 @@ from typing import Any
 
 from memory_fabric import __version__
 from memory_fabric.eval import evaluate_dream_quality, evaluate_memory_fabric
+from memory_fabric.paths import local_memory_dir
 from memory_fabric.storage import (
     doctor,
     dream,
@@ -28,7 +29,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.command == "init":
-            result = initialize_memory_fabric(cwd)
+            result = initialize_memory_fabric(cwd, install_hooks=args.install_hooks)
             _print_result(result, args.json)
             return 0
         if args.command == "status":
@@ -39,14 +40,22 @@ def main(argv: list[str] | None = None) -> int:
             _print_result(result, args.json)
             return 0 if result["ok"] else 1
         if args.command == "dream":
-            result = dream(cwd, mode=args.mode)
-            if args.eval:
+            result = dream(
+                cwd,
+                mode=args.mode,
+                apply=args.apply,
+                llm_rewrite=args.llm_rewrite,
+                max_rewrite_tasks=args.max_rewrite_tasks,
+            )
+            if args.eval and args.apply:
                 result["evaluation"] = evaluate_dream_quality(
                     cwd,
                     snapshot=result["snapshot"] or "latest",
                     save_report=True,
                     llm_review=args.llm_review,
                 )
+            elif args.eval and not args.apply:
+                result["warnings"].append("Dream evaluation requires --apply because candidate mode does not mutate live memory.")
             _print_result(result, args.json)
             return 0
         if args.command == "eval":
@@ -70,18 +79,79 @@ def main(argv: list[str] | None = None) -> int:
             _print_result(result, args.json)
             return 0
         if args.command == "sync-global":
-            preview = propose_memory_patch(
-                cwd,
-                "Review local memory for durable rules before manually promoting them to global memory.",
-            )
-            _print_result(
-                {
-                    "message": "Global sync is preview-only in v1. Review local memory before editing global files.",
-                    "preview": preview,
-                },
-                args.json,
-            )
-            return 0
+            memory_dir = local_memory_dir(cwd)
+            if not args.json and sys.stdin.isatty() and memory_dir.exists():
+                from memory_fabric.paths import global_memory_dir
+                from memory_fabric.storage import _iter_markdown_files, _is_ignored_local_memory_path
+                from memory_fabric.locking import locked_file
+                import shutil
+                
+                promoted_count = 0
+                local_files = [
+                    path
+                    for path in _iter_markdown_files(memory_dir)
+                    if path.name != "index.md" and not _is_ignored_local_memory_path(memory_dir, path)
+                ]
+                
+                if not local_files:
+                    print("No local memory files found to promote.")
+                    return 0
+                    
+                print("Interactive Global Memory Sync:")
+                print("===============================")
+                for path in local_files:
+                    rel_name = path.name
+                    choice = input(f"Promote local/{rel_name} to global/{rel_name}? [y/N]: ").strip().lower()
+                    if choice in {"y", "yes"}:
+                        target_dir = global_memory_dir()
+                        target_dir.mkdir(parents=True, exist_ok=True)
+                        target_path = target_dir / rel_name
+                        
+                        action = "copy"
+                        if target_path.exists():
+                            overwrite = input(f"  global/{rel_name} already exists. Overwrite? [y/N]: ").strip().lower()
+                            if overwrite in {"y", "yes"}:
+                                action = "copy"
+                            else:
+                                append = input(f"  Append content to global/{rel_name} instead? [y/N]: ").strip().lower()
+                                if append in {"y", "yes"}:
+                                    action = "append"
+                                else:
+                                    action = "skip"
+                                    
+                        if action == "copy":
+                            with locked_file(target_path):
+                                shutil.copy2(path, target_path)
+                            print(f"  -> Promoted to {target_path}")
+                            promoted_count += 1
+                        elif action == "append":
+                            from memory_fabric.frontmatter import parse_frontmatter, dump_frontmatter
+                            with locked_file(target_path):
+                                local_meta, local_body = parse_frontmatter(path.read_text(encoding="utf-8"))
+                                global_meta, global_body = parse_frontmatter(target_path.read_text(encoding="utf-8"))
+                                new_body = global_body.rstrip() + "\n\n" + local_body.lstrip()
+                                global_meta["last_updated"] = local_meta.get("last_updated", "")
+                                target_path.write_text(dump_frontmatter(global_meta, new_body), encoding="utf-8")
+                            print(f"  -> Appended to {target_path}")
+                            promoted_count += 1
+                        else:
+                            print(f"  -> Skipped global/{rel_name}")
+                
+                print(f"\nSync complete. Promoted {promoted_count} section(s) to global memory.")
+                return 0
+            else:
+                preview = propose_memory_patch(
+                    cwd,
+                    "Review local memory for durable rules before manually promoting them to global memory.",
+                )
+                _print_result(
+                    {
+                        "message": "Global sync is preview-only in v1 when non-interactive or JSON requested. Review local memory before promoting.",
+                        "preview": preview,
+                    },
+                    args.json,
+                )
+                return 0
         if args.command == "rollback":
             result = rollback(cwd, args.to)
             _print_result(result, args.json)
@@ -101,12 +171,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--json", action="store_true", help="Print JSON output")
 
     subparsers = parser.add_subparsers(dest="command", required=True)
-    subparsers.add_parser("init", help="Create .ai-memory scaffolding")
+    init_parser = subparsers.add_parser("init", help="Create .ai-memory scaffolding")
+    init_parser.add_argument("--install-hooks", action="store_true", help="Install opt-in git hooks")
     subparsers.add_parser("status", help="Show memory status")
     subparsers.add_parser("doctor", help="Validate memory files and environment")
 
     dream_parser = subparsers.add_parser("dream", help="Run local memory maintenance")
     dream_parser.add_argument("--mode", choices=["light", "deep"], default="light")
+    dream_parser.add_argument("--apply", action="store_true", help="Apply candidate changes to live .ai-memory files")
+    dream_parser.add_argument(
+        "--llm-rewrite",
+        action="store_true",
+        help="Generate agent-assisted rewrite tasks from Dreaming output",
+    )
+    dream_parser.add_argument("--max-rewrite-tasks", type=int, default=5)
     dream_parser.add_argument("--eval", action="store_true", help="Evaluate quality before and after Dreaming")
     dream_parser.add_argument("--llm-review", action="store_true", help="Add optional qualitative LLM review notes")
 

@@ -158,6 +158,50 @@ Add to your MCP client configuration (for example Claude Code or Cursor):
 
 ---
 
+## Agent Integration (making agents use Memory Fabric automatically)
+
+Registering the MCP server is necessary but not sufficient — AI agents will not use its
+tools unless explicitly instructed to do so. You must add agent instruction files to your
+project that mandate the workflow described below.
+
+### Step 1 — Add instruction files to your project
+
+**For Claude Code, Gemini CLI, and most modern agents — create `AGENTS.md` in the
+project root:**
+
+```markdown
+## Memory Fabric
+
+Use the `memory-fabric` MCP tools for all memory operations — never write `.ai-memory/`
+files directly.
+
+- At session start: call `read_combined_context_tool(cwd="<project root>")`
+  (if `.ai-memory/` is missing, call `initialize_memory_fabric_tool(cwd=...)` first)
+- Before searching the codebase: call `keyword_search_tool(cwd="...", query="<topic>")`
+- After meaningful work: call `write_local_memory_tool(cwd="...", section="...", content="...", mode="append")`
+
+Sections: `decisions`, `architecture`, `debt`, `schemas`, `ubiquitous-language`, `framework-rules`
+```
+
+**For GitHub Copilot — create `.github/copilot-instructions.md` with the same content.**
+
+### Step 2 — Verify the MCP server is running
+
+The instruction files only work when the `memory-fabric` MCP server is reachable.
+Run `ai-memory doctor` in the project to confirm.
+
+### Why this matters
+
+Without these files, agents will:
+- Explain they "don't use MCP tools automatically"
+- Write markdown files directly using file-system tools, bypassing secret scanning,
+  token budgeting, and frontmatter management
+
+The instruction files are the authoritative mechanism to change this behaviour across
+Claude Code, Cursor, GitHub Copilot, and any other MCP-aware agent.
+
+---
+
 ## Project Memory Layout
 
 ```text
