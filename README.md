@@ -21,17 +21,50 @@ Memory is stored as human-readable Markdown with YAML frontmatter. No vector dat
 
 ---
 
+## Status
+
+**v0.1.0 — functional, not yet published to PyPI.**
+Install directly from GitHub (see below). Core CLI and MCP tools work end-to-end.
+
+---
+
 ## Installation
+
+### From GitHub (current)
+
+Requires Python ≥ 3.11 and [`pipx`](https://pipx.pypa.io/) or `pip`.
+
+```sh
+# CLI only
+pipx install "git+https://github.com/elViRafa/agentic-memory.git"
+
+# CLI + MCP server
+pipx install "memory-fabric[mcp] @ git+https://github.com/elViRafa/agentic-memory.git"
+```
+
+Or with plain `pip` (inside a virtual environment):
+
+```sh
+pip install "git+https://github.com/elViRafa/agentic-memory.git"          # CLI only
+pip install "memory-fabric[mcp] @ git+https://github.com/elViRafa/agentic-memory.git"  # + MCP
+```
+
+Or clone and install in editable mode for local development:
+
+```sh
+git clone https://github.com/elViRafa/agentic-memory.git
+cd agentic-memory
+pip install -e .          # CLI only
+pip install -e ".[mcp]"   # CLI + MCP server
+```
+
+### From PyPI (coming soon)
+
+Once published, you will be able to install with:
 
 ```sh
 pipx install memory-fabric          # CLI only
 pipx install "memory-fabric[mcp]"   # CLI + MCP server
-```
-
-Or with `uvx`:
-
-```sh
-uvx memory-fabric init
 ```
 
 ---
