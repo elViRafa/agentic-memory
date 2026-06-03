@@ -812,6 +812,43 @@ class MemoryFabricTests(unittest.TestCase):
             small_bundle = read_combined_context(temp, max_tokens=20)
             self.assertIn("omitted because it exceeded the remaining token budget", small_bundle["text"])
 
+    def test_server_main_stdio(self) -> None:
+        import memory_fabric.server as server
+        with mock.patch.object(server.FastMCP, "run") as mock_run:
+            code = server.main(["--transport", "stdio"])
+            self.assertEqual(code, 0)
+            mock_run.assert_called_once_with(transport="stdio")
+
+    def test_server_main_sse(self) -> None:
+        import memory_fabric.server as server
+        with mock.patch.object(server.FastMCP, "run") as mock_run:
+            orig_host = server.mcp.settings.host
+            orig_port = server.mcp.settings.port
+            orig_enable = server.mcp.settings.transport_security.enable_dns_rebinding_protection
+            orig_hosts = server.mcp.settings.transport_security.allowed_hosts
+            orig_origins = server.mcp.settings.transport_security.allowed_origins
+            
+            try:
+                code = server.main([
+                    "--transport", "sse",
+                    "--host", "127.0.0.1",
+                    "--port", "8888",
+                    "--allow-all-origins"
+                ])
+                self.assertEqual(code, 0)
+                mock_run.assert_called_once_with(transport="sse")
+                self.assertEqual(server.mcp.settings.host, "127.0.0.1")
+                self.assertEqual(server.mcp.settings.port, 8888)
+                self.assertFalse(server.mcp.settings.transport_security.enable_dns_rebinding_protection)
+                self.assertEqual(server.mcp.settings.transport_security.allowed_hosts, ["*"])
+                self.assertEqual(server.mcp.settings.transport_security.allowed_origins, ["*"])
+            finally:
+                server.mcp.settings.host = orig_host
+                server.mcp.settings.port = orig_port
+                server.mcp.settings.transport_security.enable_dns_rebinding_protection = orig_enable
+                server.mcp.settings.transport_security.allowed_hosts = orig_hosts
+                server.mcp.settings.transport_security.allowed_origins = orig_origins
+
 
 if __name__ == "__main__":
     unittest.main()

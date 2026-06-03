@@ -91,10 +91,30 @@ else:
     mcp = None
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     if mcp is None:
         raise SystemExit("The optional `mcp` package is not installed. Install with: pipx inject memory-fabric mcp")
-    mcp.run()
+        
+    import argparse
+    parser = argparse.ArgumentParser(prog="memory-fabric-mcp", description="Memory Fabric MCP Server")
+    parser.add_argument("--transport", choices=["stdio", "sse"], default="stdio", help="Transport protocol to use (default: stdio)")
+    parser.add_argument("--host", default="127.0.0.1", help="Host address for SSE transport (default: 127.0.0.1)")
+    parser.add_argument("--port", type=int, default=8000, help="Port for SSE transport (default: 8000)")
+    parser.add_argument("--allow-all-origins", action="store_true", help="Allow all origins and disable DNS rebinding protection (useful for Open WebUI)")
+    
+    args = parser.parse_args(argv)
+    
+    if args.transport == "sse":
+        mcp.settings.host = args.host
+        mcp.settings.port = args.port
+        if args.allow_all_origins:
+            mcp.settings.transport_security.enable_dns_rebinding_protection = False
+            mcp.settings.transport_security.allowed_hosts = ["*"]
+            mcp.settings.transport_security.allowed_origins = ["*"]
+        print(f"Starting Memory Fabric MCP server on sse://{args.host}:{args.port}")
+        mcp.run(transport="sse")
+    else:
+        mcp.run(transport="stdio")
     return 0
 
 

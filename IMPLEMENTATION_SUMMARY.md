@@ -1,3 +1,21 @@
+## 2026-06-03 09:48 - Add SSE transport support for Open WebUI connectivity
+
+**What was implemented:**
+- Extended the `memory-fabric-mcp` server startup CLI options to support transport configuration (`--transport stdio/sse`, `--host`, `--port`).
+- Added support for cross-origin and network deployments by exposing security controls via `--allow-all-origins`, allowing external tools like Open WebUI to connect natively via Server-Sent Events.
+
+**Core files affected:**
+- [src/memory_fabric/server.py](file:///C:/Users/rafael/Projetos/agentic-memory/src/memory_fabric/server.py)
+- [tests/test_memory_fabric.py](file:///C:/Users/rafael/Projetos/agentic-memory/tests/test_memory_fabric.py)
+
+**Key changes:**
+- Added standard `argparse` CLI option parsing to the main entrypoint of `memory_fabric.server`.
+- Exposed FastMCP configuration settings for SSE binding (host, port) and security overrides (DNS rebinding protection, allowed hosts, allowed origins).
+- Added `test_server_main_stdio` and `test_server_main_sse` to test suite to prevent regressions.
+
+**Status & Testing:**
+- Tested locally with pytest; all 35 tests passed successfully. Verified that running the server in SSE mode starts the Uvicorn/FastMCP engine without exceptions.
+
 ## 2026-06-03 09:32 - Support custom base URL and model for OpenAI LLM provider
 
 **What was implemented:**
