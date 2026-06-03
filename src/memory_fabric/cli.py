@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from memory_fabric import __version__
+from memory_fabric.version import __version__
 from memory_fabric.eval import evaluate_dream_quality, evaluate_memory_fabric
 from memory_fabric.paths import local_memory_dir
 from memory_fabric.storage import (

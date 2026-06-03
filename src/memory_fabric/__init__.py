@@ -1,5 +1,6 @@
 """Memory Fabric public package API."""
 
+from memory_fabric.version import __version__
 from memory_fabric.storage import (
     doctor,
     dream,
@@ -34,4 +35,3 @@ __all__ = [
     "write_local_memory",
 ]
 
-__version__ = "0.1.0"

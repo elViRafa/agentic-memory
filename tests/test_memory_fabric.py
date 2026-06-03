@@ -8,6 +8,7 @@ from unittest import mock
 
 from memory_fabric.eval import evaluate_dream_quality, evaluate_memory_fabric, latest_snapshot
 from memory_fabric.frontmatter import parse_frontmatter
+from memory_fabric.version import __version__
 from memory_fabric.paths import get_global_root
 from memory_fabric.storage import (
     create_snapshot,
@@ -234,6 +235,7 @@ class MemoryFabricTests(unittest.TestCase):
             self.assertIn("architecture.md", res["memory_sizes"])
             self.assertGreater(res["memory_sizes"]["architecture.md"]["bytes"], 0)
             self.assertGreater(res["memory_sizes"]["architecture.md"]["tokens"], 0)
+            self.assertEqual(res["version"], __version__)
 
     def test_doctor_checks_permissions_and_index_consistency(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -440,11 +442,30 @@ class MemoryFabricTests(unittest.TestCase):
         self.assertEqual(payload["messages"][0]["content"], "test prompt")
         self.assertEqual(payload["system"], "system instructions")
 
+        # 4. Test Ollama
+        mock_urlopen.return_value = MockResponse(
+            json.dumps({"message": {"content": "ollama result"}}).encode("utf-8")
+        )
+        os.environ["MEMORY_FABRIC_LLM_PROVIDER"] = "ollama"
+        os.environ["OLLAMA_MODEL"] = "gemma4"
+        res = call_llm("test prompt", "system instructions")
+        self.assertEqual(res, "ollama result")
+
+        req = mock_urlopen.call_args_list[-1][0][0]
+        self.assertIn("localhost:11434/api/chat", req.full_url)
+        payload = json.loads(req.data.decode("utf-8"))
+        self.assertEqual(payload["model"], "gemma4")
+        self.assertEqual(payload["messages"][-1]["content"], "test prompt")
+        self.assertEqual(payload["messages"][0]["content"], "system instructions")
+        self.assertFalse(payload["stream"])
+
         # Clean up env
         os.environ.pop("MEMORY_FABRIC_LLM_PROVIDER", None)
         os.environ.pop("GEMINI_API_KEY", None)
         os.environ.pop("OPENAI_API_KEY", None)
         os.environ.pop("ANTHROPIC_API_KEY", None)
+        os.environ.pop("OLLAMA_MODEL", None)
+
 
     @mock.patch("memory_fabric.storage.call_llm")
     def test_dream_with_llm(self, mock_call_llm) -> None:
@@ -518,6 +539,278 @@ class MemoryFabricTests(unittest.TestCase):
             # Clean up env
             os.environ.pop("MEMORY_FABRIC_LLM_PROVIDER", None)
             os.environ.pop("GEMINI_API_KEY", None)
+
+    @mock.patch("time.sleep")
+    @mock.patch("urllib.request.urlopen")
+    def test_llm_retry_on_429_then_success(self, mock_urlopen, mock_sleep) -> None:
+        import json
+        import urllib.error
+        from memory_fabric.llm import call_llm
+
+        class MockResponse:
+            def __init__(self, data: bytes, code: int = 200, reason: str = "OK"):
+                self.data = data
+                self.code = code
+                self.reason = reason
+            def read(self, *args, **kwargs):
+                return self.data
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                pass
+
+        err_response = urllib.error.HTTPError("url", 429, "Too Many Requests", {}, None)
+        success_response = MockResponse(
+            json.dumps({"candidates": [{"content": {"parts": [{"text": "retry success"}]}}]}).encode("utf-8")
+        )
+
+        mock_urlopen.side_effect = [err_response, success_response]
+
+        os.environ["MEMORY_FABRIC_LLM_PROVIDER"] = "gemini"
+        os.environ["GEMINI_API_KEY"] = "gemini-key"
+        try:
+            res = call_llm("test prompt", "system instructions")
+            self.assertEqual(res, "retry success")
+            self.assertEqual(mock_urlopen.call_count, 2)
+            mock_sleep.assert_called_once()
+        finally:
+            os.environ.pop("MEMORY_FABRIC_LLM_PROVIDER", None)
+            os.environ.pop("GEMINI_API_KEY", None)
+
+    @mock.patch("time.sleep")
+    @mock.patch("urllib.request.urlopen")
+    def test_llm_retry_exhausted_raises_error(self, mock_urlopen, mock_sleep) -> None:
+        import urllib.error
+        from memory_fabric.llm import call_llm, LLMError
+
+        err_response = urllib.error.HTTPError("url", 429, "Too Many Requests", {}, None)
+        mock_urlopen.side_effect = err_response
+
+        os.environ["MEMORY_FABRIC_LLM_PROVIDER"] = "gemini"
+        os.environ["GEMINI_API_KEY"] = "gemini-key"
+        try:
+            with self.assertRaises(LLMError) as ctx:
+                call_llm("test prompt", "system instructions")
+            self.assertIn("HTTP Error 429", str(ctx.exception))
+            self.assertEqual(mock_urlopen.call_count, 5)  # max_retries
+            self.assertEqual(mock_sleep.call_count, 4)
+        finally:
+            os.environ.pop("MEMORY_FABRIC_LLM_PROVIDER", None)
+            os.environ.pop("GEMINI_API_KEY", None)
+
+    @mock.patch("memory_fabric.storage.now_iso")
+    @mock.patch("memory_fabric.storage.call_llm")
+    def test_dream_summary_skips_when_hash_matches(self, mock_call_llm, mock_now_iso) -> None:
+        import hashlib
+        from memory_fabric.frontmatter import dump_frontmatter
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            
+            # Let's delete other sections so we have a clean test with just one section
+            for p in (Path(temp) / ".ai-memory").glob("*.md"):
+                if p.name not in {"architecture.md"}:
+                    p.unlink()
+
+            os.environ["MEMORY_FABRIC_LLM_PROVIDER"] = "gemini"
+            os.environ["GEMINI_API_KEY"] = "gemini-key"
+
+            # Return different times on successive calls to prevent snapshot collisions
+            call_count = 0
+            def increment_now_iso():
+                nonlocal call_count
+                call_count += 1
+                return f"2026-06-02T13:00:{call_count:02d}-04:00"
+            mock_now_iso.side_effect = increment_now_iso
+
+            try:
+                # 1. Run first dream: will generate a summary
+                mock_call_llm.return_value = "Custom architecture summary."
+                res1 = dream(temp, mode="deep", apply=True)
+                
+                self.assertTrue(res1["changed"])
+                self.assertEqual(mock_call_llm.call_count, 2)  # 1 consolidation call + 1 summary call
+                
+                # Check that summary_hash exists in metadata
+                arch_path = Path(temp) / ".ai-memory" / "architecture.md"
+                metadata, body = parse_frontmatter(arch_path.read_text(encoding="utf-8"))
+                self.assertEqual(metadata.get("summary"), "Custom architecture summary.")
+                expected_hash = hashlib.md5(body.strip().encode("utf-8")).hexdigest()
+                self.assertEqual(metadata.get("summary_hash"), expected_hash)
+                
+                # 2. Run second dream: body is identical, summary is custom, hash matches -> skips LLM call
+                mock_call_llm.reset_mock()
+                res2 = dream(temp, mode="deep", apply=True)
+                self.assertEqual(mock_call_llm.call_count, 1)  # 1 consolidation call + 0 summary calls
+                
+                # 3. Modify body: hash mismatch -> calls LLM
+                metadata["last_updated"] = "2026-06-02T13:00:00-04:00"
+                body = "# Architecture\n\nNew modified content here."
+                arch_path.write_text(dump_frontmatter(metadata, body), encoding="utf-8")
+                
+                mock_call_llm.reset_mock()
+                mock_call_llm.return_value = "New custom architecture summary."
+                res3 = dream(temp, mode="deep", apply=True)
+                self.assertEqual(mock_call_llm.call_count, 2)  # 1 consolidation call + 1 summary call
+                
+                metadata2, body2 = parse_frontmatter(arch_path.read_text(encoding="utf-8"))
+                self.assertEqual(metadata2.get("summary"), "New custom architecture summary.")
+                
+            finally:
+                os.environ.pop("MEMORY_FABRIC_LLM_PROVIDER", None)
+                os.environ.pop("GEMINI_API_KEY", None)
+
+    @mock.patch("memory_fabric.storage.now_iso")
+    @mock.patch("memory_fabric.storage.call_llm")
+    def test_dream_consolidation_skips_when_hash_matches(self, mock_call_llm, mock_now_iso) -> None:
+        import json
+        from memory_fabric.frontmatter import dump_frontmatter
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            
+            # Let's delete other sections so we have a clean test with just one section
+            for p in (Path(temp) / ".ai-memory").glob("*.md"):
+                if p.name not in {"architecture.md"}:
+                    p.unlink()
+
+            os.environ["MEMORY_FABRIC_LLM_PROVIDER"] = "gemini"
+            os.environ["GEMINI_API_KEY"] = "gemini-key"
+
+            call_count = 0
+            def increment_now_iso():
+                nonlocal call_count
+                call_count += 1
+                return f"2026-06-02T13:00:{call_count:02d}-04:00"
+            mock_now_iso.side_effect = increment_now_iso
+
+            try:
+                # 1. First dream run
+                mock_call_llm.side_effect = [
+                    json.dumps({
+                        "consolidated_files": {"architecture": "# Architecture\n\nConsolidated."},
+                        "contradictions": [],
+                        "warnings": []
+                    }),
+                    "Architecture summary."
+                ]
+                res1 = dream(temp, mode="deep", apply=True)
+                self.assertTrue(res1["changed"])
+                self.assertEqual(mock_call_llm.call_count, 2)
+
+                # 2. Second run: content, git diff, and files are identical -> skips consolidation LLM call!
+                mock_call_llm.reset_mock()
+                res2 = dream(temp, mode="deep", apply=True)
+                self.assertEqual(mock_call_llm.call_count, 0) # exactly 0 calls!
+                self.assertEqual(res2["affected_files"], ["index.md"])
+
+                # 3. Third run: let's modify the file content so hash mismatches
+                arch_path = Path(temp) / ".ai-memory" / "architecture.md"
+                arch_meta, arch_body = parse_frontmatter(arch_path.read_text(encoding="utf-8"))
+                arch_path.write_text(dump_frontmatter(arch_meta, arch_body + "\nNew change.\n"), encoding="utf-8")
+
+                mock_call_llm.reset_mock()
+                mock_call_llm.side_effect = [
+                    json.dumps({
+                        "consolidated_files": {"architecture": "# Architecture\n\nConsolidated again."},
+                        "contradictions": [],
+                        "warnings": []
+                    }),
+                    "New architecture summary."
+                ]
+                res3 = dream(temp, mode="deep", apply=True)
+                self.assertTrue(res3["changed"])
+                self.assertEqual(mock_call_llm.call_count, 2) # Consolidation + summary refreshed
+
+            finally:
+                os.environ.pop("MEMORY_FABRIC_LLM_PROVIDER", None)
+                os.environ.pop("GEMINI_API_KEY", None)
+
+    def test_index_includes_key_topics(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            # Write a section with H2 headings
+            write_local_memory(
+                temp,
+                "decisions",
+                (
+                    "# Decisions\n\n"
+                    "## Decision 1: Use local model\n"
+                    "We decided to use Gemma.\n\n"
+                    "## Decision 2: Run with CUDA\n"
+                    "We decided to run with CUDA acceleration.\n"
+                ),
+                mode="replace"
+            )
+            # Write another section with only lists (no H2)
+            write_local_memory(
+                temp,
+                "debt",
+                (
+                    "# Technical Debt\n\n"
+                    "- Fix the imports\n"
+                    "- Clean the workspace files\n"
+                    "- Add more logs\n"
+                ),
+                mode="replace"
+            )
+            
+            # Trigger Dreaming (light mode is enough to regenerate index)
+            dream(temp, mode="light", apply=True)
+            
+            index_path = Path(temp) / ".ai-memory" / "index.md"
+            self.assertTrue(index_path.exists())
+            index_text = index_path.read_text(encoding="utf-8")
+            
+            # Verify the headers are updated in index table
+            self.assertIn("| Section | Priority | Summary | Key Topics |", index_text)
+            self.assertIn("| --- | --- | --- | --- |", index_text)
+            
+            # Verify the extracted H2 topics are correct in the table
+            self.assertIn("• Decision 1: Use local model<br>• Decision 2: Run with CUDA", index_text)
+            
+            # Verify fallback bullet list topics are correct
+            self.assertIn("• Fix the imports<br>• Clean the workspace files<br>• Add more logs", index_text)
+            
+            # Run doctor to ensure index consistency validation is happy
+            res_doctor = doctor(temp)
+            self.assertTrue(res_doctor["ok"])
+
+    def test_consolidated_memory_generation_and_optimization(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            write_local_memory(temp, "architecture", "# Architecture\n\nActive arch details.", mode="replace")
+            write_local_memory(temp, "decisions", "# Decisions\n\nActive decision details.", mode="replace")
+            
+            # 1. Trigger Dreaming to generate index.md and consolidated_memory.md
+            dream(temp, mode="light", apply=True)
+            
+            memory_dir = Path(temp) / ".ai-memory"
+            consolidated_path = memory_dir / "consolidated_memory.md"
+            self.assertTrue(consolidated_path.exists())
+            
+            consolidated_text = consolidated_path.read_text(encoding="utf-8")
+            self.assertIn("<!-- memory-fabric:local/architecture -->", consolidated_text)
+            self.assertIn("Active arch details.", consolidated_text)
+            self.assertIn("<!-- memory-fabric:local/decisions -->", consolidated_text)
+            self.assertIn("Active decision details.", consolidated_text)
+            
+            # 2. Check that consolidated_memory.md is ignored by standard lists and status
+            status_res = status(temp)
+            self.assertNotIn("consolidated_memory.md", status_res["memory_sizes"])
+            
+            doctor_res = doctor(temp)
+            self.assertTrue(doctor_res["ok"])
+            self.assertNotIn(str(consolidated_path), doctor_res["checked_files"])
+            
+            # 3. Check read_combined_context uses the cached file when within token budget
+            bundle = read_combined_context(temp, max_tokens=4000)
+            self.assertIn("Active arch details.", bundle["text"])
+            self.assertIn("local/architecture", bundle["included_sections"])
+            self.assertIn("local/decisions", bundle["included_sections"])
+            self.assertEqual(bundle["omitted_sections"], [])
+            
+            # 4. Check read_combined_context budget fallback (falls back to selective reading if budget too low)
+            small_bundle = read_combined_context(temp, max_tokens=20)
+            self.assertIn("omitted because it exceeded the remaining token budget", small_bundle["text"])
 
 
 if __name__ == "__main__":

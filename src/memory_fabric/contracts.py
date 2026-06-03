@@ -71,6 +71,8 @@ class StatusResult(TypedDict):
     provider_configured: bool
     local_files: list[str]
     memory_sizes: dict[str, dict[str, int]]
+    version: str
+
 
 
 class DreamResult(TypedDict):

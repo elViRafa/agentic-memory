@@ -33,6 +33,8 @@ from memory_fabric.paths import global_memory_dir, local_memory_dir, project_roo
 from memory_fabric.security import redact_secrets
 from memory_fabric.templates import LOCAL_GITIGNORE, SECTION_TEMPLATES, build_empty_section, build_memory_file, now_iso
 from memory_fabric.llm import call_llm
+from memory_fabric.version import __version__
+
 
 
 SECTION_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
@@ -106,7 +108,29 @@ def read_combined_context(cwd: str, max_tokens: int = 4000) -> ContextBundle:
     fragments: list[str] = []
     remaining = max_tokens
 
+    # Try to load from pre-compiled consolidated_memory.md cache to save time
+    memory_dir = local_memory_dir(cwd)
+    consolidated_path = memory_dir / "consolidated_memory.md"
     tier0 = global_memory_dir() / "directives.md"
+    
+    if consolidated_path.exists() and not tier0.exists():
+        try:
+            content = consolidated_path.read_text(encoding="utf-8")
+            est_tokens = estimate_tokens(content)
+            if est_tokens <= max_tokens:
+                for match in re.finditer(r"<!-- memory-fabric:(local/[a-zA-Z0-9_-]+) -->", content):
+                    included.append(match.group(1))
+                return {
+                    "text": content,
+                    "included_sections": included,
+                    "omitted_sections": [],
+                    "token_budget": max_tokens,
+                    "estimated_tokens": est_tokens,
+                    "warnings": [f"Tier 0 directives not found: {tier0}"],
+                }
+        except Exception:
+            pass
+
     if tier0.exists():
         text = tier0.read_text(encoding="utf-8")
         fragments.append(_format_fragment("global/directives", text))
@@ -346,6 +370,7 @@ def status(cwd: str) -> StatusResult:
         "provider_configured": bool(os.environ.get("MEMORY_FABRIC_LLM_PROVIDER")),
         "local_files": local_files,
         "memory_sizes": sizes,
+        "version": __version__,
     }
 
 
@@ -372,6 +397,8 @@ def doctor(cwd: str) -> DoctorResult:
         warnings.append("Optional package `mcp` is not installed; MCP server tools will be unavailable.")
 
     for path in _iter_markdown_files(memory_dir):
+        if _is_ignored_local_memory_path(memory_dir, path):
+            continue
         checked_files.append(str(path))
         # Check permissions
         if not os.access(path, os.R_OK):
@@ -445,6 +472,8 @@ def _is_llm_ready() -> bool:
         return True
     if provider == "anthropic" and os.environ.get("ANTHROPIC_API_KEY"):
         return True
+    if provider == "ollama":
+        return True
     return False
 
 
@@ -493,6 +522,10 @@ def dream(
     lines_removed = 0
     files_touched: list[str] = []
 
+    current_consolidation_hash = None
+    dream_contradictions = []
+    dream_warnings = []
+
     if llm_active:
         try:
             # 1. Read files into payload
@@ -504,43 +537,95 @@ def dream(
                 sec_name = metadata.get("section", path.stem)
                 sections_data[sec_name] = body
 
-            # 2. Build consolidation prompt
-            prompt = (
-                "You are an AI memory consolidation assistant. Below is the project memory index and section bodies.\n"
-                "Review the sections to: (1) merge redundant facts or guidelines, (2) resolve overlapping points, "
-                "(3) check for contradiction warnings between files, and (4) incorporate recent Git logs/transcripts if provided.\n\n"
-            )
-            if git_diff_text:
-                prompt += f"Recent Git Diff/Logs:\n{git_diff_text}\n\n"
-            if session_text:
-                prompt += f"Recent Session Transcripts:\n{session_text}\n\n"
-            if tool_calls_text:
-                prompt += f"Recent Tool Calls:\n{tool_calls_text}\n\n"
+            # Calculate consolidation input hash
+            hash_input = []
+            for name in sorted(sections_data.keys()):
+                hash_input.append(f"section:{name}")
+                hash_input.append(sections_data[name])
+            hash_input.append(f"git_diff:{git_diff_text or ''}")
+            hash_input.append(f"session:{session_text or ''}")
+            hash_input.append(f"tool_calls:{tool_calls_text or ''}")
+            
+            import hashlib
+            current_consolidation_hash = hashlib.md5("\n".join(hash_input).encode("utf-8")).hexdigest()
 
-            prompt += "Active Project Memory Sections:\n" + json.dumps(sections_data, indent=2) + "\n\n"
-            prompt += (
-                "Output a JSON object ONLY, with no surrounding markdown or explanation, matching this schema:\n"
-                "{\n"
-                '  "consolidated_files": {\n'
-                '    "section_name": "clean markdown body text",\n'
-                "    ...\n"
-                "  },\n"
-                '  "contradictions": ["description of contradiction", ...],\n'
-                '  "warnings": ["warning note", ...]\n'
-                "}"
-            )
+            # Read previous consolidation metadata from index.md
+            previous_consolidation_hash = None
+            previous_contradictions = []
+            previous_warnings = []
+            index_path = memory_dir / "index.md"
+            if index_path.exists():
+                try:
+                    index_metadata, _ = parse_frontmatter(index_path.read_text(encoding="utf-8"))
+                    previous_consolidation_hash = index_metadata.get("consolidation_hash")
+                    previous_contradictions = index_metadata.get("contradictions", [])
+                    previous_warnings = index_metadata.get("consolidation_warnings", [])
+                except Exception:
+                    pass
 
-            response_str = call_llm(prompt, "You are a software architect memory consolidation agent.")
-            cleaned_resp = response_str.strip()
-            if cleaned_resp.startswith("```"):
-                lines = cleaned_resp.splitlines()
-                if lines[0].startswith("```"):
-                    lines = lines[1:]
-                if lines[-1].startswith("```"):
-                    lines = lines[:-1]
-                cleaned_resp = "\n".join(lines).strip()
+            if previous_consolidation_hash == current_consolidation_hash:
+                # Skip LLM consolidation call and use cached results
+                resp_data = {
+                    "consolidated_files": {},
+                    "contradictions": previous_contradictions,
+                    "warnings": previous_warnings
+                }
+            else:
+                # 2. Build consolidation prompt
+                prompt = (
+                    "You are an AI memory consolidation assistant. Below is the project memory index and section bodies.\n"
+                    "Review the sections to: (1) merge redundant facts or guidelines, (2) resolve overlapping points, "
+                    "(3) check for contradiction warnings between files, and (4) incorporate recent Git logs/transcripts if provided.\n\n"
+                )
+                if git_diff_text:
+                    prompt += f"Recent Git Diff/Logs:\n{git_diff_text}\n\n"
+                if session_text:
+                    prompt += f"Recent Session Transcripts:\n{session_text}\n\n"
+                if tool_calls_text:
+                    prompt += f"Recent Tool Calls:\n{tool_calls_text}\n\n"
 
-            resp_data = json.loads(cleaned_resp)
+                prompt += "Active Project Memory Sections:\n" + json.dumps(sections_data, indent=2) + "\n\n"
+                prompt += (
+                    "Output a JSON object ONLY, with no surrounding markdown or explanation, matching this schema:\n"
+                    "{\n"
+                    '  "consolidated_files": {\n'
+                    '    "section_name": "clean markdown body text",\n'
+                    "    ...\n"
+                    "  },\n"
+                    '  "contradictions": ["description of contradiction", ...],\n'
+                    '  "warnings": ["warning note", ...]\n'
+                    "}"
+                )
+
+                response_str = call_llm(prompt, "You are a software architect memory consolidation agent.")
+                cleaned_resp = response_str.strip()
+                
+                resp_data = None
+                try:
+                    resp_data = json.loads(cleaned_resp)
+                except json.JSONDecodeError:
+                    start = cleaned_resp.find('{')
+                    end = cleaned_resp.rfind('}')
+                    if start != -1 and end != -1 and end > start:
+                        try:
+                            resp_data = json.loads(cleaned_resp[start:end+1])
+                        except json.JSONDecodeError:
+                            pass
+                
+                if resp_data is None:
+                    import re
+                    blocks = re.findall(r'```(?:json)?\s*(.*?)\s*```', cleaned_resp, re.DOTALL)
+                    for block in blocks:
+                        try:
+                            resp_data = json.loads(block.strip())
+                            break
+                        except json.JSONDecodeError:
+                            pass
+                            
+                if resp_data is None:
+                    # Fallback to direct load to raise the JSONDecodeError
+                    resp_data = json.loads(cleaned_resp)
+
             consolidated_files = resp_data.get("consolidated_files", {})
             for sec_name, new_body in consolidated_files.items():
                 if not SECTION_PATTERN.match(sec_name):
@@ -558,10 +643,33 @@ def dream(
                     lines_removed += max(0, len(old_body.splitlines()) - len(new_body.splitlines()))
                     sec_path.write_text(dump_frontmatter(metadata, new_body), encoding="utf-8")
 
-            for c in resp_data.get("contradictions", []):
+            dream_contradictions = resp_data.get("contradictions", [])
+            dream_warnings = resp_data.get("warnings", [])
+
+            for c in dream_contradictions:
                 warnings.append(f"Contradiction detected: {c}")
-            for w in resp_data.get("warnings", []):
+            for w in dream_warnings:
                 warnings.append(f"Consolidation warning: {w}")
+
+            # Recalculate the hash using the final consolidated contents to ensure
+            # the next run correctly identifies that consolidation has already occurred.
+            if consolidated_files:
+                final_sections_data = {}
+                for path in _iter_markdown_files(candidate_root):
+                    if path.name == "index.md" or _is_ignored_local_memory_path(candidate_root, path):
+                        continue
+                    metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+                    sec_name = metadata.get("section", path.stem)
+                    final_sections_data[sec_name] = body
+
+                hash_input = []
+                for name in sorted(final_sections_data.keys()):
+                    hash_input.append(f"section:{name}")
+                    hash_input.append(final_sections_data[name])
+                hash_input.append(f"git_diff:{git_diff_text or ''}")
+                hash_input.append(f"session:{session_text or ''}")
+                hash_input.append(f"tool_calls:{tool_calls_text or ''}")
+                current_consolidation_hash = hashlib.md5("\n".join(hash_input).encode("utf-8")).hexdigest()
 
         except Exception as exc:
             warnings.append(f"LLM-based consolidation failed; falling back to local. Error: {exc}")
@@ -569,11 +677,17 @@ def dream(
             duplicates_found = local_c["duplicates_found"]
             lines_removed = local_c["lines_removed"]
             files_touched = local_c["files_touched"]
+            current_consolidation_hash = None
+            dream_contradictions = []
+            dream_warnings = []
     else:
         local_c = _consolidate_candidate_memory(candidate_root)
         duplicates_found = local_c["duplicates_found"]
         lines_removed = local_c["lines_removed"]
         files_touched = local_c["files_touched"]
+        current_consolidation_hash = None
+        dream_contradictions = []
+        dream_warnings = []
 
     consolidation: DreamConsolidation = {
         "duplicates_found": duplicates_found,
@@ -582,16 +696,43 @@ def dream(
     }
 
     # Now regenerate the index file in the candidate store
-    checked_files = _regenerate_index_root(candidate_root, mode=mode)
+    checked_files = _regenerate_index_root(
+        candidate_root,
+        mode=mode,
+        consolidation_hash=current_consolidation_hash,
+        contradictions=dream_contradictions,
+        warnings=dream_warnings,
+    )
 
     # 3. LLM-based Summarization / Summary refreshing
     if llm_active:
+        import hashlib
         for path in _iter_markdown_files(candidate_root):
             if path.name == "index.md" or _is_ignored_local_memory_path(candidate_root, path):
                 continue
             try:
                 metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
                 sec_name = metadata.get("section", path.stem)
+                
+                body_hash = hashlib.md5(body.strip().encode("utf-8")).hexdigest()
+                current_hash = metadata.get("summary_hash")
+                current_summary = metadata.get("summary")
+                
+                # Check if it has a valid custom summary and the content has not changed
+                has_custom_summary = current_summary and current_summary not in {
+                    "Map of available project memory sections.",
+                    "Project architecture, boundaries, and important system flows.",
+                    "Important data models, schemas, and contracts.",
+                    "Architecture and product decisions with rationale.",
+                    "Known technical debt, risks, and cleanup targets.",
+                    "Project-specific vocabulary and domain terms.",
+                    "Framework-specific conventions and constraints.",
+                    f"Project memory section for {sec_name}."
+                }
+                
+                if has_custom_summary and current_hash == body_hash:
+                    continue
+                
                 sum_prompt = (
                     f"Generate a concise, 1-sentence summary of the following project memory section named `{sec_name}`. "
                     "The summary must be informative, help coding assistants decide when to read this file, and be under 150 characters. "
@@ -602,6 +743,7 @@ def dream(
                 new_summary_clean = new_summary.strip().strip('"\'')
                 if new_summary_clean and len(new_summary_clean) > 5:
                     metadata["summary"] = new_summary_clean
+                    metadata["summary_hash"] = body_hash
                     path.write_text(dump_frontmatter(metadata, body), encoding="utf-8")
             except Exception as exc:
                 warnings.append(f"Failed to generate summary for `{path.name}`: {exc}")
@@ -668,7 +810,22 @@ def dream(
         warnings.append("No LLM provider configured; ran local maintenance only.")
 
     changed = False
-    if apply and affected_files:
+    
+    # Check if consolidated_memory.md actually changed
+    source_compiled = candidate_root / "consolidated_memory.md"
+    target_compiled = memory_dir / "consolidated_memory.md"
+    compiled_changed = False
+    if source_compiled.exists():
+        if not target_compiled.exists():
+            compiled_changed = True
+        else:
+            try:
+                if source_compiled.read_text(encoding="utf-8") != target_compiled.read_text(encoding="utf-8"):
+                    compiled_changed = True
+            except Exception:
+                compiled_changed = True
+
+    if apply and (affected_files or compiled_changed):
         _apply_candidate_to_live(memory_dir, candidate_root, affected_files)
         changed = True
 
@@ -714,7 +871,10 @@ def _get_git_diff(cwd: str) -> str:
             check=False
         )
         if res_diff.returncode == 0 and res_diff.stdout.strip():
-            git_info.append("=== Git Working Copy Diff ===\n" + res_diff.stdout)
+            diff_text = res_diff.stdout
+            if len(diff_text) > 4000:
+                diff_text = diff_text[:4000] + "\n... [Diff truncated due to size] ...\n"
+            git_info.append("=== Git Working Copy Diff ===\n" + diff_text)
             
         # Git recent log
         res_log = subprocess.run(
@@ -843,6 +1003,8 @@ def _is_ignored_local_memory_path(memory_dir: Path, path: Path) -> bool:
         relative_parts = path.relative_to(memory_dir).parts
     except ValueError:
         return False
+    if path.name == "consolidated_memory.md":
+        return True
     return bool({"private", "snapshots", "evals", "candidates"}.intersection(relative_parts))
 
 
@@ -921,7 +1083,69 @@ def _regenerate_index(cwd: str, mode: str) -> list[str]:
     return _regenerate_index_root(memory_dir, mode=mode)
 
 
-def _regenerate_index_root(memory_dir: Path, mode: str) -> list[str]:
+def _extract_key_topics(body: str) -> str:
+    """Extract H2 headings or top-level list items to list as key topics."""
+    topics: list[str] = []
+    # Find h2 headings, e.g. ## Topic Name
+    for line in body.splitlines():
+        line = line.strip()
+        if line.startswith("## "):
+            topic = line[3:].strip()
+            if topic:
+                topics.append(topic)
+    if not topics:
+        # Fallback to top-level list items if no h2 headings exist
+        for line in body.splitlines():
+            if line.startswith("- ") or line.startswith("* "):
+                topic = line[2:].strip()
+                if topic:
+                    if len(topic) > 60:
+                        topic = topic[:57] + "..."
+                    topics.append(topic)
+                    if len(topics) >= 3:
+                        break
+    if not topics:
+        return "None recorded"
+    
+    cleaned_topics = [t.replace("|", "\\|") for t in topics]
+    return "<br>".join(f"• {t}" for t in cleaned_topics)
+
+
+def _compile_consolidated_memory(memory_dir: Path) -> str:
+    """Compile all active memory sections into a single read-only string."""
+    fragments = []
+    local_files = [
+        path
+        for path in _iter_markdown_files(memory_dir)
+        if path.name != "consolidated_memory.md" and not _is_ignored_local_memory_path(memory_dir, path)
+    ]
+    
+    def local_sort_key(path: Path) -> tuple[int, int, str]:
+        metadata, _body, _warning = _safe_parse_for_sort(path)
+        priority = str(metadata.get("priority") or "medium")
+        index_rank = 0 if path.name == "index.md" else 1
+        return (PRIORITY_ORDER.get(priority, 1), index_rank, path.name)
+        
+    ordered_files = sorted(local_files, key=local_sort_key)
+    
+    for path in ordered_files:
+        section_name, metadata, body, read_warning = _read_memory_path(path)
+        if read_warning:
+            continue
+        full_text = dump_frontmatter(metadata, body)
+        section_key = f"local/{section_name}"
+        fragments.append(f"<!-- memory-fabric:{section_key} -->\n{full_text.strip()}")
+        
+    return "\n\n".join(fragments).strip() + "\n"
+
+
+def _regenerate_index_root(
+    memory_dir: Path,
+    mode: str,
+    consolidation_hash: str | None = None,
+    contradictions: list[str] | None = None,
+    warnings: list[str] | None = None,
+) -> list[str]:
     checked_files = [
         str(path)
         for path in _iter_markdown_files(memory_dir)
@@ -932,28 +1156,45 @@ def _regenerate_index_root(memory_dir: Path, mode: str) -> list[str]:
         "",
         f"Updated by Memory Fabric Dreaming mode `{mode}` at {now_iso()}.",
         "",
-        "| Section | Priority | Summary |",
-        "| --- | --- | --- |",
+        "| Section | Priority | Summary | Key Topics |",
+        "| --- | --- | --- | --- |",
     ]
     for path in _iter_markdown_files(memory_dir):
         if path.name == "index.md" or _is_ignored_local_memory_path(memory_dir, path):
             continue
-        metadata, _body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
         section = metadata.get("section", path.stem)
         priority = metadata.get("priority", "medium")
         summary = str(metadata.get("summary", "")).replace("|", "\\|")
-        lines.append(f"| `{section}` | {priority} | {summary} |")
+        topics = _extract_key_topics(body)
+        lines.append(f"| `{section}` | {priority} | {summary} | {topics} |")
 
     index_path = memory_dir / "index.md"
     if index_path.exists():
         metadata, _body = parse_frontmatter(index_path.read_text(encoding="utf-8"))
     else:
         metadata, _body = parse_frontmatter(build_empty_section("index"))
+    
+    if consolidation_hash is not None:
+        metadata["consolidation_hash"] = consolidation_hash
+    if contradictions is not None:
+        metadata["contradictions"] = contradictions
+    if warnings is not None:
+        metadata["consolidation_warnings"] = warnings
+
     metadata["last_updated"] = now_iso()
     metadata["summary"] = "Map of available project memory sections."
     metadata["priority"] = "high"
     index_path.write_text(dump_frontmatter(metadata, "\n".join(lines) + "\n"), encoding="utf-8")
+
+    try:
+        consolidated_content = _compile_consolidated_memory(memory_dir)
+        (memory_dir / "consolidated_memory.md").write_text(consolidated_content, encoding="utf-8")
+    except Exception:
+        pass
+
     return checked_files
+
 
 
 def _create_candidate_store(memory_dir: Path, snapshot: str) -> Path:
@@ -1056,7 +1297,7 @@ def _relative_markdown_paths(root: Path, ignore_local_paths: bool = False) -> se
         return set()
     paths: set[Path] = set()
     for path in _iter_markdown_files(root):
-        if ignore_local_paths and _is_ignored_local_memory_path(root, path):
+        if _is_ignored_local_memory_path(root, path):
             continue
         paths.add(path.relative_to(root))
     return paths
@@ -1076,10 +1317,20 @@ def _apply_candidate_to_live(memory_dir: Path, candidate_root: Path, affected_fi
             with locked_file(target):
                 target.unlink()
 
+    # Also promote consolidated_memory.md if it exists in candidate_root
+    source_compiled = candidate_root / "consolidated_memory.md"
+    target_compiled = memory_dir / "consolidated_memory.md"
+    if source_compiled.exists():
+        target_compiled.parent.mkdir(parents=True, exist_ok=True)
+        with locked_file(target_compiled):
+            shutil.copy2(source_compiled, target_compiled)
+
 
 def _build_rewrite_tasks(candidate_root: Path, max_rewrite_tasks: int) -> list[DreamRewriteTask]:
     tasks: list[DreamRewriteTask] = []
     for path in sorted(path for path in _iter_markdown_files(candidate_root) if path.name != "index.md"):
+        if _is_ignored_local_memory_path(candidate_root, path):
+            continue
         metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
         section = str(metadata.get("section") or path.stem)
         lines = [line.strip() for line in body.splitlines() if line.strip()]

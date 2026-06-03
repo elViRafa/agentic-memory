@@ -49,6 +49,21 @@ pip install "git+https://github.com/elViRafa/agentic-memory.git"          # CLI 
 pip install "memory-fabric[mcp] @ git+https://github.com/elViRafa/agentic-memory.git"  # + MCP
 ```
 
+### Updating
+
+To update to the latest version directly from GitHub:
+
+```sh
+# If installed via pipx:
+pipx upgrade memory-fabric
+
+# If pipx upgrade doesn't fetch the latest HEAD commit, force reinstall:
+pipx install --force "memory-fabric[mcp] @ git+https://github.com/elViRafa/agentic-memory.git"
+
+# If installed via plain pip:
+pip install --upgrade --force-reinstall "memory-fabric[mcp] @ git+https://github.com/elViRafa/agentic-memory.git"
+```
+
 Or clone and install in editable mode for local development:
 
 ```sh
@@ -199,6 +214,26 @@ Without these files, agents will:
 
 The instruction files are the authoritative mechanism to change this behaviour across
 Claude Code, Cursor, GitHub Copilot, and any other MCP-aware agent.
+
+---
+
+## Using Memory Fabric in Other Projects
+
+You can use a single installed instance of Memory Fabric across all your coding projects:
+
+1. **Scaffold the target project**:
+   Navigate to your target project's root folder and initialize it:
+   ```sh
+   cd /path/to/other-project
+   ai-memory init --install-hooks
+   ```
+   This creates `.ai-memory/`, ignores local cache files in `.gitignore`, and sets up the git post-commit hooks.
+
+2. **Add Agent Instructions**:
+   Copy the `AGENTS.md` file (or `.github/copilot-instructions.md`) into your target project's root folder. This instructs your AI coding assistant to automatically utilize the MCP tools.
+
+3. **Global MCP Configuration**:
+   Verify your AI assistant's configuration points to the installed `memory-fabric-mcp` executable. The MCP tools automatically parse and use the active project's path passed by the assistant as the `cwd` argument, enabling a single global MCP server registration to support all your local workspaces.
 
 ---
 
