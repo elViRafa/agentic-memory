@@ -1,10 +1,11 @@
 ---
 section: decisions
-summary: "Architecture and product decisions with rationale."
+summary: "Records key architectural decisions, implementation details, and technical rationale for the memory system's evolution."
 priority: medium
 tags: [decisions, adr]
 schema_version: 1.3
 last_updated: "2026-06-03T10:52:23-04:00"
+summary_hash: 8f674f25b684be55c855eb0c0679093b
 ---
 
 # Decisions

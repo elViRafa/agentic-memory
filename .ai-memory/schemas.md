@@ -1,10 +1,11 @@
 ---
 section: schemas
-summary: "Definitions of metadata frontmatter, tool response JSON contracts, and memory data models."
+summary: "Defines YAML frontmatter schemas and Python `TypedDict` contracts for memory metadata, tool responses, and system status."
 priority: high
 tags: [schemas, contracts, frontmatter, json]
 schema_version: 1.3
 last_updated: "2026-06-03T08:27:58-04:00"
+summary_hash: 9cc3ef55405367bd4e51470456a6a789
 ---
 
 # Schemas

@@ -1,4 +1,6 @@
-# GitHub Copilot Instructions — Memory Fabric
+---
+trigger: always_on
+---
 
 ## Memory Fabric — Semantic Store Agent Instructions
 
@@ -29,20 +31,3 @@ Use `write_memory_store_tool` to register small, standalone memory files.
 
 ### 3. Legacy Section Writes
 If you are updating a legacy flat section file (e.g., updating a list of risks in `debt`), call `write_local_memory_tool(cwd="...", section="debt", content="...", mode="append")`. Prefer `write_memory_store_tool` for new standalone topics.
-
-### 4. Security & Best Practices
-* **Do NOT** store credentials, tokens, or passwords in memory — the server redacts them, but avoid writing them in the first place.
-
----
-
-## Project overview
-
-Memory Fabric is the MCP server itself. Key files:
-
-- `src/memory_fabric/server.py` — MCP tool registration
-- `src/memory_fabric/storage.py` — Core read/write/dream/search logic
-- `src/memory_fabric/eval.py` — Quality scoring
-- `src/memory_fabric/cli.py` — `ai-memory` CLI
-- `src/memory_fabric/security.py` — Secret detection and redaction
-
-Run tests: `pytest tests/`

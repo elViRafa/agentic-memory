@@ -1,10 +1,11 @@
 ---
 section: debt
-summary: "Known technical debt, risks, and cleanup targets."
+summary: "Tracks planned improvements for `dream_tool`, focusing on memory consolidation, non-destructive outputs, and agent-assisted rewrites."
 priority: low
 tags: [debt, risk]
 schema_version: 1.3
 last_updated: "2026-06-02T10:59:34-04:00"
+summary_hash: 2591b3f73e838b3ae42af2337c1837cf
 ---
 
 # Technical Debt

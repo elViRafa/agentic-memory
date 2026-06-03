@@ -13,22 +13,59 @@ class LLMError(Exception):
     """Raised when an LLM API call fails."""
 
 
-def call_llm(prompt: str, system_instruction: str = "") -> str:
-    """Execute a text completion request to the configured LLM provider."""
+async def call_llm(prompt: str, system_instruction: str = "", context: Any = None) -> str:
+    """Execute a text completion request to the configured LLM provider or via MCP Sampling."""
+    import asyncio
+    
+    # 1. Prefer configured LLM
     provider = (os.environ.get("MEMORY_FABRIC_LLM_PROVIDER") or "").strip().lower()
-    if not provider:
-        raise LLMError("MEMORY_FABRIC_LLM_PROVIDER is not configured.")
+    if provider:
+        if provider == "gemini":
+            return await asyncio.to_thread(_call_gemini, prompt, system_instruction)
+        elif provider == "openai":
+            return await asyncio.to_thread(_call_openai, prompt, system_instruction)
+        elif provider == "anthropic":
+            return await asyncio.to_thread(_call_anthropic, prompt, system_instruction)
+        elif provider == "ollama":
+            return await asyncio.to_thread(_call_ollama, prompt, system_instruction)
+        else:
+            raise LLMError(f"Unsupported LLM provider: {provider}")
 
-    if provider == "gemini":
-        return _call_gemini(prompt, system_instruction)
-    elif provider == "openai":
-        return _call_openai(prompt, system_instruction)
-    elif provider == "anthropic":
-        return _call_anthropic(prompt, system_instruction)
-    elif provider == "ollama":
-        return _call_ollama(prompt, system_instruction)
-    else:
-        raise LLMError(f"Unsupported LLM provider: {provider}")
+    # 2. Fallback to MCP Sampling if context is available
+    if context is not None:
+        try:
+            client_params = getattr(context.session, "client_params", None)
+            if (
+                client_params is not None
+                and getattr(client_params, "capabilities", None) is not None
+                and getattr(client_params.capabilities, "sampling", None) is not None
+            ):
+                from mcp.types import SamplingMessage, TextContent
+                messages = [
+                    SamplingMessage(
+                        role="user",
+                        content=TextContent(type="text", text=prompt)
+                    )
+                ]
+                result = await context.session.create_message(
+                    messages=messages,
+                    max_tokens=4000,
+                    system_prompt=system_instruction,
+                )
+                if hasattr(result, "content"):
+                    content = result.content
+                    if hasattr(content, "text"):
+                        return content.text
+                    elif isinstance(content, list):
+                        for item in content:
+                            if hasattr(item, "text"):
+                                return item.text
+                raise LLMError(f"Unexpected sampling response format: {result}")
+        except Exception as exc:
+            raise LLMError(f"MCP Sampling failed: {exc}") from exc
+
+    raise LLMError("MEMORY_FABRIC_LLM_PROVIDER is not configured and MCP Sampling is unavailable.")
+
 
 
 

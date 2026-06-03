@@ -6,14 +6,15 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from memory_fabric.eval import evaluate_dream_quality, evaluate_memory_fabric, latest_snapshot
+import asyncio
+from memory_fabric.eval import evaluate_dream_quality as _async_evaluate_dream_quality, evaluate_memory_fabric as _async_evaluate_memory_fabric, latest_snapshot
 from memory_fabric.frontmatter import parse_frontmatter
 from memory_fabric.version import __version__
 from memory_fabric.paths import get_global_root
 from memory_fabric.storage import (
     create_snapshot,
     doctor,
-    dream,
+    dream as _async_dream,
     initialize_memory_fabric,
     keyword_search,
     read_combined_context,
@@ -22,6 +23,20 @@ from memory_fabric.storage import (
     status,
     write_local_memory,
 )
+from memory_fabric.llm import call_llm as _async_call_llm
+
+def dream(*args, **kwargs):
+    return asyncio.run(_async_dream(*args, **kwargs))
+
+def evaluate_dream_quality(*args, **kwargs):
+    return asyncio.run(_async_evaluate_dream_quality(*args, **kwargs))
+
+def evaluate_memory_fabric(*args, **kwargs):
+    return asyncio.run(_async_evaluate_memory_fabric(*args, **kwargs))
+
+def call_llm(*args, **kwargs):
+    return asyncio.run(_async_call_llm(*args, **kwargs))
+
 
 
 class MemoryFabricTests(unittest.TestCase):
@@ -38,6 +53,36 @@ class MemoryFabricTests(unittest.TestCase):
             self.assertEqual(metadata["section"], "architecture")
             self.assertEqual(metadata["schema_version"], "1.3")
             self.assertIn(metadata["priority"], {"high", "medium", "low"})
+
+    def test_init_with_memory_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            # 1. Init with memory prompt
+            result = initialize_memory_fabric(temp, memory_prompt="Only save architecture guidelines.")
+            memory_dir = Path(temp) / ".ai-memory"
+            prompt_file = memory_dir / "memory_prompt.txt"
+            
+            self.assertTrue(result["created"])
+            self.assertTrue(prompt_file.exists())
+            self.assertEqual(prompt_file.read_text(encoding="utf-8").strip(), "Only save architecture guidelines.")
+            
+            # Verify combined context includes memory prompt
+            context = read_combined_context(temp)
+            self.assertIn("local/memory_prompt", context["included_sections"])
+            self.assertIn("Only save architecture guidelines.", context["text"])
+
+            # 2. Verify consolidated compile includes it
+            dream(temp, mode="light", apply=True)
+            consolidated_path = memory_dir / "consolidated_memory.md"
+            self.assertTrue(consolidated_path.exists())
+            self.assertIn("local/memory_prompt", consolidated_path.read_text(encoding="utf-8"))
+
+            # 3. Unlink memory prompt via empty init
+            result2 = initialize_memory_fabric(temp, memory_prompt="")
+            self.assertFalse(prompt_file.exists())
+            
+            context2 = read_combined_context(temp)
+            self.assertNotIn("local/memory_prompt", context2["included_sections"])
+            self.assertNotIn("Only save architecture guidelines.", context2["text"])
 
     def test_combined_context_includes_tier_zero_and_uses_summary_when_budget_is_small(self) -> None:
         with tempfile.TemporaryDirectory() as temp, tempfile.TemporaryDirectory() as global_home:
@@ -382,7 +427,6 @@ class MemoryFabricTests(unittest.TestCase):
     @mock.patch("urllib.request.urlopen")
     def test_llm_providers_success(self, mock_urlopen) -> None:
         import json
-        from memory_fabric.llm import call_llm
 
         class MockResponse:
             def __init__(self, data: bytes, code: int = 200, reason: str = "OK"):
@@ -467,7 +511,7 @@ class MemoryFabricTests(unittest.TestCase):
         os.environ.pop("OLLAMA_MODEL", None)
 
 
-    @mock.patch("memory_fabric.storage.call_llm")
+    @mock.patch("memory_fabric.storage.call_llm", new_callable=mock.AsyncMock)
     def test_dream_with_llm(self, mock_call_llm) -> None:
         import json
         with tempfile.TemporaryDirectory() as temp:
@@ -484,7 +528,7 @@ class MemoryFabricTests(unittest.TestCase):
                 "warnings": ["Warning about schema"]
             })
 
-            def mock_llm_func(prompt, system_instruction=""):
+            def mock_llm_func(prompt, system_instruction="", *args, **kwargs):
                 if "consolidated_files" in prompt:
                     return consolidation_response
                 return "Mocked concise summary of section"
@@ -504,7 +548,7 @@ class MemoryFabricTests(unittest.TestCase):
             os.environ.pop("MEMORY_FABRIC_LLM_PROVIDER", None)
             os.environ.pop("GEMINI_API_KEY", None)
 
-    @mock.patch("memory_fabric.llm.call_llm")
+    @mock.patch("memory_fabric.llm.call_llm", new_callable=mock.AsyncMock)
     def test_eval_with_llm_review(self, mock_call_llm) -> None:
         with tempfile.TemporaryDirectory() as temp:
             initialize_memory_fabric(temp)
@@ -522,7 +566,7 @@ class MemoryFabricTests(unittest.TestCase):
             os.environ.pop("MEMORY_FABRIC_LLM_PROVIDER", None)
             os.environ.pop("GEMINI_API_KEY", None)
 
-    @mock.patch("memory_fabric.llm.call_llm")
+    @mock.patch("memory_fabric.llm.call_llm", new_callable=mock.AsyncMock)
     def test_eval_with_llm_review_failure(self, mock_call_llm) -> None:
         with tempfile.TemporaryDirectory() as temp:
             initialize_memory_fabric(temp)
@@ -545,7 +589,6 @@ class MemoryFabricTests(unittest.TestCase):
     def test_llm_retry_on_429_then_success(self, mock_urlopen, mock_sleep) -> None:
         import json
         import urllib.error
-        from memory_fabric.llm import call_llm
 
         class MockResponse:
             def __init__(self, data: bytes, code: int = 200, reason: str = "OK"):
@@ -581,7 +624,7 @@ class MemoryFabricTests(unittest.TestCase):
     @mock.patch("urllib.request.urlopen")
     def test_llm_retry_exhausted_raises_error(self, mock_urlopen, mock_sleep) -> None:
         import urllib.error
-        from memory_fabric.llm import call_llm, LLMError
+        from memory_fabric.llm import LLMError
 
         err_response = urllib.error.HTTPError("url", 429, "Too Many Requests", {}, None)
         mock_urlopen.side_effect = err_response
@@ -599,7 +642,7 @@ class MemoryFabricTests(unittest.TestCase):
             os.environ.pop("GEMINI_API_KEY", None)
 
     @mock.patch("memory_fabric.storage.now_iso")
-    @mock.patch("memory_fabric.storage.call_llm")
+    @mock.patch("memory_fabric.storage.call_llm", new_callable=mock.AsyncMock)
     def test_dream_summary_skips_when_hash_matches(self, mock_call_llm, mock_now_iso) -> None:
         import hashlib
         from memory_fabric.frontmatter import dump_frontmatter
@@ -660,7 +703,7 @@ class MemoryFabricTests(unittest.TestCase):
                 os.environ.pop("GEMINI_API_KEY", None)
 
     @mock.patch("memory_fabric.storage.now_iso")
-    @mock.patch("memory_fabric.storage.call_llm")
+    @mock.patch("memory_fabric.storage.call_llm", new_callable=mock.AsyncMock)
     def test_dream_consolidation_skips_when_hash_matches(self, mock_call_llm, mock_now_iso) -> None:
         import json
         from memory_fabric.frontmatter import dump_frontmatter
@@ -853,7 +896,6 @@ class MemoryFabricTests(unittest.TestCase):
     @mock.patch("urllib.request.urlopen")
     def test_llm_debugging_logging(self, mock_urlopen, mock_stderr) -> None:
         import json
-        from memory_fabric.llm import call_llm
 
         class MockResponse:
             def __init__(self, data: bytes):
@@ -933,6 +975,243 @@ class MemoryFabricTests(unittest.TestCase):
                 os.environ.pop("MEMORY_FABRIC_LLM_DEBUG", None)
                 os.environ.pop("MEMORY_FABRIC_LLM_PROVIDER", None)
                 os.environ.pop("OPENAI_API_KEY", None)
+
+
+class MemoryStoreTests(unittest.TestCase):
+    def test_store_write_creates_nested_file_with_frontmatter(self) -> None:
+        from memory_fabric.storage import write_memory_store, read_memory_store
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            result = write_memory_store(
+                temp,
+                store_path="architecture/decisions/auth-service",
+                content="Use JWT for authentication.",
+                title="Auth Service Decision",
+                tags=["auth", "jwt"],
+                priority="high",
+            )
+
+            self.assertTrue(result["changed"])
+            self.assertEqual(result["store_path"], "architecture/decisions/auth-service")
+            self.assertIn("auth-service.md", result["path"])
+
+            # Verify file exists and has valid frontmatter
+            path = Path(result["path"])
+            self.assertTrue(path.exists())
+            metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+            self.assertEqual(metadata["store_path"], "architecture/decisions/auth-service")
+            self.assertEqual(metadata["title"], "Auth Service Decision")
+            self.assertEqual(metadata["tags"], ["auth", "jwt"])
+            self.assertEqual(metadata["priority"], "high")
+            self.assertIn("Use JWT", body)
+
+    def test_store_write_redacts_secrets(self) -> None:
+        from memory_fabric.storage import write_memory_store
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            result = write_memory_store(
+                temp,
+                store_path="config/api-keys",
+                content="OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwxyz1234567890",
+            )
+
+            self.assertGreater(result["redactions"], 0)
+            path = Path(result["path"])
+            text = path.read_text(encoding="utf-8")
+            self.assertIn("[REDACTED_SECRET]", text)
+            self.assertNotIn("sk-abcdefghijklmnopqrstuvwxyz1234567890", text)
+
+    def test_store_read_returns_content_and_metadata(self) -> None:
+        from memory_fabric.storage import write_memory_store, read_memory_store
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            write_memory_store(
+                temp,
+                store_path="bugs/fix-login",
+                content="Fixed the login redirect issue.",
+                title="Fix Login Redirect",
+                tags=["bugfix"],
+            )
+
+            result = read_memory_store(temp, store_path="bugs/fix-login")
+            self.assertEqual(result["store_path"], "bugs/fix-login")
+            self.assertIn("Fixed the login redirect", result["text"])
+            self.assertEqual(result["metadata"]["title"], "Fix Login Redirect")
+            self.assertFalse(result["truncated"])
+
+    def test_store_read_truncates_large_files(self) -> None:
+        from memory_fabric.storage import write_memory_store, read_memory_store
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            write_memory_store(
+                temp,
+                store_path="context/large-file",
+                content="A" * 20000,
+                title="Large Memory",
+            )
+
+            result = read_memory_store(temp, store_path="context/large-file", max_tokens=50)
+            self.assertTrue(result["truncated"])
+            self.assertIn("exceeded the token budget", result["text"])
+
+    def test_store_list_returns_entries(self) -> None:
+        from memory_fabric.storage import write_memory_store, list_memory_store
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            write_memory_store(temp, store_path="bugs/fix-a", content="Fix A")
+            write_memory_store(temp, store_path="bugs/fix-b", content="Fix B")
+            write_memory_store(temp, store_path="arch/decision-c", content="Decision C")
+
+            result = list_memory_store(temp)
+            self.assertEqual(result["total"], 3)
+            self.assertEqual(len(result["entries"]), 3)
+
+            store_paths = [e["store_path"] for e in result["entries"]]
+            self.assertIn("bugs/fix-a", store_paths)
+            self.assertIn("bugs/fix-b", store_paths)
+            self.assertIn("arch/decision-c", store_paths)
+
+    def test_store_list_filters_by_prefix(self) -> None:
+        from memory_fabric.storage import write_memory_store, list_memory_store
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            write_memory_store(temp, store_path="bugs/fix-a", content="Fix A")
+            write_memory_store(temp, store_path="arch/decision-b", content="Decision B")
+
+            result = list_memory_store(temp, prefix="bugs")
+            self.assertEqual(result["total"], 1)
+            self.assertEqual(result["entries"][0]["store_path"], "bugs/fix-a")
+
+    def test_store_list_filters_by_tags(self) -> None:
+        from memory_fabric.storage import write_memory_store, list_memory_store
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            write_memory_store(temp, store_path="bugs/fix-a", content="Fix A", tags=["auth"])
+            write_memory_store(temp, store_path="bugs/fix-b", content="Fix B", tags=["database"])
+
+            result = list_memory_store(temp, tags=["auth"])
+            self.assertEqual(result["total"], 1)
+            self.assertEqual(result["entries"][0]["store_path"], "bugs/fix-a")
+
+    def test_store_delete_removes_file_and_empty_dirs(self) -> None:
+        from memory_fabric.storage import write_memory_store, delete_memory_store
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            write_result = write_memory_store(temp, store_path="deep/nested/file", content="Content")
+            file_path = Path(write_result["path"])
+            self.assertTrue(file_path.exists())
+
+            result = delete_memory_store(temp, store_path="deep/nested/file")
+            self.assertTrue(result["changed"])
+            self.assertFalse(file_path.exists())
+            # Empty parent dirs should be cleaned up
+            self.assertFalse((file_path.parent).exists())
+
+    def test_store_path_validation_rejects_traversal(self) -> None:
+        from memory_fabric.storage import _validate_store_path
+        with self.assertRaises(ValueError):
+            _validate_store_path("../etc/passwd")
+        with self.assertRaises(ValueError):
+            _validate_store_path("UPPERCASE")
+        with self.assertRaises(ValueError):
+            _validate_store_path("")
+        with self.assertRaises(ValueError):
+            _validate_store_path("a/b/c/d/e/f")  # > 5 levels
+        # Valid paths should work
+        segments = _validate_store_path("architecture/decisions/auth")
+        self.assertEqual(segments, ["architecture", "decisions", "auth"])
+
+    def test_store_search_included_in_keyword_search(self) -> None:
+        from memory_fabric.storage import write_memory_store
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            write_memory_store(
+                temp,
+                store_path="context/unique-keyword-xyz",
+                content="This contains a unique-keyword-xyz marker.",
+            )
+
+            with mock.patch("shutil.which", return_value=None):
+                results = keyword_search(temp, "unique-keyword-xyz")
+
+            self.assertGreater(len(results), 0)
+            store_results = [r for r in results if r["section"].startswith("store:")]
+            self.assertGreater(len(store_results), 0)
+            self.assertEqual(store_results[0]["section"], "store:context/unique-keyword-xyz")
+
+    def test_store_files_appear_in_combined_context(self) -> None:
+        from memory_fabric.storage import write_memory_store
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            write_memory_store(
+                temp,
+                store_path="context/important-rule",
+                content="Critical project rule: always use UTC timestamps.",
+                priority="high",
+            )
+
+            bundle = read_combined_context(temp, max_tokens=20000)
+            self.assertIn("Critical project rule", bundle["text"])
+            store_sections = [s for s in bundle["included_sections"] if s.startswith("store/")]
+            self.assertGreater(len(store_sections), 0)
+
+    def test_init_creates_memory_store_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            result = initialize_memory_fabric(temp)
+            store_dir = Path(temp) / ".ai-memory" / "memory-store"
+            self.assertTrue(store_dir.exists())
+            self.assertTrue((store_dir / ".gitkeep").exists())
+
+    def test_store_index_generated_by_dreaming(self) -> None:
+        from memory_fabric.storage import write_memory_store
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            write_memory_store(
+                temp,
+                store_path="architecture/api-design",
+                content="REST API with versioning.",
+                title="API Design",
+                tags=["api", "rest"],
+                priority="high",
+            )
+
+            dream(temp, mode="light", apply=True)
+
+            index_path = Path(temp) / ".ai-memory" / "index.md"
+            index_text = index_path.read_text(encoding="utf-8")
+            self.assertIn("## Memory Store", index_text)
+            self.assertIn("[Memory Store Index](memory-store/index.md)", index_text)
+
+            store_index_path = Path(temp) / ".ai-memory" / "memory-store" / "index.md"
+            self.assertTrue(store_index_path.exists())
+            store_index_text = store_index_path.read_text(encoding="utf-8")
+            self.assertIn("architecture/api-design", store_index_text)
+            self.assertIn("api, rest", store_index_text)
+
+    def test_call_llm_with_mcp_sampling(self) -> None:
+        
+        # Ensure direct LLM providers are disabled
+        os.environ.pop("MEMORY_FABRIC_LLM_PROVIDER", None)
+        
+        # Mock Context, session and create_message
+        mock_context = mock.MagicMock()
+        mock_result = mock.MagicMock()
+        mock_result.content = mock.MagicMock()
+        mock_result.content.text = "mcp sampling response"
+        
+        mock_context.session.client_params.capabilities.sampling = mock.MagicMock()
+        mock_context.session.create_message = mock.AsyncMock(return_value=mock_result)
+        
+        res = call_llm("test prompt", "system instructions", context=mock_context)
+        self.assertEqual(res, "mcp sampling response")
+        
+        # Verify it was called with the correct parameters
+        mock_context.session.create_message.assert_called_once()
+        args, kwargs = mock_context.session.create_message.call_args
+        self.assertEqual(kwargs["system_prompt"], "system instructions")
+        messages = kwargs["messages"]
+        self.assertEqual(messages[0].role, "user")
+        self.assertEqual(messages[0].content.text, "test prompt")
 
 
 if __name__ == "__main__":

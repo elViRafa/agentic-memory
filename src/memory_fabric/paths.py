@@ -54,6 +54,14 @@ def local_memory_dir(cwd: str | Path) -> Path:
     return project_root(cwd) / LOCAL_MEMORY_DIR
 
 
+MEMORY_STORE_DIR = "memory-store"
+
+
+def memory_store_dir(cwd: str | Path) -> Path:
+    return local_memory_dir(cwd) / MEMORY_STORE_DIR
+
+
+
 def global_memory_dir(
     platform_name: str | None = None,
     env: Mapping[str, str] | None = None,

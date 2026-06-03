@@ -1,10 +1,11 @@
 ---
 section: framework-rules
-summary: "Project-wide coding standards, dependency constraints, installation procedures, testing patterns, and CLI usage."
+summary: "Defines project rules, setup instructions (pip), CLI commands (`ai-memory`), and testing conventions for Memory Fabric."
 priority: medium
 tags: [framework, rules, python, pytest, cli, commands]
 schema_version: 1.3
 last_updated: "2026-06-03T08:28:01-04:00"
+summary_hash: 0f7d35614e1754f9a105dd34542eb614
 ---
 
 # Framework Rules

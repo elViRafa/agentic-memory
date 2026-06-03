@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import sys
 from pathlib import Path
@@ -12,13 +13,17 @@ from memory_fabric.version import __version__
 from memory_fabric.eval import evaluate_dream_quality, evaluate_memory_fabric
 from memory_fabric.paths import local_memory_dir
 from memory_fabric.storage import (
+    delete_memory_store,
     doctor,
     dream,
     initialize_memory_fabric,
     keyword_search,
+    list_memory_store,
     propose_memory_patch,
+    read_memory_store,
     rollback,
     status,
+    write_memory_store,
 )
 
 
@@ -34,7 +39,11 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.command == "init":
-            result = initialize_memory_fabric(cwd, install_hooks=args.install_hooks)
+            result = initialize_memory_fabric(
+                cwd,
+                install_hooks=args.install_hooks,
+                memory_prompt=args.memory_prompt,
+            )
             _print_result(result, args.json)
             return 0
         if args.command == "status":
@@ -45,19 +54,23 @@ def main(argv: list[str] | None = None) -> int:
             _print_result(result, args.json)
             return 0 if result["ok"] else 1
         if args.command == "dream":
-            result = dream(
-                cwd,
-                mode=args.mode,
-                apply=args.apply,
-                llm_rewrite=args.llm_rewrite,
-                max_rewrite_tasks=args.max_rewrite_tasks,
+            result = asyncio.run(
+                dream(
+                    cwd,
+                    mode=args.mode,
+                    apply=args.apply,
+                    llm_rewrite=args.llm_rewrite,
+                    max_rewrite_tasks=args.max_rewrite_tasks,
+                )
             )
             if args.eval and args.apply:
-                result["evaluation"] = evaluate_dream_quality(
-                    cwd,
-                    snapshot=result["snapshot"] or "latest",
-                    save_report=True,
-                    llm_review=args.llm_review,
+                result["evaluation"] = asyncio.run(
+                    evaluate_dream_quality(
+                        cwd,
+                        snapshot=result["snapshot"] or "latest",
+                        save_report=True,
+                        llm_review=args.llm_review,
+                    )
                 )
             elif args.eval and not args.apply:
                 result["warnings"].append("Dream evaluation requires --apply because candidate mode does not mutate live memory.")
@@ -65,17 +78,21 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "eval":
             if args.dream_snapshot:
-                result = evaluate_dream_quality(
-                    cwd,
-                    snapshot=args.dream_snapshot,
-                    save_report=not args.no_save,
-                    llm_review=args.llm_review,
+                result = asyncio.run(
+                    evaluate_dream_quality(
+                        cwd,
+                        snapshot=args.dream_snapshot,
+                        save_report=not args.no_save,
+                        llm_review=args.llm_review,
+                    )
                 )
             else:
-                result = evaluate_memory_fabric(
-                    cwd,
-                    save_report=not args.no_save,
-                    llm_review=args.llm_review,
+                result = asyncio.run(
+                    evaluate_memory_fabric(
+                        cwd,
+                        save_report=not args.no_save,
+                        llm_review=args.llm_review,
+                    )
                 )
             _print_result(result, args.json)
             return 0 if result["status"] != "fail" else 1
@@ -161,6 +178,42 @@ def main(argv: list[str] | None = None) -> int:
             result = rollback(cwd, args.to)
             _print_result(result, args.json)
             return 0
+        if args.command == "store":
+            store_action = getattr(args, "store_action", None)
+            if store_action == "write":
+                tag_list = [t.strip() for t in args.tags.split(",") if t.strip()] if args.tags else None
+                result = write_memory_store(
+                    cwd,
+                    store_path=args.store_path,
+                    content=args.content,
+                    title=args.title,
+                    tags=tag_list,
+                    priority=args.priority,
+                    mode=args.mode,
+                )
+                _print_result(result, args.json)
+                return 0
+            elif store_action == "read":
+                result = read_memory_store(cwd, store_path=args.store_path)
+                _print_result(result, args.json)
+                return 0
+            elif store_action == "list":
+                tag_list = [t.strip() for t in args.tags.split(",") if t.strip()] if args.tags else None
+                result = list_memory_store(
+                    cwd,
+                    prefix=args.prefix,
+                    tags=tag_list,
+                    max_results=args.max_results,
+                )
+                _print_result(result, args.json)
+                return 0
+            elif store_action == "delete":
+                result = delete_memory_store(cwd, store_path=args.store_path)
+                _print_result(result, args.json)
+                return 0
+            else:
+                parser.parse_args(["store", "--help"])
+                return 1
     except Exception as exc:  # noqa: BLE001 - CLI should surface all operational failures.
         print(f"ai-memory: {exc}", file=sys.stderr)
         return 1
@@ -179,6 +232,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
     init_parser = subparsers.add_parser("init", help="Create .ai-memory scaffolding")
     init_parser.add_argument("--install-hooks", action="store_true", help="Install opt-in git hooks")
+    init_parser.add_argument("--memory-prompt", default=None, help="Steering instructions for agent memory capture")
     subparsers.add_parser("status", help="Show memory status")
     subparsers.add_parser("doctor", help="Validate memory files and environment")
 
@@ -207,6 +261,28 @@ def build_parser() -> argparse.ArgumentParser:
 
     rollback_parser = subparsers.add_parser("rollback", help="Restore local memory from a snapshot")
     rollback_parser.add_argument("--to", required=True, help="Snapshot name")
+
+    store_parser = subparsers.add_parser("store", help="Memory store operations")
+    store_subs = store_parser.add_subparsers(dest="store_action")
+
+    store_write = store_subs.add_parser("write", help="Write a store file")
+    store_write.add_argument("store_path", help="Semantic path (e.g. architecture/decisions/auth-service)")
+    store_write.add_argument("--content", required=True, help="Content to write")
+    store_write.add_argument("--title", default="", help="Title for the memory")
+    store_write.add_argument("--tags", default="", help="Comma-separated tags")
+    store_write.add_argument("--priority", choices=["high", "medium", "low"], default="medium")
+    store_write.add_argument("--mode", choices=["replace", "append"], default="replace")
+
+    store_read = store_subs.add_parser("read", help="Read a store file")
+    store_read.add_argument("store_path", help="Semantic path")
+
+    store_list = store_subs.add_parser("list", help="List store files")
+    store_list.add_argument("--prefix", default="", help="Filter by path prefix")
+    store_list.add_argument("--tags", default="", help="Comma-separated tags to filter by")
+    store_list.add_argument("--max-results", type=int, default=50)
+
+    store_delete = store_subs.add_parser("delete", help="Delete a store file")
+    store_delete.add_argument("store_path", help="Semantic path")
 
     return parser
 

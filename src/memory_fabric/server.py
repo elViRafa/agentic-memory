@@ -4,27 +4,32 @@ from __future__ import annotations
 
 from memory_fabric.eval import evaluate_dream_quality, evaluate_memory_fabric
 from memory_fabric.storage import (
+    delete_memory_store,
     dream,
     initialize_memory_fabric,
     keyword_search,
+    list_memory_store,
     propose_memory_patch,
     read_combined_context,
+    read_memory_store,
     read_section,
     write_local_memory,
+    write_memory_store,
 )
 
 try:
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.fastmcp import FastMCP, Context
 except ImportError:  # pragma: no cover - exercised only when optional mcp is absent.
     FastMCP = None  # type: ignore[assignment]
+    Context = None
 
 
 if FastMCP is not None:
     mcp = FastMCP("Memory Fabric")
 
     @mcp.tool()
-    def initialize_memory_fabric_tool(cwd: str):
-        return initialize_memory_fabric(cwd)
+    def initialize_memory_fabric_tool(cwd: str, memory_prompt: str | None = None):
+        return initialize_memory_fabric(cwd, memory_prompt=memory_prompt)
 
     @mcp.tool()
     def read_combined_context_tool(cwd: str, max_tokens: int = 4000):
@@ -47,7 +52,7 @@ if FastMCP is not None:
         return propose_memory_patch(cwd, instructions=instructions)
 
     @mcp.tool()
-    def dream_tool(
+    async def dream_tool(
         cwd: str,
         mode: str = "light",
         apply: bool = False,
@@ -56,37 +61,86 @@ if FastMCP is not None:
         with_eval: bool = False,
         save_report: bool = False,
         llm_review: bool = False,
+        context: Context = None,
     ):
-        result = dream(
+        result = await dream(
             cwd,
             mode=mode,
             apply=apply,
             llm_rewrite=llm_rewrite,
             max_rewrite_tasks=max_rewrite_tasks,
+            context=context,
         )
         if with_eval and apply and result["snapshot"]:
-            result["evaluation"] = evaluate_dream_quality(
+            result["evaluation"] = await evaluate_dream_quality(
                 cwd,
                 snapshot=result["snapshot"],
                 save_report=save_report,
                 llm_review=llm_review,
+                context=context,
             )
         elif with_eval and not apply:
             result["warnings"].append("Dream evaluation requires apply=true because candidate mode does not mutate live memory.")
         return result
 
     @mcp.tool()
-    def evaluate_memory_fabric_tool(cwd: str, save_report: bool = False, llm_review: bool = False):
-        return evaluate_memory_fabric(cwd, save_report=save_report, llm_review=llm_review)
+    async def evaluate_memory_fabric_tool(cwd: str, save_report: bool = False, llm_review: bool = False, context: Context = None):
+        return await evaluate_memory_fabric(cwd, save_report=save_report, llm_review=llm_review, context=context)
 
     @mcp.tool()
-    def evaluate_dream_quality_tool(
+    async def evaluate_dream_quality_tool(
         cwd: str,
         snapshot: str,
         save_report: bool = False,
         llm_review: bool = False,
+        context: Context = None,
     ):
-        return evaluate_dream_quality(cwd, snapshot=snapshot, save_report=save_report, llm_review=llm_review)
+        return await evaluate_dream_quality(cwd, snapshot=snapshot, save_report=save_report, llm_review=llm_review, context=context)
+
+    @mcp.tool()
+    def write_memory_store_tool(
+        cwd: str,
+        store_path: str,
+        content: str,
+        title: str = "",
+        tags: str = "",
+        priority: str = "medium",
+        mode: str = "replace",
+    ):
+        """Write a memory file to a semantic store path (e.g. 'architecture/decisions/auth-service')."""
+        tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else None
+        return write_memory_store(
+            cwd, store_path=store_path, content=content,
+            title=title, tags=tag_list, priority=priority, mode=mode,  # type: ignore[arg-type]
+        )
+
+    @mcp.tool()
+    def read_memory_store_tool(
+        cwd: str,
+        store_path: str,
+        max_tokens: int = 8000,
+    ):
+        """Read a single memory-store file by its semantic path."""
+        return read_memory_store(cwd, store_path=store_path, max_tokens=max_tokens)
+
+    @mcp.tool()
+    def list_memory_store_tool(
+        cwd: str,
+        prefix: str = "",
+        tags: str = "",
+        max_results: int = 50,
+    ):
+        """List files in the memory store, optionally filtered by prefix and/or tags."""
+        tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else None
+        return list_memory_store(cwd, prefix=prefix, tags=tag_list, max_results=max_results)
+
+    @mcp.tool()
+    def delete_memory_store_tool(
+        cwd: str,
+        store_path: str,
+    ):
+        """Remove a memory-store file by its semantic path."""
+        return delete_memory_store(cwd, store_path=store_path)
 else:
     mcp = None
 

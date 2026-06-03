@@ -1,3 +1,159 @@
+## 2026-06-03 20:20 - Update Documentation with Upgraded Instructions and MCP Sampling Guide
+
+**What was implemented:**
+- Prepared and updated the project `README.md` to include detailed instructions for upgrading the Memory Fabric package.
+- Documented LLM configuration methods and the new native MCP Sampling capability, detailing how it works, its benefits, resolution precedence, and CLI limitations.
+
+**Core files affected:**
+- [README.md](file:///c:/Users/rafael/Projetos/agentic-memory/README.md) — Main repository documentation updated with installation, upgrade guidelines, and LLM configuration rules.
+
+**Key changes:**
+- Added a step-by-step upgrade guide covering pipx and pip package installation commands, restarting MCP clients, and refreshing local projects via `ai-memory init --install-hooks`.
+- Created a new section "LLM Configuration & MCP Sampling" explaining how native MCP client sampling is dynamically resolved for Dreaming and evaluations.
+- Provided a clear table mapping environment variables for direct LLM providers (Gemini, OpenAI, Anthropic, Ollama).
+
+**Status & Testing:**
+- Tested locally, all documentation links verified and pytest test suite completely green (69 passed).
+
+## 2026-06-03 19:06 - Integrate Native MCP Sampling with Configured LLM Fallback
+
+**What was implemented:**
+- Integrated native Model Context Protocol (MCP) Sampling capabilities (`session.create_message`) as a fallback LLM provider for memory consolidation (dreaming) and evaluation workflows. To support this natively asynchronous operation, the underlying LLM call wrapper (`call_llm`), the dreaming logic (`dream`), and the evaluation logic (`evaluate_*`) were converted to asynchronous operations.
+- Updated the MCP server wrapper to expose async tool definitions that dynamically receive the `Context` object, updated the CLI to run async functions synchronously outside an active loop using `asyncio.run()`, and wrapped the unit test suite in synchronous wrappers to maintain full compatibility.
+
+**Core files affected:**
+- [src/memory_fabric/llm.py](file:///c:/Users/rafael/Projetos/agentic-memory/src/memory_fabric/llm.py) — Converted `call_llm` to be asynchronous, running direct HTTP provider adapters inside thread pools via `asyncio.to_thread` and implementing MCP client sampling fallback logic.
+- [src/memory_fabric/storage.py](file:///c:/Users/rafael/Projetos/agentic-memory/src/memory_fabric/storage.py) — Converted `dream` to be asynchronous and context-aware, updating `_is_llm_ready` to identify client sampling capability.
+- [src/memory_fabric/eval.py](file:///c:/Users/rafael/Projetos/agentic-memory/src/memory_fabric/eval.py) — Converted qualitative evaluation functions to be asynchronous and accept context parameters.
+- [src/memory_fabric/server.py](file:///c:/Users/rafael/Projetos/agentic-memory/src/memory_fabric/server.py) — Modified MCP tool wrappers to be asynchronous, resolving and forwarding injected `Context` parameters.
+- [tests/test_memory_fabric.py](file:///c:/Users/rafael/Projetos/agentic-memory/tests/test_memory_fabric.py) — Wrapped test runner assertions in synchronous wrappers and mock patches in `mock.AsyncMock`.
+
+**Key changes:**
+- Added fallback resolution order: direct LLM providers first, then MCP Sampling, then local structural maintenance.
+- Run synchronous HTTP provider adapters inside thread pools in an async context.
+- Added client capabilities lookup to verify sampling support.
+- Implemented a new unit test case `test_call_llm_with_mcp_sampling` verifying mock context sampling callback triggers.
+
+**Status & Testing:**
+- Tested locally, all 69 unit tests passed successfully.
+
+## 2026-06-03 18:43 - Support dedicated memory-store/index.md sub-index in Dreaming
+
+**What was implemented:**
+- Updated the Memory Fabric Dreaming process to automatically generate and maintain a dedicated sub-index file at `.ai-memory/memory-store/index.md` listing all semantic memory store entries. The root index `.ai-memory/index.md` now cleanly points to this dedicated sub-index via a Markdown link instead of listing the raw store entries directly, and the Doctor tool was updated to validate both index files independently.
+
+**Core files affected:**
+- [src/memory_fabric/storage.py](file:///c:/Users/rafael/Projetos/agentic-memory/src/memory_fabric/storage.py) — Updated `_regenerate_index_root` to compile and write `.ai-memory/memory-store/index.md` with store entry details and add a relative link in the root index; updated `_ordered_context_files` to exclude sub-index files from active context; updated `doctor` consistency checks to validate root and memory-store indices separately.
+- [tests/test_dream_store.py](file:///c:/Users/rafael/Projetos/agentic-memory/tests/test_dream_store.py) — Updated light mode dream assertions to verify creation, frontmatter, and table content of `memory-store/index.md`, and check that `doctor` validates without warnings.
+- [tests/test_memory_fabric.py](file:///c:/Users/rafael/Projetos/agentic-memory/tests/test_memory_fabric.py) — Updated store index dreaming test to assert generation and contents of `memory-store/index.md` and pointer link in root `index.md`.
+
+**Key changes:**
+- Generated a dedicated sub-index at `.ai-memory/memory-store/index.md` with appropriate index metadata frontmatter during Dreaming indexing.
+- Replaced the raw table of memory store files in the root `.ai-memory/index.md` with a Markdown hyperlink referencing the sub-index file.
+- Excluded any `index.md` file located inside the `memory-store/` subdirectory from compiler payload assembly and active steering context.
+- Split doctor index validation logic to verify local top-level sections against root `index.md`, and verify memory-store files against `memory-store/index.md`.
+
+**Status & Testing:**
+- Tested locally using `pytest`, all 68 unit tests passed successfully.
+- Manually ran local dreaming and doctor checks on the project repository's own memories, successfully creating the sub-index and completing the doctor checks with no warnings.
+
+## 2026-06-03 18:22 - Update agent instructions for memory-store semantic store rules
+
+**What was implemented:**
+- Updated the developer guidelines in `AGENTS.md` and `.github/copilot-instructions.md` with instructions for using the semantic Memory Store (`write_memory_store_tool`) and its naming/nesting constraints, keeping all agent instruction entrypoints in sync.
+
+**Core files affected:**
+- [AGENTS.md](file:///c:/Users/rafael/Projetos/agentic-memory/AGENTS.md) — Updated the Memory Fabric MCP tools section with the new Semantic Store instructions.
+- [.github/copilot-instructions.md](file:///c:/Users/rafael/Projetos/agentic-memory/.github/copilot-instructions.md) — Updated the Copilot instructions section to align with the new instructions.
+
+**Key changes:**
+- Documented strict formatting, directory nesting limits (max 5), duplicate prevention, and parameter requirements for `write_memory_store_tool`.
+- Documented legacy flat file writes (`write_local_memory_tool`) as fallback only for updating existing sections.
+- Preserved guidelines on startup context loading (`read_combined_context_tool`), pre-codebase keyword search, and security rules against credential storage.
+
+**Status & Testing:**
+- Manual verification of instruction files formatting and consistency.
+
+## 2026-06-03 18:11 - Support memory-store subdirectories in the Dreaming process
+
+**What was implemented:**
+- Updated the Memory Fabric Dreaming process to fully support hierarchically organized, nested memory files inside the `memory-store/` subdirectory. Canonical prefix keys (`local/` for top-level flat sections and `store/` for nested store files) are now used in LLM payloads, ensuring that consolidation, fact-checking, and summary generation preserve target directory paths instead of flattening or duplicating them.
+
+**Core files affected:**
+- [src/memory_fabric/storage.py](file:///c:/Users/rafael/Projetos/agentic-memory/src/memory_fabric/storage.py) — Integrated canonical prefix key logic (`_get_section_key`) into payload hashing, LLM prompting, consolidation parsing, and summary refreshing; updated index.md generation table columns to include `Key Topics` for nested files; fixed doctor validation to verify `store_path` instead of `section` for store files.
+- [tests/test_dream_store.py](file:///c:/Users/rafael/Projetos/agentic-memory/tests/test_dream_store.py) — Created dedicated unit tests verifying nested directory dreaming for index regeneration in light mode, LLM consolidation in deep mode, and double-hash summary/cache skipping.
+
+**Key changes:**
+- Defined `_get_section_key(root, path)` to resolve canonical section paths for both local and nested store files.
+- Supported mapping keys like `store/architecture/tests/isolated-unit-tests` back to their correct nested subfolders during LLM response parsing.
+- Refreshed metadata fields like `last_updated` and `summary` for nested store files.
+- Extracted and populated `Key Topics` for nested files in the `index.md` Memory Store table.
+- Resolved validation issues in the `doctor` command for store files.
+
+**Status & Testing:**
+- Tested locally using `pytest`, all 68 tests (including new dream store tests) passed successfully.
+
+## 2026-06-03 14:01 - Implement isolated unit tests for security and frontmatter utilities
+
+**What was implemented:**
+- Created dedicated test suites to isolate and thoroughly test the custom secret redaction (`security.py`) and YAML-frontmatter parser/dumper (`frontmatter.py`) helper modules. This increases test coverage and ensures robust handling of edge cases without relying on complex integration setups.
+
+**Core files affected:**
+- [tests/test_security.py](file:///c:/Users/rafael/Projetos/agentic-memory/tests/test_security.py) — Focused unit tests for token signatures (GitHub, AWS, OpenAI), key-value redaction regex, Shannon entropy calculation, and looks-like-secret validation rules
+- [tests/test_frontmatter.py](file:///c:/Users/rafael/Projetos/agentic-memory/tests/test_frontmatter.py) — Unit tests for YAML-frontmatter format constraints, list/boolean parsing, scalar serializing, and error conditions
+
+**Key changes:**
+- Added test coverage for `ghp_...` tokens, `AKIA...` tokens, `sk-...` tokens, high-entropy secrets, and normal strings
+- Added test coverage for missing frontmatter delimiters, invalid frontmatter keys, and list serialization edge cases in YAML-frontmatter parsing
+- Increased total test suite count from 50 to 65 passing tests
+
+**Status & Testing:**
+- Tested locally using `pytest`, all 65 tests passed successfully.
+
+## 2026-06-03 13:21 - Add memory-prompt support for session steering instructions
+
+**What was implemented:**
+- Added a `memory_prompt` feature to dynamically guide which memory details the agent should capture and focus on during a session. A custom `memory_prompt.txt` configuration file is written to `.ai-memory/` on initialization, dynamically parsed, and prepended to all combined context loads and consolidated memory compilations.
+
+**Core files affected:**
+- [src/memory_fabric/storage.py](file:///c:/Users/rafael/Projetos/agentic-memory/src/memory_fabric/storage.py) — Enforce creation and removal of `memory_prompt.txt` during initialization, dynamic insertion, and cache stripping in context generation
+- [src/memory_fabric/server.py](file:///c:/Users/rafael/Projetos/agentic-memory/src/memory_fabric/server.py) — Expose the new `memory_prompt` parameter through the MCP `initialize_memory_fabric_tool`
+- [src/memory_fabric/cli.py](file:///c:/Users/rafael/Projetos/agentic-memory/src/memory_fabric/cli.py) — Add `--memory-prompt` subcommand option to `init` and pass to backend
+
+**Key changes:**
+- Support setting `memory_prompt` via CLI argument `--memory-prompt` or MCP tool parameter `memory_prompt`
+- Read and inject custom memory prompt into `read_combined_context` and precompiled `consolidated_memory.md` cache dynamically
+- Safely clean up and delete the prompt configuration if initialized with an empty prompt string
+
+**Status & Testing:**
+- Tested locally, all 50 tests pass successfully.
+
+## 2026-06-03 16:43 - Add hierarchical memory-store for semantically-named memory files
+
+**What was implemented:**
+- Added a `memory-store/` subdirectory inside `.ai-memory/` that supports hierarchically organized, individually addressable memory files (e.g. `memory-store/architecture/decisions/auth-service.md`). Each file has YAML frontmatter with `store_path`, `title`, `tags`, `priority`, and `summary` fields, enabling fine-grained retrieval and filtering instead of appending everything to a single flat section file.
+
+**Core files affected:**
+- [src/memory_fabric/storage.py](file:///c:/Users/rafael/Projetos/agentic-memory/src/memory_fabric/storage.py) — CRUD operations, path validation, search/context/dreaming integration
+- [src/memory_fabric/server.py](file:///c:/Users/rafael/Projetos/agentic-memory/src/memory_fabric/server.py) — 4 new MCP tools
+- [src/memory_fabric/cli.py](file:///c:/Users/rafael/Projetos/agentic-memory/src/memory_fabric/cli.py) — `ai-memory store` subcommand group
+- ...and 3 additional files (contracts.py, paths.py, test_memory_fabric.py)
+
+**Key changes:**
+- Path validation enforces `[a-z0-9][a-z0-9_-]*` per segment, max 5 levels, preventing path traversal
+- Store files participate in `keyword_search` (tagged `store:` prefix), `read_combined_context` (priority-sorted), Dreaming index regeneration (Memory Store table), and consolidated memory compilation
+- 4 new MCP tools: `write_memory_store_tool`, `read_memory_store_tool`, `list_memory_store_tool`, `delete_memory_store_tool`
+- CLI: `ai-memory store write|read|list|delete` subcommands
+- `initialize_memory_fabric` now creates `memory-store/.gitkeep`
+- `delete_memory_store` cleans up empty parent directories automatically
+
+**Status & Testing:**
+- All 49 tests passed (36 existing + 13 new store tests). Full backward compatibility confirmed.
+
+**Notes / Next steps (optional):**
+- Memory-store files coexist with flat sections; existing workflows are unchanged
+- Future: consider adding `move_memory_store_tool` for reorganizing store paths
+
 ## 2026-06-03 10:50 - Enable temporary LLM request/response logging for debugging
 
 **What was implemented:**

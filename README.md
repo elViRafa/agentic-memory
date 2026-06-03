@@ -49,20 +49,28 @@ pip install "git+https://github.com/elViRafa/agentic-memory.git"          # CLI 
 pip install "memory-fabric[mcp] @ git+https://github.com/elViRafa/agentic-memory.git"  # + MCP
 ```
 
-### Updating
+### Upgrading
 
-To update to the latest version directly from GitHub:
+Because Memory Fabric is in active development, we recommend upgrading regularly. To pull the latest updates (including the new asynchronous engine and native MCP Sampling support):
 
-```sh
-# If installed via pipx:
-pipx upgrade memory-fabric
+1. **Reinstall/Upgrade the Package**:
+   ```sh
+   # If installed via pipx:
+   pipx install --force "memory-fabric[mcp] @ git+https://github.com/elViRafa/agentic-memory.git"
 
-# If pipx upgrade doesn't fetch the latest HEAD commit, force reinstall:
-pipx install --force "memory-fabric[mcp] @ git+https://github.com/elViRafa/agentic-memory.git"
+   # If installed in a virtual environment via pip:
+   pip install --upgrade --force-reinstall "memory-fabric[mcp] @ git+https://github.com/elViRafa/agentic-memory.git"
+   ```
 
-# If installed via plain pip:
-pip install --upgrade --force-reinstall "memory-fabric[mcp] @ git+https://github.com/elViRafa/agentic-memory.git"
-```
+2. **Restart MCP Clients**:
+   After upgrading, restart your IDE (Cursor, VS Code) or assistant process (Claude Code) to ensure the client reloads the updated `memory-fabric-mcp` server.
+
+3. **Refresh Local Projects (Optional)**:
+   If you have projects initialized with older versions of Memory Fabric, navigate to the project directory and run:
+   ```sh
+   ai-memory init --install-hooks
+   ```
+   This will safely refresh starter templates and local git hook integration to the latest format without overwriting your existing memory markdown files.
 
 Or clone and install in editable mode for local development:
 
@@ -312,6 +320,47 @@ ai-memory eval --dream memory-20260601T140000_0400
 ```
 
 Optional LLM review is never enabled by default. When requested, deterministic local scores remain the source of truth; LLM notes are secondary and inputs are sanitized before review.
+
+---
+
+## LLM Configuration & MCP Sampling
+
+Memory Fabric uses Large Language Models (LLMs) to perform semantic memory consolidation (Dreaming) and qualitative evaluation. You can configure this in two ways: via direct environment variables or via zero-config **MCP Sampling**.
+
+### Resolution Precedence
+
+When an operation requires an LLM, Memory Fabric resolves the provider in the following order:
+
+1. **Direct LLM Provider**: Uses direct API calls if `MEMORY_FABRIC_LLM_PROVIDER` is set in the environment along with the corresponding API keys.
+2. **Native MCP Sampling**: If no direct provider is set (or configured keys are missing) AND the command is executed within an active MCP session where the parent agent supports sampling, Memory Fabric delegates the LLM call to the agent itself.
+3. **Graceful Local Fallback**: If neither is available, it degrades gracefully to local, deterministic regex-based deduplication without semantic synthesis.
+
+### Using MCP Sampling in Dreaming
+
+MCP Sampling allows Memory Fabric to run semantic Dreaming and evaluations **without configuring any local API keys or provider environment variables**. Instead, it uses the host client's (e.g. Claude Code) native LLM connection.
+
+#### How It Works
+1. When your AI assistant calls the `dream_tool` or `evaluate_memory_fabric_tool` via MCP, the Memory Fabric server checks if the client session supports sampling capabilities.
+2. If supported and no direct provider is configured, the server sends a `create_message` request back to the client.
+3. The client assistant executes the LLM reasoning under the hood and returns the consolidated memory JSON or evaluation notes.
+
+#### Key Benefits
+- **Zero-Config:** No need to configure or expose `GEMINI_API_KEY`, `OPENAI_API_KEY`, or `ANTHROPIC_API_KEY` to the background MCP server process.
+- **Unified Context:** The consolidation uses the same model and settings configured in your main coding assistant.
+
+> [!IMPORTANT]
+> **CLI Limitation:** MCP Sampling relies on an active client-server session. Since the standalone terminal CLI (`ai-memory`) runs outside of an MCP client, running `ai-memory dream` from the command line **cannot** use MCP Sampling. To use LLM-based consolidation via the CLI, you must configure a direct LLM provider.
+
+### Direct LLM Providers Configuration
+
+To use the CLI with LLMs, or to bypass MCP Sampling with a specific provider, set the following environment variables:
+
+| Provider | Environment Variables | Notes |
+|---|---|---|
+| **Gemini** | `MEMORY_FABRIC_LLM_PROVIDER=gemini`<br>`GEMINI_API_KEY=your_key` | Defaults to `gemini-2.5-flash` |
+| **OpenAI** | `MEMORY_FABRIC_LLM_PROVIDER=openai`<br>`OPENAI_API_KEY=your_key`<br>`OPENAI_MODEL=gpt-4o-mini` *(opt)*<br>`OPENAI_API_BASE=...` *(opt)* | Can connect to custom local/remote OpenAI-compatible endpoints |
+| **Anthropic** | `MEMORY_FABRIC_LLM_PROVIDER=anthropic`<br>`ANTHROPIC_API_KEY=your_key` | Defaults to `claude-3-5-haiku-20241022` |
+| **Ollama** | `MEMORY_FABRIC_LLM_PROVIDER=ollama`<br>`OLLAMA_HOST=...` *(opt)*<br>`OLLAMA_MODEL=gemma2` *(opt)* | Offline, local reasoning |
 
 ---
 

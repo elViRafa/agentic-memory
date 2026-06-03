@@ -5,55 +5,38 @@ GitHub Copilot reads `.github/copilot-instructions.md` instead.
 
 ---
 
-## Memory Fabric MCP Tools
+## Memory Fabric — Semantic Store Agent Instructions
 
-This project exposes a `memory-fabric` MCP server. **You must use it** for all memory
-operations instead of reading or writing `.ai-memory/` files directly.
+You must use the `memory-fabric` MCP tools for all project memory operations. Do not read or write `.ai-memory/` files using raw file-system tools.
 
-### Mandatory session workflow
+### 1. Startup & Retrieval
+* **At session start:** You MUST call `read_combined_context_tool(cwd="<absolute project root path>")` first to load directives, memory context, and any active session steering memory prompts.
+* **Before querying or searching:** Call `keyword_search_tool(cwd="...", query="<keyword>")` to check if a topic has already been documented in memory.
 
-1. **At the start of every session**, call `read_combined_context_tool` with the project cwd
-   to load prior context before answering or making changes:
-   ```
-   read_combined_context_tool(cwd="<absolute path to project root>")
-   ```
-   If the call fails because `.ai-memory/` does not exist, call
-   `initialize_memory_fabric_tool(cwd=...)` first, then retry.
+### 2. Registering Memory in the Store
+After completing a task (e.g., a design decision, a bug fix, schema creation, or refactoring), persist this knowledge.
 
-2. **Before searching the codebase**, call `keyword_search_tool` to check what is already
-   documented in memory:
-   ```
-   keyword_search_tool(cwd="...", query="<topic>")
-   ```
+Use `write_memory_store_tool` to register small, standalone memory files.
 
-3. **After completing meaningful work** (decisions made, architecture clarified, bugs found,
-   patterns established), persist the knowledge with `write_local_memory_tool`:
-   ```
-   write_local_memory_tool(cwd="...", section="decisions", content="...", mode="append")
-   ```
-   Common sections: `decisions`, `architecture`, `debt`, `schemas`, `ubiquitous-language`,
-   `framework-rules`.
+**Strict Semantic Store Rules:**
+1. **`store_path` formatting:** Must be lowercase, alphanumeric segments separated by slashes. No spaces, no capital letters, and **no `.md` extension** (e.g., `architecture/decisions/jwt-auth` or `bugs/auth-redirect-fix`).
+2. **Path Nesting:** Max 5 levels of directory nesting.
+3. **Duplicate Prevention:** The tool automatically strips out duplicate bullet points or lines when appending.
 
-4. **Before writing to memory**, preview changes with `propose_memory_patch_tool` when the
-   update is complex or affects multiple sections.
+**Tool Parameters:**
+* `cwd`: Absolute path to project root.
+* `store_path`: The semantic path (e.g., `architecture/decisions/auth-service`).
+* `content`: The markdown text body of the memory.
+* `title`: (Optional) Human-readable title.
+* `tags`: (Optional) Comma-separated tags (e.g., `auth,security`).
+* `priority`: (Optional) `high`, `medium`, or `low` (default: `medium`).
+* `mode`: (Optional) `replace` to overwrite, or `append` to add to the end (default: `replace`).
 
-### When to write memory
+### 3. Legacy Section Writes
+If you are updating a legacy flat section file (e.g., updating a list of risks in `debt`), call `write_local_memory_tool(cwd="...", section="debt", content="...", mode="append")`. Prefer `write_memory_store_tool` for new standalone topics.
 
-| Situation | Section |
-|---|---|
-| A design decision was made and rationale agreed | `decisions` |
-| A new component, layer, or data flow was added/changed | `architecture` |
-| A known shortcut or issue was accepted | `debt` |
-| A domain term was defined or redefined | `ubiquitous-language` |
-| A library-specific rule or pattern was agreed | `framework-rules` |
-| A data model or API contract was changed | `schemas` |
-
-### Do NOT
-
-- Write markdown files inside `.ai-memory/` directly using file-system tools.
-- Skip `read_combined_context_tool` at session start; prior context matters.
-- Store credentials, tokens, or passwords in memory — the server redacts them, but avoid
-  writing them in the first place.
+### 4. Security & Best Practices
+* **Do NOT** store credentials, tokens, or passwords in memory — the server redacts them, but avoid writing them in the first place.
 
 ---
 

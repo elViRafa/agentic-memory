@@ -1,10 +1,11 @@
 ---
 section: architecture
-summary: "Project architecture, core boundaries, memory layout, and system flow definitions."
+summary: "Defines the local, file-first memory layer structure for MCP AI assistants using Markdown files as truth."
 priority: high
 tags: [architecture, design, overview]
 schema_version: 1.3
 last_updated: "2026-06-03T09:52:04-04:00"
+summary_hash: ad713ac871aff4dc95a9e560937fd6ad
 ---
 
 # Architecture

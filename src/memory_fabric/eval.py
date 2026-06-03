@@ -45,7 +45,7 @@ DREAM_WEIGHTS = {
 SECRETS_MARKER = "[REDACTED_SECRET]"
 
 
-def evaluate_memory_fabric(cwd: str, save_report: bool = True, llm_review: bool = False) -> EvalResult:
+async def evaluate_memory_fabric(cwd: str, save_report: bool = True, llm_review: bool = False, context: Any = None) -> EvalResult:
     root = project_root(cwd)
     memory_dir = local_memory_dir(root)
     generated_at = now_iso()
@@ -76,7 +76,7 @@ def evaluate_memory_fabric(cwd: str, save_report: bool = True, llm_review: bool 
             categories=categories,
             report_paths=[],
             warnings=["Pre-init eval only; no files were created."],
-            llm_notes=_llm_notes(llm_review, ""),
+            llm_notes=await _llm_notes(llm_review, "", context),
         )
         return result
 
@@ -100,7 +100,7 @@ def evaluate_memory_fabric(cwd: str, save_report: bool = True, llm_review: bool 
         llm_notes=[],
     )
     result["recommendations"] = _recommendations_from_categories(categories)
-    result["llm_notes"] = _llm_notes(llm_review, _report_markdown(result))
+    result["llm_notes"] = await _llm_notes(llm_review, _report_markdown(result), context)
 
     if save_report:
         report_paths = _save_memory_report(memory_dir, result)
@@ -202,11 +202,12 @@ def evaluate_memory_quality(cwd: str, root: Path | None = None) -> EvalCategory:
     return _category("coding_usefulness", MEMORY_WEIGHTS["coding_usefulness"], checks)
 
 
-def evaluate_dream_quality(
+async def evaluate_dream_quality(
     cwd: str,
     snapshot: str,
     save_report: bool = True,
     llm_review: bool = False,
+    context: Any = None,
 ) -> DreamEvalResult:
     root = project_root(cwd)
     memory_dir = local_memory_dir(root)
@@ -216,7 +217,7 @@ def evaluate_dream_quality(
         raise FileNotFoundError(f"Snapshot not found: {snapshot}")
 
     before_category = evaluate_memory_quality(cwd, root=snapshot_dir)
-    after_eval = evaluate_memory_fabric(cwd, save_report=False, llm_review=False)
+    after_eval = await evaluate_memory_fabric(cwd, save_report=False, llm_review=False, context=context)
     before_eval = _memory_eval_for_root(cwd, snapshot_dir)
 
     changed_files = _changed_files(snapshot_dir, memory_dir)
@@ -251,16 +252,19 @@ def evaluate_dream_quality(
     churn_ratio = _churn_ratio(snapshot_dir, memory_dir)
     if churn_ratio > 0.75 and len(changed_files) > 2:
         regressions.append("Dreaming changed a large portion of memory; review for excessive churn.")
-    elif changed_files:
+    else:
         improvements.append("Dreaming made a bounded set of memory changes.")
 
-    retrieval_check = _evaluate_retrieval_readiness(cwd)
+    score_delta_cat = _dream_score_delta_category(delta)
+    regression_safety_cat = _dream_regression_category(regressions)
+    index_summary_cat = _dream_index_summary_category(changed_files, before_category, after_eval)
+    change_safety_cat = _dream_change_safety_category(changed_files, new_secret_files, churn_ratio)
+
     categories = [
-        _dream_score_delta_category(delta),
-        _dream_regression_category(regressions),
-        _dream_index_summary_category(changed_files, before_category, after_eval),
-        retrieval_check,
-        _dream_change_safety_category(changed_files, new_secret_files, churn_ratio),
+        score_delta_cat,
+        regression_safety_cat,
+        index_summary_cat,
+        change_safety_cat,
     ]
     score = _weighted_score(categories, DREAM_WEIGHTS)
     status = _score_status(score)
@@ -285,7 +289,7 @@ def evaluate_dream_quality(
         "warnings": [],
         "llm_notes": [],
     }
-    result["llm_notes"] = _llm_notes(llm_review, _dream_report_markdown(result))
+    result["llm_notes"] = await _llm_notes(llm_review, _dream_report_markdown(result), context)
 
     if save_report:
         result["report_paths"] = _save_dream_report(memory_dir, result)
@@ -876,16 +880,27 @@ def _llm_lines(notes: list[str]) -> list[str]:
     return ["", "## Optional LLM Notes", "", *[f"- {note}" for note in notes]]
 
 
-def _llm_notes(llm_review: bool, report_text: str) -> list[str]:
+async def _llm_notes(llm_review: bool, report_text: str, context: Any = None) -> list[str]:
     if not llm_review:
         return []
     sanitized, redactions = redact_secrets(report_text)
     notes = []
     if redactions:
         notes.append(f"Sanitized {redactions} possible secret(s) before optional LLM review.")
+        
     provider = os.environ.get("MEMORY_FABRIC_LLM_PROVIDER")
-    if not provider:
-        notes.append("LLM review requested, but MEMORY_FABRIC_LLM_PROVIDER is not configured.")
+    sampling_available = False
+    if context is not None:
+        client_params = getattr(context.session, "client_params", None)
+        if (
+            client_params is not None
+            and getattr(client_params, "capabilities", None) is not None
+            and getattr(client_params.capabilities, "sampling", None) is not None
+        ):
+            sampling_available = True
+
+    if not provider and not sampling_available:
+        notes.append("LLM review requested, but neither MEMORY_FABRIC_LLM_PROVIDER nor MCP Sampling is available.")
         return notes
 
     if not sanitized.strip():
@@ -901,7 +916,7 @@ def _llm_notes(llm_review: bool, report_text: str) -> list[str]:
             f"Evaluation Report:\n{sanitized}"
         )
         system_instruction = "You are a senior software architect specializing in technical documentation, repository design, and AI context optimization."
-        response = call_llm(prompt, system_instruction)
+        response = await call_llm(prompt, system_instruction, context)
 
         import re
         for line in response.splitlines():

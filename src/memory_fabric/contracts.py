@@ -56,6 +56,38 @@ class PatchPreview(TypedDict):
     warnings: list[str]
 
 
+class StoreWriteResult(TypedDict):
+    changed: bool
+    path: str
+    store_path: str
+    redactions: int
+    warnings: list[str]
+
+
+class StoreReadResult(TypedDict):
+    store_path: str
+    path: str
+    text: str
+    metadata: dict[str, Any]
+    truncated: bool
+    warnings: list[str]
+
+
+class StoreEntry(TypedDict):
+    store_path: str
+    path: str
+    summary: str
+    priority: str
+    tags: list[str]
+    last_updated: str
+
+
+class StoreListResult(TypedDict):
+    entries: list[StoreEntry]
+    total: int
+    warnings: list[str]
+
+
 class DoctorResult(TypedDict):
     ok: bool
     errors: list[str]

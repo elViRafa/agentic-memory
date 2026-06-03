@@ -31,3 +31,7 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local env scripts
+z_env_memory.ps1
+
