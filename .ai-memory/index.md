@@ -4,14 +4,14 @@ summary: "Map of available project memory sections."
 priority: high
 tags: [index, memory]
 schema_version: 1.3
-last_updated: "2026-06-03T08:28:20-04:00"
+last_updated: "2026-06-03T11:01:30-04:00"
 contradictions: []
 consolidation_warnings: []
 ---
 
 # Project Memory Index
 
-Updated by Memory Fabric Dreaming mode `light` at 2026-06-03T08:28:20-04:00.
+Updated by Memory Fabric Dreaming mode `light` at 2026-06-03T11:01:30-04:00.
 
 | Section | Priority | Summary | Key Topics |
 | --- | --- | --- | --- |

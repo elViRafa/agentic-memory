@@ -4,7 +4,7 @@ summary: "Architecture and product decisions with rationale."
 priority: medium
 tags: [decisions, adr]
 schema_version: 1.3
-last_updated: "2026-06-02T17:09:08-04:00"
+last_updated: "2026-06-03T10:52:23-04:00"
 ---
 
 # Decisions
@@ -40,3 +40,5 @@ Record durable decisions and rationale here.
 - Decided to support local model options by adding the `"ollama"` LLM provider type in `llm.py` and `storage.py`, mapping requests to `/api/chat` using custom environment variables `OLLAMA_HOST` and `OLLAMA_MODEL`.
 
 - Decided to centralize version definition in `version.py` (avoiding circular imports) and expose the version key inside the JSON result of the `status` command, allowing downstream packages to check for updates.
+
+- **LLM Debug Logging**: Added the `--debug-llm` CLI option and `MEMORY_FABRIC_LLM_DEBUG` environment variable to enable request/response printing to stderr or file (e.g. `llm_debug.log`) with automatic authorization token redaction.
