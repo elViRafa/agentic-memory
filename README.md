@@ -288,7 +288,7 @@ Developer-level preferences that apply across all projects are stored at:
 ## CLI Reference
 
 ```text
-ai-memory [--cwd <path>] [--json] <command>
+ai-memory [--cwd <path>] [--json] [--debug-llm] <command>
 
 Commands:
   init            Create .ai-memory/ scaffolding
@@ -312,6 +312,25 @@ ai-memory eval --dream memory-20260601T140000_0400
 ```
 
 Optional LLM review is never enabled by default. When requested, deterministic local scores remain the source of truth; LLM notes are secondary and inputs are sanitized before review.
+
+---
+
+## LLM Debugging
+
+If you want to view the exact prompts sent and responses received by the LLM providers (Gemini, OpenAI, Anthropic, Ollama), you can enable LLM debug logging.
+
+- **Via the CLI**: Pass the `--debug-llm` global flag **before** the subcommand:
+  ```sh
+  ai-memory --debug-llm dream --mode deep
+  ```
+  This automatically prints logs to `sys.stderr` and appends them to a file named `llm_debug.log` (in `.ai-memory/llm_debug.log` if the directory exists, otherwise in the current working directory).
+
+- **Via Environment Variables**: Set the `MEMORY_FABRIC_LLM_DEBUG` variable in your environment:
+  - `stderr`: Output prompts and raw JSON responses only to `sys.stderr`.
+  - `1` or `true`: Output to `sys.stderr` and write to the default `llm_debug.log` file.
+  - `/path/to/log.txt` (or any other custom value): Append logs to a custom file path.
+
+To protect your credentials and API keys, headers like `Authorization` and `x-api-key` are automatically redacted as `[REDACTED]` in the debug logs.
 
 ---
 
