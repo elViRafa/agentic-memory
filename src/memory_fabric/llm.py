@@ -152,9 +152,66 @@ def _call_ollama(prompt: str, system_instruction: str) -> str:
         raise LLMError(f"Ollama response parsing failed: {exc}. Response: {response_data}")
 
 
+def _log_debug(message: str) -> None:
+    debug_val = (os.environ.get("MEMORY_FABRIC_LLM_DEBUG") or "").strip()
+    if not debug_val:
+        return
+
+    import sys
+    from pathlib import Path
+
+    write_to_stderr = False
+    log_file_path: Path | None = None
+
+    if debug_val.lower() in ("1", "true"):
+        write_to_stderr = True
+        if Path(".ai-memory").is_dir():
+            log_file_path = Path(".ai-memory") / "llm_debug.log"
+        else:
+            log_file_path = Path("llm_debug.log")
+    elif debug_val.lower() == "stderr":
+        write_to_stderr = True
+    else:
+        log_file_path = Path(debug_val)
+
+    if write_to_stderr:
+        sys.stderr.write(message + "\n")
+        sys.stderr.flush()
+
+    if log_file_path:
+        try:
+            log_file_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(log_file_path, "a", encoding="utf-8") as f:
+                f.write(message + "\n")
+        except Exception as exc:
+            sys.stderr.write(f"Failed to write to LLM debug log file: {exc}\n")
+            sys.stderr.flush()
+
+
+def _sanitize_headers(headers: dict[str, str]) -> dict[str, str]:
+    sanitized = {}
+    for k, v in headers.items():
+        k_lower = k.lower()
+        if "auth" in k_lower or "key" in k_lower or "api" in k_lower or "token" in k_lower:
+            sanitized[k] = "[REDACTED]"
+        else:
+            sanitized[k] = v
+    return sanitized
+
+
 def _http_post(url: str, payload: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
     import time
     import random
+
+    # Log the request
+    sanitized_headers = _sanitize_headers(headers)
+    _log_debug(
+        f"--- LLM REQUEST ---\n"
+        f"URL: {url}\n"
+        f"Headers: {json.dumps(sanitized_headers)}\n"
+        f"Payload:\n{json.dumps(payload, indent=2, ensure_ascii=False)}\n"
+        f"-------------------"
+    )
 
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
@@ -166,19 +223,48 @@ def _http_post(url: str, payload: dict[str, Any], headers: dict[str, str]) -> di
     for attempt in range(max_retries):
         try:
             with urllib.request.urlopen(req, timeout=180) as resp:
-                return json.loads(resp.read().decode("utf-8"))
+                resp_bytes = resp.read()
+                resp_str = resp_bytes.decode("utf-8")
+                response_data = json.loads(resp_str)
+                # Log the response
+                _log_debug(
+                    f"--- LLM RESPONSE ---\n"
+                    f"URL: {url}\n"
+                    f"Response:\n{json.dumps(response_data, indent=2, ensure_ascii=False)}\n"
+                    f"--------------------"
+                )
+                return response_data
         except urllib.error.HTTPError as exc:
+            try:
+                err_body = exc.read().decode("utf-8")
+            except Exception:
+                err_body = ""
+            
+            # Log the HTTP error
+            _log_debug(
+                f"--- LLM HTTP ERROR ---\n"
+                f"URL: {url}\n"
+                f"Code: {exc.code}\n"
+                f"Reason: {exc.reason}\n"
+                f"Detail: {err_body}\n"
+                f"----------------------"
+            )
+
             # Retry on rate limit (429) or transient server errors (500, 502, 503, 504)
             if exc.code in {429, 500, 502, 503, 504} and attempt < max_retries - 1:
                 delay = initial_delay * (backoff_factor ** attempt) + random.uniform(0, 1.0)
                 time.sleep(delay)
                 continue
             
-            try:
-                err_body = exc.read().decode("utf-8")
-            except Exception:
-                err_body = ""
             raise LLMError(f"HTTP Error {exc.code}: {exc.reason}. Detail: {err_body}") from exc
         except Exception as exc:
+            # Log network or parsing errors
+            _log_debug(
+                f"--- LLM ERROR ---\n"
+                f"URL: {url}\n"
+                f"Error: {exc}\n"
+                f"-----------------"
+            )
             raise LLMError(f"Network request failed: {exc}") from exc
+
 

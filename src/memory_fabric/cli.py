@@ -25,6 +25,11 @@ from memory_fabric.storage import (
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    if getattr(args, "debug_llm", False):
+        import os
+        os.environ["MEMORY_FABRIC_LLM_DEBUG"] = "1"
+
     cwd = str(Path(args.cwd).expanduser().resolve())
 
     try:
@@ -169,6 +174,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--cwd", default=".", help="Project working directory")
     parser.add_argument("--json", action="store_true", help="Print JSON output")
+    parser.add_argument("--debug-llm", action="store_true", help="Enable LLM prompt and response logging")
 
     subparsers = parser.add_subparsers(dest="command", required=True)
     init_parser = subparsers.add_parser("init", help="Create .ai-memory scaffolding")

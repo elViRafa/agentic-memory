@@ -4,7 +4,7 @@ summary: "Project architecture, core boundaries, memory layout, and system flow 
 priority: high
 tags: [architecture, design, overview]
 schema_version: 1.3
-last_updated: "2026-06-03T08:27:52-04:00"
+last_updated: "2026-06-03T09:52:04-04:00"
 ---
 
 # Architecture
@@ -68,3 +68,5 @@ Developer-level preferences that apply across all projects are stored in:
 - Linux: `$XDG_CONFIG_HOME/memory-fabric/global/`
 
 The `global/directives.md` file acts as **Tier 0**: it is always loaded fully, bypassing token budgeting.
+
+The memory-fabric-mcp server CLI has been extended to support Server-Sent Events (SSE) transport alongside the default stdio transport. It supports `--transport sse`, `--host <host>`, `--port <port>`, and `--allow-all-origins` to ease CORS policies and DNS rebinding protections when connecting external clients like Open WebUI.

@@ -1,3 +1,25 @@
+## 2026-06-03 10:50 - Enable temporary LLM request/response logging for debugging
+
+**What was implemented:**
+- Added a zero-dependency debug-logging utility that intercepts LLM calls to log their URLs, payloads (with redacted keys/secrets), and raw responses or error details.
+- Integrated logging into the unified `_http_post` helper in `llm.py` so it automatically captures Gemini, OpenAI, Anthropic, and Ollama calls.
+- Exposed a `--debug-llm` command-line flag in the `ai-memory` CLI to easily activate logging without manually setting environment variables.
+
+**Core files affected:**
+- [src/memory_fabric/llm.py](file:///c:/Users/rafael/Projetos/agentic-memory/src/memory_fabric/llm.py)
+- [src/memory_fabric/cli.py](file:///c:/Users/rafael/Projetos/agentic-memory/src/memory_fabric/cli.py)
+- [tests/test_memory_fabric.py](file:///c:/Users/rafael/Projetos/agentic-memory/tests/test_memory_fabric.py)
+
+**Key changes:**
+- Implemented `_log_debug(message: str)` and `_sanitize_headers(headers: dict[str, str])` in `llm.py` to route messages appropriately and redact authorization tokens.
+- Wrapped HTTP post request, response parsing, HTTP error, and network exception blocks inside `_http_post` with debug logs.
+- Added support for routing logs to `sys.stderr` (via `MEMORY_FABRIC_LLM_DEBUG=stderr`), to `llm_debug.log` (via `MEMORY_FABRIC_LLM_DEBUG=1` or `MEMORY_FABRIC_LLM_DEBUG=true`), or a custom file path.
+- Added the `--debug-llm` global CLI argument to `cli.py` which sets the `MEMORY_FABRIC_LLM_DEBUG` env var.
+- Created `test_llm_debugging_logging` in `test_memory_fabric.py` covering all 5 debug target scenarios and validating key redaction.
+
+**Status & Testing:**
+- Tested locally with pytest; all 36 tests passed successfully.
+
 ## 2026-06-03 09:48 - Add SSE transport support for Open WebUI connectivity
 
 **What was implemented:**

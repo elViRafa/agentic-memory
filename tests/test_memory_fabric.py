@@ -849,6 +849,91 @@ class MemoryFabricTests(unittest.TestCase):
                 server.mcp.settings.transport_security.allowed_hosts = orig_hosts
                 server.mcp.settings.transport_security.allowed_origins = orig_origins
 
+    @mock.patch("sys.stderr")
+    @mock.patch("urllib.request.urlopen")
+    def test_llm_debugging_logging(self, mock_urlopen, mock_stderr) -> None:
+        import json
+        from memory_fabric.llm import call_llm
+
+        class MockResponse:
+            def __init__(self, data: bytes):
+                self.data = data
+            def read(self, *args, **kwargs):
+                return self.data
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                pass
+
+        mock_urlopen.return_value = MockResponse(
+            json.dumps({"choices": [{"message": {"content": "logged response"}}]}).encode("utf-8")
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            orig_cwd = os.getcwd()
+            os.chdir(temp_dir)
+            try:
+                # 1. No debug logging by default
+                os.environ.pop("MEMORY_FABRIC_LLM_DEBUG", None)
+                os.environ["MEMORY_FABRIC_LLM_PROVIDER"] = "openai"
+                os.environ["OPENAI_API_KEY"] = "sk-super-secret-key"
+
+                mock_stderr.write.reset_mock()
+                call_llm("test prompt", "system instructions")
+                mock_stderr.write.assert_not_called()
+                self.assertFalse(Path("llm_debug.log").exists())
+
+                # 2. Debug logging to stderr
+                os.environ["MEMORY_FABRIC_LLM_DEBUG"] = "stderr"
+                mock_stderr.write.reset_mock()
+                call_llm("test prompt", "system instructions")
+                
+                # Check that stderr received the log containing prompt and URL
+                self.assertTrue(any("--- LLM REQUEST ---" in call[0][0] for call in mock_stderr.write.call_args_list))
+                self.assertTrue(any("openai" in call[0][0] for call in mock_stderr.write.call_args_list))
+                self.assertTrue(any("[REDACTED]" in call[0][0] for call in mock_stderr.write.call_args_list))
+                # Ensure sk-super-secret-key was NOT written
+                self.assertFalse(any("sk-super-secret-key" in call[0][0] for call in mock_stderr.write.call_args_list))
+                self.assertFalse(Path("llm_debug.log").exists())
+
+                # 3. Debug logging to a custom file path
+                custom_log_path = Path("custom_debug.log")
+                os.environ["MEMORY_FABRIC_LLM_DEBUG"] = str(custom_log_path)
+                mock_stderr.write.reset_mock()
+                call_llm("test prompt", "system instructions")
+
+                # Should not write to stderr
+                mock_stderr.write.assert_not_called()
+                self.assertTrue(custom_log_path.exists())
+                log_content = custom_log_path.read_text(encoding="utf-8")
+                self.assertIn("--- LLM REQUEST ---", log_content)
+                self.assertIn("--- LLM RESPONSE ---", log_content)
+                self.assertIn("[REDACTED]", log_content)
+                self.assertNotIn("sk-super-secret-key", log_content)
+
+                # 4. Debug logging using "1" or "true" without .ai-memory directory
+                os.environ["MEMORY_FABRIC_LLM_DEBUG"] = "1"
+                mock_stderr.write.reset_mock()
+                call_llm("test prompt", "system instructions")
+                self.assertTrue(any("--- LLM REQUEST ---" in call[0][0] for call in mock_stderr.write.call_args_list))
+                self.assertTrue(Path("llm_debug.log").exists())
+                default_log_content = Path("llm_debug.log").read_text(encoding="utf-8")
+                self.assertIn("--- LLM REQUEST ---", default_log_content)
+
+                # 5. Debug logging using "1" or "true" with .ai-memory directory
+                Path(".ai-memory").mkdir()
+                Path("llm_debug.log").unlink()  # Remove the previous one
+                call_llm("test prompt", "system instructions")
+                self.assertTrue((Path(".ai-memory") / "llm_debug.log").exists())
+                aimem_log_content = (Path(".ai-memory") / "llm_debug.log").read_text(encoding="utf-8")
+                self.assertIn("--- LLM REQUEST ---", aimem_log_content)
+
+            finally:
+                os.chdir(orig_cwd)
+                os.environ.pop("MEMORY_FABRIC_LLM_DEBUG", None)
+                os.environ.pop("MEMORY_FABRIC_LLM_PROVIDER", None)
+                os.environ.pop("OPENAI_API_KEY", None)
+
 
 if __name__ == "__main__":
     unittest.main()
