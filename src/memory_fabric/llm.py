@@ -84,6 +84,16 @@ async def call_llm(prompt: str, system_instruction: str = "", context: Any = Non
                         content=TextContent(type="text", text=prompt)
                     )
                 ]
+                
+                # Output preemptive warning to stderr in case of blocking clients
+                import sys
+                sys.stderr.write(
+                    "\n[Memory Fabric] Warning: Fallback to MCP Sampling requested. In sequential client loops "
+                    "(like IDE extensions), this may deadlock. If it hangs, please configure a direct LLM provider "
+                    "or use the split-tool protocol (prepare_dream_payload_tool / apply_dream_results_tool).\n"
+                )
+                sys.stderr.flush()
+
                 # Wrap sampling call in a timeout to prevent indefinite hangs
                 result = await asyncio.wait_for(
                     context.session.create_message(
@@ -91,7 +101,7 @@ async def call_llm(prompt: str, system_instruction: str = "", context: Any = Non
                         max_tokens=4000,
                         system_prompt=system_instruction,
                     ),
-                    timeout=120.0,
+                    timeout=45.0,
                 )
                 if hasattr(result, "content"):
                     content = result.content
@@ -104,7 +114,7 @@ async def call_llm(prompt: str, system_instruction: str = "", context: Any = Non
                 raise LLMError(f"Unexpected sampling response format: {result}")
         except asyncio.TimeoutError as exc:
             raise LLMError(
-                "MCP Sampling request timed out after 120 seconds. This deadlock is usually caused by "
+                "MCP Sampling request timed out after 45 seconds. This deadlock is usually caused by "
                 "the client/IDE sequential JSON-RPC loop blocking incoming sampling requests while waiting "
                 "for the tool execution to complete. To avoid this deadlock, configure a direct LLM "
                 "provider (e.g., GEMINI_API_KEY, OPENAI_API_KEY) in a local `.env` file in your project workspace "
@@ -299,8 +309,10 @@ def _http_post(url: str, payload: dict[str, Any], headers: dict[str, str]) -> di
         f"-------------------"
     )
 
+    headers_copy = dict(headers)
+    headers_copy.setdefault("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    req = urllib.request.Request(url, data=data, headers=headers_copy, method="POST")
     
     max_retries = 5
     backoff_factor = 2.0

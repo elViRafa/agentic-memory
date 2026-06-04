@@ -141,7 +141,7 @@ If no direct LLM provider is configured (or if MCP sampling timeouts occur due t
 2. If the response contains `"skip_required": true`, consolidation is up-to-date; skip the remaining steps.
 3. If not skipped, pass the returned `consolidation_prompt` to your own LLM model context.
 4. Execute the prompt and capture the LLM's raw JSON output.
-5. Call `apply_dream_results_tool(cwd="...", snapshot="...", llm_response="...")` with the `snapshot` name from step 1 and the raw LLM JSON response to write and apply the consolidated files.
+5. Call `apply_dream_results_tool(cwd="...", candidate_store="...", llm_response="...")` with the `candidate_store` value from step 1 and the raw LLM JSON response to write and apply the consolidated files.
 """
 
 # ---------------------------------------------------------------------------

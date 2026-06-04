@@ -1258,7 +1258,7 @@ class MemoryStoreTests(unittest.TestCase):
         with self.assertRaises(LLMError) as ctx:
             call_llm("test prompt", "system instructions", context=mock_context)
             
-        self.assertIn("timed out after 120 seconds", str(ctx.exception))
+        self.assertIn("timed out after 45 seconds", str(ctx.exception))
         self.assertIn("JSON-RPC", str(ctx.exception))
         self.assertIn("deadlock", str(ctx.exception))
 

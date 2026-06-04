@@ -1,3 +1,51 @@
+## 2026-06-04 08:22 - Fix Split-Tool Protocol Instruction in Agent Rules
+
+**What was implemented:**
+- Fixed a parameter naming discrepancy in the Split-Tool dreaming instructions. The instruction templates incorrectly directed agents to pass `snapshot="..."` when calling `apply_dream_results_tool`, which is not a valid parameter and caused API errors and deadlocks. The instructions now correctly direct agents to pass the `candidate_store="..."` identifier.
+
+**Core files affected:**
+- `src/memory_fabric/templates.py` — Updated the canonical `DREAMING_INSTRUCTIONS` text block to reference `candidate_store` instead of `snapshot`.
+
+**Key changes:**
+- Changed step 5 of the split-tool protocol description to call `apply_dream_results_tool(cwd="...", candidate_store="...", llm_response="...")` and supply the `candidate_store` value from step 1.
+- Propagated the change to all platform-specific rule files via the agent synchronization routine.
+
+**Status & Testing:**
+- Ran `sync-agents` to update local agent files (`.agents/rules/dreaming.md`, `.cursor/rules/memory-fabric.mdc`, `.windsurf/rules/memory-fabric.md`, `.github/copilot-instructions.md`).
+- Ran all 72 pytest unit tests locally; all tests passed successfully.
+
+## 2026-06-04 08:13 - Resolve MCP Sampling Timeout and Add Diagnostic Warnings
+
+**What was implemented:**
+- Reduced the default MCP Sampling timeout to 45 seconds to fail faster in sequential client loops.
+- Added preemptive warning logs to stderr alerting users of potential JSON-RPC deadlocks when falling back to MCP Sampling.
+
+**Core files affected:**
+- `src/memory_fabric/llm.py` — Added deadlock warning to stderr and updated `asyncio.wait_for` timeout.
+- `tests/test_memory_fabric.py` — Updated mock context assertions to verify the 45-second timeout message.
+
+**Key changes:**
+- Warn users on stdout/stderr before entering a blocking JSON-RPC call.
+- Reduced timeout from 120s to 45s for faster local execution fallback.
+
+**Status & Testing:**
+- Tested locally, all 72 pytest unit tests pass successfully.
+
+## 2026-06-04 08:10 - Resolve Cloudflare API Blocks (HTTP 1010) with Default User-Agent Header
+
+**What was implemented:**
+- Added a default `User-Agent` header to outgoing LLM requests in the zero-dependency HTTP client. This prevents HTTP 403 (Error 1010) blocks from Cloudflare security signatures when querying external API providers (such as Groq) directly via Python's standard `urllib` module.
+
+**Core files affected:**
+- `src/memory_fabric/llm.py` — Configured a default Webkit-based `User-Agent` string inside the `_http_post` request pipeline.
+
+**Key changes:**
+- Copied the `headers` dictionary to avoid mutability side effects.
+- Set a default `User-Agent` mimicking Google Chrome to ensure requests bypass Cloudflare's urllib signatures.
+
+**Status & Testing:**
+- Tested locally by running memory dreaming in deep mode on the `search-sermons` project using the Groq API key; the run succeeded without error, generating 3 updated memory files.
+
 ## 2026-06-04 07:48 - Client-Driven Memory Consolidation (Dreaming) Protocol
 
 **What was implemented:**
