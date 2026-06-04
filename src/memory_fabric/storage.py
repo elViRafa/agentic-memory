@@ -2088,3 +2088,395 @@ def _build_rewrite_tasks(candidate_root: Path, max_rewrite_tasks: int) -> list[D
         if len(tasks) >= max_rewrite_tasks:
             break
     return tasks
+
+
+def prepare_dream_payload(cwd: str, mode: str = "light") -> dict[str, Any]:
+    """Prepare the LLM prompt and payload for memory consolidation (Dreaming).
+    
+    This is designed to be called by MCP clients to run Dreaming in a client-driven split-tool manner.
+    """
+    if mode not in {"light", "deep"}:
+        raise ValueError("mode must be 'light' or 'deep'")
+
+    memory_dir = local_memory_dir(cwd)
+    if not memory_dir.exists():
+        initialize_memory_fabric(cwd)
+
+    snapshot = create_snapshot(cwd)
+    candidate_root = _create_candidate_store(memory_dir, snapshot)
+
+    # Ingest external inputs
+    git_diff_text = _get_git_diff(cwd)
+    session_text = ""
+    tool_calls_text = ""
+    
+    session_path = memory_dir / "private" / "session_transcripts.md"
+    if session_path.exists():
+        try:
+            session_text = session_path.read_text(encoding="utf-8")
+        except Exception:
+            pass
+            
+    tool_calls_path = memory_dir / "private" / "tool_calls.jsonl"
+    if tool_calls_path.exists():
+        try:
+            tool_calls_text = tool_calls_path.read_text(encoding="utf-8")
+        except Exception:
+            pass
+
+    # Read files into payload
+    sections_data = {}
+    for path in _iter_markdown_files(candidate_root):
+        if path.name == "index.md" or _is_ignored_local_memory_path(candidate_root, path):
+            continue
+        metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        key = _get_section_key(candidate_root, path)
+        sections_data[key] = body
+
+    # Calculate consolidation input hash
+    import hashlib
+    hash_input = []
+    for name in sorted(sections_data.keys()):
+        hash_input.append(f"section:{name}")
+        hash_input.append(sections_data[name])
+    hash_input.append(f"git_diff:{git_diff_text or ''}")
+    hash_input.append(f"session:{session_text or ''}")
+    hash_input.append(f"tool_calls:{tool_calls_text or ''}")
+    
+    current_consolidation_hash = hashlib.md5("\n".join(hash_input).encode("utf-8")).hexdigest()
+
+    # Read previous consolidation metadata from index.md
+    previous_consolidation_hash = None
+    previous_contradictions = []
+    previous_warnings = []
+    index_path = memory_dir / "index.md"
+    if index_path.exists():
+        try:
+            index_metadata, _ = parse_frontmatter(index_path.read_text(encoding="utf-8"))
+            previous_consolidation_hash = index_metadata.get("consolidation_hash")
+            previous_contradictions = index_metadata.get("contradictions", [])
+            previous_warnings = index_metadata.get("consolidation_warnings", [])
+        except Exception:
+            pass
+
+    if previous_consolidation_hash == current_consolidation_hash:
+        return {
+            "skip_required": True,
+            "snapshot": snapshot,
+            "current_consolidation_hash": current_consolidation_hash,
+            "contradictions": previous_contradictions,
+            "warnings": previous_warnings,
+        }
+
+    # Build consolidation prompt
+    prompt = (
+        "You are an AI memory consolidation assistant. Below is the project memory index and section bodies.\n"
+        "Review the sections to: (1) merge redundant facts or guidelines, (2) resolve overlapping points, "
+        "(3) check for contradiction warnings between files, and (4) incorporate recent Git logs/transcripts if provided.\n"
+        "Specifically, extract dates, specific IDs, and missing metadata from the recent transcripts or logs "
+        "to enrich the relevant memory sections. If a memory file is outdated or stale, clean it up or propose removing "
+        "redundancies.\n"
+        "Note: sections with `local/` prefix are flat top-level memory files, and sections with `store/` prefix "
+        "are semantic memory store files located in nested directories. Preserve the exact key prefixes in your response.\n\n"
+    )
+    if git_diff_text:
+        prompt += f"Recent Git Diff/Logs:\n{git_diff_text}\n\n"
+    if session_text:
+        prompt += f"Recent Session Transcripts:\n{session_text}\n\n"
+    if tool_calls_text:
+        prompt += f"Recent Tool Calls:\n{tool_calls_text}\n\n"
+
+    prompt += "Active Project Memory Sections:\n" + json.dumps(sections_data, indent=2) + "\n\n"
+    prompt += (
+        "Output a JSON object ONLY, with no surrounding markdown or explanation, matching this schema:\n"
+        "{\n"
+        '  "consolidated_files": {\n'
+        '    "section_name": "clean markdown body text",\n'
+        "    ...\n"
+        "  },\n"
+        '  "summaries": {\n'
+        '    "section_name": "concise 1-sentence summary (under 150 chars) mapping the section name to summary text",\n'
+        "    ...\n"
+        "  },\n"
+        '  "contradictions": ["description of contradiction", ...],\n'
+        '  "warnings": ["warning note", ...]\n'
+        "}"
+    )
+
+    return {
+        "skip_required": False,
+        "snapshot": snapshot,
+        "candidate_store": candidate_root.name,
+        "current_consolidation_hash": current_consolidation_hash,
+        "consolidation_prompt": prompt,
+        "sections_data": sections_data,
+    }
+
+
+async def apply_dream_results(
+    cwd: str,
+    candidate_store: str,
+    llm_response: str,
+    mode: str = "light",
+    apply: bool = True,
+    llm_rewrite: bool = False,
+    max_rewrite_tasks: int = 5,
+    context: Any = None,
+) -> DreamResult:
+    """Apply consolidation results from client agent's LLM run to target memory files.
+    
+    This is designed to be called by MCP clients to complete the dreaming process.
+    """
+    if mode not in {"light", "deep"}:
+        raise ValueError("mode must be 'light' or 'deep'")
+    if max_rewrite_tasks < 0:
+        raise ValueError("max_rewrite_tasks must be >= 0")
+
+    memory_dir = local_memory_dir(cwd)
+    candidate_path = Path(candidate_store)
+    if candidate_path.is_absolute():
+        candidate_root = candidate_path
+    else:
+        candidate_root = memory_dir / "candidates" / candidate_store
+
+    if not candidate_root.exists():
+        raise FileNotFoundError(f"Candidate store directory not found for candidate_store: {candidate_store}")
+
+    # Extract snapshot name from candidate_root name
+    parts = candidate_root.name.split("-")
+    if len(parts) >= 2:
+        snapshot = "-".join(parts[:-1])
+    else:
+        snapshot = candidate_root.name
+
+    git_diff_text = _get_git_diff(cwd)
+    session_text = ""
+    tool_calls_text = ""
+    
+    session_path = memory_dir / "private" / "session_transcripts.md"
+    if session_path.exists():
+        try:
+            session_text = session_path.read_text(encoding="utf-8")
+        except Exception:
+            pass
+            
+    tool_calls_path = memory_dir / "private" / "tool_calls.jsonl"
+    if tool_calls_path.exists():
+        try:
+            tool_calls_text = tool_calls_path.read_text(encoding="utf-8")
+        except Exception:
+            pass
+
+    warnings: list[str] = []
+    duplicates_found = 0
+    lines_removed = 0
+    files_touched: list[str] = []
+
+    cleaned_resp = llm_response.strip()
+    resp_data = None
+    try:
+        resp_data = json.loads(cleaned_resp)
+    except json.JSONDecodeError:
+        start = cleaned_resp.find('{')
+        end = cleaned_resp.rfind('}')
+        if start != -1 and end != -1 and end > start:
+            try:
+                resp_data = json.loads(cleaned_resp[start:end+1])
+            except json.JSONDecodeError:
+                pass
+    
+    if resp_data is None:
+        import re
+        blocks = re.findall(r'```(?:json)?\s*(.*?)\s*```', cleaned_resp, re.DOTALL)
+        for block in blocks:
+            try:
+                resp_data = json.loads(block.strip())
+                break
+            except json.JSONDecodeError:
+                pass
+                
+    if resp_data is None:
+        resp_data = json.loads(cleaned_resp)
+
+    consolidated_files = resp_data.get("consolidated_files", {})
+    summaries = resp_data.get("summaries", {})
+    
+    for key, new_body in consolidated_files.items():
+        if key.startswith("store/"):
+            store_path = key[len("store/"):]
+            try:
+                _validate_store_path(store_path)
+            except ValueError as exc:
+                warnings.append(f"Consolidation skipped store path with invalid format: {key}. Error: {exc}")
+                continue
+            
+            segments = store_path.strip("/").split("/")
+            filename = segments[-1] + ".md"
+            dir_segments = segments[:-1]
+            target_dir = candidate_root / "memory-store"
+            for seg in dir_segments:
+                target_dir = target_dir / seg
+            sec_path = target_dir / filename
+        else:
+            sec_name = key[len("local/"):] if key.startswith("local/") else key
+            if not SECTION_PATTERN.match(sec_name):
+                warnings.append(f"Consolidation skipped section with invalid name: {key}")
+                continue
+            sec_path = candidate_root / f"{sec_name}.md"
+
+        if sec_path.exists():
+            metadata, old_body = parse_frontmatter(sec_path.read_text(encoding="utf-8"))
+        else:
+            if key.startswith("store/"):
+                metadata = {
+                    "store_path": store_path,
+                    "title": segments[-1].replace("-", " ").title(),
+                    "summary": f"Memory store section for {store_path}.",
+                    "priority": "medium",
+                    "tags": [],
+                    "schema_version": 1.3,
+                    "last_updated": now_iso()
+                }
+                old_body = ""
+            else:
+                metadata, old_body = parse_frontmatter(build_empty_section(sec_name))
+        
+        # Determine summary to set
+        proposed_summary = summaries.get(key) or summaries.get(key.replace("local/", "").replace("store/", ""))
+        if proposed_summary and len(proposed_summary) > 5:
+            metadata["summary"] = proposed_summary.strip().strip('"\'')
+            import hashlib
+            metadata["summary_hash"] = hashlib.md5(new_body.strip().encode("utf-8")).hexdigest()
+
+        if old_body.strip() != new_body.strip():
+            rel_path = str(sec_path.relative_to(candidate_root)).replace("\\", "/")
+            files_touched.append(rel_path)
+            duplicates_found += 1
+            lines_removed += max(0, len(old_body.splitlines()) - len(new_body.splitlines()))
+            
+            sec_path.parent.mkdir(parents=True, exist_ok=True)
+            metadata["last_updated"] = now_iso()
+            sec_path.write_text(dump_frontmatter(metadata, new_body), encoding="utf-8")
+
+    dream_contradictions = resp_data.get("contradictions", [])
+    dream_warnings = resp_data.get("warnings", [])
+
+    for c in dream_contradictions:
+        warnings.append(f"Contradiction detected: {c}")
+    for w in dream_warnings:
+        warnings.append(f"Consolidation warning: {w}")
+
+    # Recalculate hash of consolidated candidates
+    final_sections_data = {}
+    for path in _iter_markdown_files(candidate_root):
+        if path.name == "index.md" or _is_ignored_local_memory_path(candidate_root, path):
+            continue
+        metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        key = _get_section_key(candidate_root, path)
+        final_sections_data[key] = body
+
+    import hashlib
+    hash_input = []
+    for name in sorted(final_sections_data.keys()):
+        hash_input.append(f"section:{name}")
+        hash_input.append(final_sections_data[name])
+    hash_input.append(f"git_diff:{git_diff_text or ''}")
+    hash_input.append(f"session:{session_text or ''}")
+    hash_input.append(f"tool_calls:{tool_calls_text or ''}")
+    current_consolidation_hash = hashlib.md5("\n".join(hash_input).encode("utf-8")).hexdigest()
+
+    # Stale section detection in candidate files
+    now_dt = datetime.now(timezone.utc)
+    for path in _iter_markdown_files(candidate_root):
+        if path.name == "index.md" or _is_ignored_local_memory_path(candidate_root, path):
+            continue
+        try:
+            metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+            key = _get_section_key(candidate_root, path)
+            lu_str = metadata.get("last_updated")
+            if lu_str:
+                lu_dt = datetime.fromisoformat(lu_str.replace("Z", "+00:00"))
+                if lu_dt.tzinfo is None:
+                    lu_dt = lu_dt.replace(tzinfo=timezone.utc)
+                if (now_dt - lu_dt).days > 30:
+                    if metadata.get("review_status") != "stale":
+                        metadata["review_status"] = "stale"
+                        path.write_text(dump_frontmatter(metadata, body), encoding="utf-8")
+                        warnings.append(f"Section `{key}` has not been updated in over 30 days and is marked as stale.")
+        except Exception:
+            pass
+
+    # Secret scanning
+    redactions = 0
+    if git_diff_text:
+        _, r_count = redact_secrets(git_diff_text)
+        redactions += r_count
+    if session_text:
+        _, r_count = redact_secrets(session_text)
+        redactions += r_count
+    if tool_calls_text:
+        _, r_count = redact_secrets(tool_calls_text)
+        redactions += r_count
+
+    for path in _iter_markdown_files(candidate_root):
+        try:
+            text = path.read_text(encoding="utf-8")
+            redacted, r_count = redact_secrets(text)
+            if r_count > 0:
+                path.write_text(redacted, encoding="utf-8")
+                redactions += r_count
+        except Exception:
+            pass
+
+    if redactions > 0:
+        warnings.append(f"Detected and redacted {redactions} secrets during Dreaming.")
+
+    # Regenerate index.md
+    checked_files = _regenerate_index_root(
+        candidate_root,
+        mode=mode,
+        consolidation_hash=current_consolidation_hash,
+        contradictions=dream_contradictions,
+        warnings=dream_warnings,
+    )
+
+    patch_preview, affected_files = _diff_memory_roots(memory_dir, candidate_root)
+    rewrite_tasks = _build_rewrite_tasks(candidate_root, max_rewrite_tasks=max_rewrite_tasks)
+
+    changed = False
+    source_compiled = candidate_root / "consolidated_memory.md"
+    target_compiled = memory_dir / "consolidated_memory.md"
+    compiled_changed = False
+    if source_compiled.exists():
+        if not target_compiled.exists():
+            compiled_changed = True
+        else:
+            try:
+                if source_compiled.read_text(encoding="utf-8") != target_compiled.read_text(encoding="utf-8"):
+                    compiled_changed = True
+            except Exception:
+                compiled_changed = True
+
+    if apply and (affected_files or compiled_changed):
+        _apply_candidate_to_live(memory_dir, candidate_root, affected_files)
+        changed = True
+
+    consolidation: DreamConsolidation = {
+        "duplicates_found": duplicates_found,
+        "lines_removed": lines_removed,
+        "files_touched": sorted(files_touched),
+    }
+
+    return {
+        "changed": changed,
+        "snapshot": snapshot,
+        "warnings": warnings,
+        "checked_files": checked_files,
+        "candidate_store": str(candidate_root),
+        "patch_preview": patch_preview,
+        "affected_files": affected_files,
+        "consolidation": consolidation,
+        "rewrite_tasks": rewrite_tasks if llm_rewrite else [],
+        "apply_required": not apply,
+        "redactions": redactions,
+    }

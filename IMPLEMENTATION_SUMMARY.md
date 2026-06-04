@@ -1,3 +1,41 @@
+## 2026-06-04 07:48 - Client-Driven Memory Consolidation (Dreaming) Protocol
+
+**What was implemented:**
+- Designed and implemented a client-driven memory dreaming protocol to completely avoid JSON-RPC deadlocks in environments that do not support concurrent client-server calls. Exposed split MCP tools `prepare_dream_payload_tool` and `apply_dream_results_tool`, allowing the client agent to perform the LLM consolidation and summarization steps in its own context while leveraging the server for indexing, stale checks, secret scanning, and filesystem updates.
+
+**Core files affected:**
+- `src/memory_fabric/storage.py` — Implemented `prepare_dream_payload` (with hash-based skip checks) and `apply_dream_results` (to merge files, process JSON, refresh index/sub-indices, and perform stale/secret scans).
+- `src/memory_fabric/server.py` — Registered `prepare_dream_payload_tool` and `apply_dream_results_tool` MCP tools.
+- `src/memory_fabric/templates.py` — Updated the `DREAMING_INSTRUCTIONS` template detailing how agents should execute the new multi-step dreaming protocol.
+- `tests/test_memory_fabric.py` — Added a comprehensive `test_split_dream_flow` integration test.
+
+**Key changes:**
+- Added support for returning combined prompts and file data to the client in a single payload.
+- Allowed the LLM response to carry both consolidated section contents and their new summaries in one JSON payload, speeding up dreaming and preventing deadlock during summarization.
+- Resolved temporary candidate root directories dynamically by passing `candidate_store` names.
+
+**Status & Testing:**
+- Tested locally using the pytest suite; all 72 tests passed successfully.
+
+## 2026-06-04 07:32 - Resolve MCP Sampling Deadlock and Add Workspace .env Support
+
+**What was implemented:**
+- Resolved JSON-RPC deadlock and indefinite freezes caused by MCP Sampling by implementing a 120-second timeout on client sampling calls. Added dynamic support to automatically load workspace environment files (`.env`, `.env.local`, `.env.development`) into the MCP server and CLI processes. This allows developers to easily configure direct LLM provider keys locally, avoiding nested JSON-RPC deadlocks altogether.
+
+**Core files affected:**
+- `src/memory_fabric/llm.py` — Implemented `load_env_from_cwd` and wrapped the MCP Sampling callback in `asyncio.wait_for` with detailed deadlock error messaging.
+- `src/memory_fabric/server.py` — Integrated workspace env loading at the entry point of all MCP tools.
+- `src/memory_fabric/cli.py` — Integrated workspace env loading inside CLI main execution.
+- `tests/test_memory_fabric.py` — Developed new unit tests validating environment loading and sampling timeout handlers.
+
+**Key changes:**
+- Wrapped `create_message` in `llm.py` with a 120-second timeout, raising an informative exception upon deadlock.
+- Implemented zero-dependency `.env` parsing and loading from target `cwd` folders.
+- Called `load_env_from_cwd(cwd)` inside MCP tools and CLI arguments parsing to seamlessly inject keys from project-level configuration files.
+
+**Status & Testing:**
+- All 71 tests in the pytest suite are passing successfully.
+
 ## 2026-06-04 00:44 - Implementation of client-side MCP Sampling integration & bug fixes
 
 **What was implemented:**

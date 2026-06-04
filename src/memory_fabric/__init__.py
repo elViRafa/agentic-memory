@@ -12,6 +12,8 @@ from memory_fabric.storage import (
     rollback,
     status,
     write_local_memory,
+    prepare_dream_payload,
+    apply_dream_results,
 )
 from memory_fabric.eval import (
     evaluate_dream_quality,
@@ -33,5 +35,7 @@ __all__ = [
     "rollback",
     "status",
     "write_local_memory",
+    "prepare_dream_payload",
+    "apply_dream_results",
 ]
 

@@ -13,6 +13,43 @@ class LLMError(Exception):
     """Raised when an LLM API call fails."""
 
 
+def load_env_from_cwd(cwd: str | Any) -> None:
+    """Load environment variables from .env files in the workspace directory.
+
+    Checks `.env`, `.env.local`, and `.env.development` (in that order).
+    Does not overwrite existing non-empty environment variables.
+    """
+    if not cwd:
+        return
+    import os
+    from pathlib import Path
+
+    try:
+        cwd_path = Path(cwd).resolve()
+        for env_name in (".env", ".env.local", ".env.development"):
+            dotenv_path = cwd_path / env_name
+            if dotenv_path.is_file():
+                with open(dotenv_path, "r", encoding="utf-8", errors="replace") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line or line.startswith("#"):
+                            continue
+                        if "=" in line:
+                            key, val = line.split("=", 1)
+                            key = key.strip()
+                            val = val.strip()
+
+                            # Strip quotes if present
+                            if len(val) >= 2 and val.startswith(('"', "'")) and val.endswith(val[0]):
+                                val = val[1:-1]
+
+                            if key and not os.environ.get(key):
+                                os.environ[key] = val
+    except Exception:
+        # Graceful fallback: do not crash if file access/parsing fails
+        pass
+
+
 async def call_llm(prompt: str, system_instruction: str = "", context: Any = None) -> str:
     """Execute a text completion request to the configured LLM provider or via MCP Sampling."""
     import asyncio
@@ -47,10 +84,14 @@ async def call_llm(prompt: str, system_instruction: str = "", context: Any = Non
                         content=TextContent(type="text", text=prompt)
                     )
                 ]
-                result = await context.session.create_message(
-                    messages=messages,
-                    max_tokens=4000,
-                    system_prompt=system_instruction,
+                # Wrap sampling call in a timeout to prevent indefinite hangs
+                result = await asyncio.wait_for(
+                    context.session.create_message(
+                        messages=messages,
+                        max_tokens=4000,
+                        system_prompt=system_instruction,
+                    ),
+                    timeout=120.0,
                 )
                 if hasattr(result, "content"):
                     content = result.content
@@ -61,6 +102,14 @@ async def call_llm(prompt: str, system_instruction: str = "", context: Any = Non
                             if hasattr(item, "text"):
                                 return item.text
                 raise LLMError(f"Unexpected sampling response format: {result}")
+        except asyncio.TimeoutError as exc:
+            raise LLMError(
+                "MCP Sampling request timed out after 120 seconds. This deadlock is usually caused by "
+                "the client/IDE sequential JSON-RPC loop blocking incoming sampling requests while waiting "
+                "for the tool execution to complete. To avoid this deadlock, configure a direct LLM "
+                "provider (e.g., GEMINI_API_KEY, OPENAI_API_KEY) in a local `.env` file in your project workspace "
+                "or in the MCP server configuration."
+            ) from exc
         except Exception as exc:
             raise LLMError(f"MCP Sampling failed: {exc}") from exc
 

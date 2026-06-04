@@ -63,3 +63,11 @@ The `dream_tool` accepts several important parameters. You must configure them c
 ### Example
 If you just finished a major refactoring and want to update the memory indices and summaries, call:
 `dream_tool(cwd="<project-root>", mode="light", apply=True)`
+
+### Client-Driven/Split-Tool Consolidation (Avoiding Deadlocks)
+If no direct LLM provider is configured (or if MCP sampling timeouts occur due to client re-entrancy limitations), you MUST run dreaming using the following split-tool protocol to let your own client-side model perform the consolidation:
+1. Call `prepare_dream_payload_tool(cwd="...", mode="deep")`.
+2. If the response contains `"skip_required": true`, consolidation is up-to-date; skip the remaining steps.
+3. If not skipped, pass the returned `consolidation_prompt` to your own LLM model context.
+4. Execute the prompt and capture the LLM's raw JSON output.
+5. Call `apply_dream_results_tool(cwd="...", snapshot="...", llm_response="...")` with the `snapshot` name from step 1 and the raw LLM JSON response to write and apply the consolidated files.

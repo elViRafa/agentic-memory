@@ -1213,6 +1213,113 @@ class MemoryStoreTests(unittest.TestCase):
         self.assertEqual(messages[0].role, "user")
         self.assertEqual(messages[0].content.text, "test prompt")
 
+    def test_load_env_from_cwd(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            env_file = Path(temp) / ".env"
+            env_file.write_text(
+                "TEST_ENV_VAR_1=value1\n"
+                "# This is a comment\n"
+                "TEST_ENV_VAR_2='value2 with spaces'\n"
+                'TEST_ENV_VAR_3="value3"\n'
+                "TEST_ENV_VAR_4=\n",
+                encoding="utf-8"
+            )
+
+            # Pre-set TEST_ENV_VAR_1 to ensure it is not overwritten
+            os.environ["TEST_ENV_VAR_1"] = "pre-set-value"
+
+            from memory_fabric.llm import load_env_from_cwd
+            load_env_from_cwd(temp)
+
+            self.assertEqual(os.environ.get("TEST_ENV_VAR_1"), "pre-set-value")
+            self.assertEqual(os.environ.get("TEST_ENV_VAR_2"), "value2 with spaces")
+            self.assertEqual(os.environ.get("TEST_ENV_VAR_3"), "value3")
+            self.assertEqual(os.environ.get("TEST_ENV_VAR_4"), "")
+
+            # Cleanup
+            for key in ("TEST_ENV_VAR_1", "TEST_ENV_VAR_2", "TEST_ENV_VAR_3", "TEST_ENV_VAR_4"):
+                os.environ.pop(key, None)
+
+    def test_call_llm_with_mcp_sampling_timeout(self) -> None:
+        from memory_fabric.llm import LLMError
+        
+        # Ensure direct LLM providers are disabled
+        os.environ.pop("MEMORY_FABRIC_LLM_PROVIDER", None)
+        
+        # Mock Context, session and create_message that raises TimeoutError
+        mock_context = mock.MagicMock()
+        mock_context.session.client_params.capabilities.sampling = mock.MagicMock()
+        
+        async def mock_timeout(*args, **kwargs):
+            raise asyncio.TimeoutError()
+            
+        mock_context.session.create_message = mock_timeout
+        
+        with self.assertRaises(LLMError) as ctx:
+            call_llm("test prompt", "system instructions", context=mock_context)
+            
+        self.assertIn("timed out after 120 seconds", str(ctx.exception))
+        self.assertIn("JSON-RPC", str(ctx.exception))
+        self.assertIn("deadlock", str(ctx.exception))
+
+    def test_split_dream_flow(self) -> None:
+        from memory_fabric.storage import prepare_dream_payload, apply_dream_results
+        import json
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            
+            # Let's delete other sections so we have a clean test with just one section
+            for p in (Path(temp) / ".ai-memory").glob("*.md"):
+                if p.name not in {"architecture.md"}:
+                    p.unlink()
+
+            # Write some content
+            write_local_memory(temp, "architecture", "# Architecture\n\nOriginal content.", mode="replace")
+
+            # 1. Prepare payload
+            payload = prepare_dream_payload(temp, mode="light")
+            self.assertFalse(payload["skip_required"])
+            self.assertTrue(payload["snapshot"])
+            self.assertIn("Original content.", payload["consolidation_prompt"])
+            self.assertIn("local/architecture", payload["sections_data"])
+
+            # 2. Simulate client LLM consolidation response
+            llm_response = json.dumps({
+                "consolidated_files": {
+                    "architecture": "# Architecture\n\nConsolidated by client."
+                },
+                "summaries": {
+                    "architecture": "Client generated architecture summary."
+                },
+                "contradictions": ["Simulated contradiction"],
+                "warnings": ["Simulated warning"]
+            })
+
+            # 3. Apply results
+            res = asyncio.run(apply_dream_results(
+                temp,
+                candidate_store=payload["candidate_store"],
+                llm_response=llm_response,
+                mode="light",
+                apply=True
+            ))
+
+            self.assertTrue(res["changed"])
+            self.assertFalse(res["apply_required"])
+            self.assertTrue(any("Contradiction detected: Simulated contradiction" in w for w in res["warnings"]))
+
+            # Verify file content is updated
+            arch_path = Path(temp) / ".ai-memory" / "architecture.md"
+            metadata, body = parse_frontmatter(arch_path.read_text(encoding="utf-8"))
+            self.assertIn("Consolidated by client.", body)
+            self.assertEqual(metadata.get("summary"), "Client generated architecture summary.")
+
+            # 4. Prepare payload again (no change) -> skip_required should be True
+            import time
+            time.sleep(1.1)
+            payload2 = prepare_dream_payload(temp, mode="light")
+            self.assertTrue(payload2["skip_required"])
+
 
 if __name__ == "__main__":
     unittest.main()

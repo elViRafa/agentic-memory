@@ -38,6 +38,9 @@ def main(argv: list[str] | None = None) -> int:
 
     cwd = str(Path(args.cwd).expanduser().resolve())
 
+    from memory_fabric.llm import load_env_from_cwd
+    load_env_from_cwd(cwd)
+
     try:
         if args.command == "init":
             result = initialize_memory_fabric(
