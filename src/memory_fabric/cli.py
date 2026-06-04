@@ -24,6 +24,7 @@ from memory_fabric.storage import (
     rollback,
     status,
     write_memory_store,
+    sync_agent_rules,
 )
 
 
@@ -100,6 +101,10 @@ def main(argv: list[str] | None = None) -> int:
             result = keyword_search(cwd, args.query, max_results=args.max_results)
             _print_result(result, args.json)
             return 0
+        if args.command == "sync-agents":
+            result = sync_agent_rules(cwd)
+            _print_result(result, args.json)
+            return 0 if result.get("success") else 1
         if args.command == "sync-global":
             memory_dir = local_memory_dir(cwd)
             if not args.json and sys.stdin.isatty() and memory_dir.exists():
@@ -257,6 +262,7 @@ def build_parser() -> argparse.ArgumentParser:
     query_parser.add_argument("query")
     query_parser.add_argument("--max-results", type=int, default=10)
 
+    subparsers.add_parser("sync-agents", help="Synchronize agent instruction files using AGENTS.md as the source of truth")
     subparsers.add_parser("sync-global", help="Preview local-to-global promotion")
 
     rollback_parser = subparsers.add_parser("rollback", help="Restore local memory from a snapshot")

@@ -9,9 +9,12 @@ GitHub Copilot reads `.github/copilot-instructions.md` instead.
 
 You must use the `memory-fabric` MCP tools for all project memory operations. Do not read or write `.ai-memory/` files using raw file-system tools.
 
-### 1. Startup & Retrieval
-* **At session start:** You MUST call `read_combined_context_tool(cwd="<absolute project root path>")` first to load directives, memory context, and any active session steering memory prompts.
-* **Before querying or searching:** Call `keyword_search_tool(cwd="...", query="<keyword>")` to check if a topic has already been documented in memory.
+### 1. Startup & Retrieval (The Active Memory Workflow)
+Accessing the Memory Store is an active process driven by the agent using the following tools:
+
+1. **Session Map:** At session start, you MUST call `read_combined_context_tool(cwd="<absolute project root path>")`. This serves as your index map to quickly grasp what is stored, load directives, and active session steering prompts.
+2. **Search & Target:** To find specific information without reading everything, use `keyword_search_tool(cwd="...", query="<keyword>")` to look for relevant topics already documented in memory.
+3. **Deep Dive:** After locating a reference via the index or keyword search, go straight to the necessary file by calling `read_memory_store_tool` (for semantic paths) or `read_section` (for legacy sections) to extract the full context needed for your answer.
 
 ### 2. Registering Memory in the Store
 After completing a task (e.g., a design decision, a bug fix, schema creation, or refactoring), persist this knowledge.
@@ -38,6 +41,9 @@ If you are updating a legacy flat section file (e.g., updating a list of risks i
 ### 4. Security & Best Practices
 * **Do NOT** store credentials, tokens, or passwords in memory — the server redacts them, but avoid writing them in the first place.
 
+### 5. Memory Maintenance (Dreaming)
+To consolidate memory, check for contradictions, or refresh the index, you can use the `dream_tool`. For detailed instructions on parameters (like `mode` and `apply`) and when to trigger a dream, refer to `.agents/rules/dreaming.md`.
+
 ---
 
 ## Project overview
@@ -55,6 +61,6 @@ Memory Fabric is the MCP server itself. Core modules:
 | `src/memory_fabric/frontmatter.py` | YAML frontmatter parsing/writing |
 | `src/memory_fabric/locking.py` | File-level write locking |
 | `src/memory_fabric/contracts.py` | Shared types and constants |
-| `src/memory_fabric/templates.py` | Starter-file scaffolding |
+| `src/memory_fabric/templates.py` | Starter-file scaffolding & agent instruction templates |
 
 Run tests: `pytest tests/`

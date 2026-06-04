@@ -1,3 +1,171 @@
+## 2026-06-04 00:05 - Agentic Instruction Architecture Redesign (Canonical Templates + Multi-Platform)
+
+**What was implemented:**
+- Redesigned the entire agentic instruction system. Replaced 3 near-duplicate template constants with 2 canonical content blocks (`MEMORY_INSTRUCTIONS`, `DREAMING_INSTRUCTIONS`) and platform-specific builder functions. Added deployment support for Cursor IDE (`.cursor/rules/memory-fabric.mdc`) and Windsurf IDE (`.windsurf/rules/memory-fabric.md`). Rewrote `sync_agent_rules` to regenerate from templates instead of fragile AGENTS.md parsing.
+
+**Core files affected:**
+- `src/memory_fabric/templates.py` — Single source of truth: 2 canonical blocks + 7 builder functions.
+- `src/memory_fabric/storage.py` — Refactored `initialize_memory_fabric()` and `sync_agent_rules()`.
+- `AGENTIC_ARCHITECTURE.md` — Complete rewrite documenting the new architecture.
+- ...and 6 additional platform files regenerated from canonical templates.
+
+**Key changes:**
+- Eliminated all content duplication: every platform file is now generated from the same 2 text blocks.
+- Added Cursor (`.mdc` format) and Windsurf support to both `init` and `sync`.
+- `sync_agent_rules` now regenerates from Python templates (not from AGENTS.md), preventing project-specific content leaking into IDE rules.
+- Normalized all existing files in this repo to match the canonical templates.
+- Fixed test assertion that assumed post-commit was the last created file.
+
+**Status & Testing:**
+- All 69 tests passing.
+
+## 2026-06-03 23:46 - Implement Agent Rules Synchronization (Single Source of Truth)
+
+**What was implemented:**
+- Created a mechanism to treat `AGENTS.md` as the single source of truth for agent rules, while automatically propagating changes to IDE-specific rule files (`CLAUDE.md`, `.github/copilot-instructions.md`, etc.). This balances the DRY principle with the need for reliable Prompt Auto-Injection.
+
+**Core files affected:**
+- `src/memory_fabric/storage.py` — Added `sync_agent_rules()` logic and updated `initialize_memory_fabric()` to install a Git `pre-commit` hook.
+- `src/memory_fabric/cli.py` — Exposed `ai-memory sync-agents`.
+- `README.md` & `AGENTIC_ARCHITECTURE.md` — Documented the new "Single Source of Truth" sync process.
+
+**Key changes:**
+- Added `ai-memory sync-agents` to securely parse `AGENTS.md` and safely inject updates into multiple integration files without destroying user customizations.
+- Automated the sync via a new `pre-commit` git hook, so developers never have to manually run the sync command. Any manual edit to `AGENTS.md` is instantly pushed to the target files and automatically `git add`ed.
+
+**Status & Testing:**
+- Code and hooks implemented successfully.
+
+## 2026-06-03 23:39 - Update README with Agentic Architecture Installation
+
+**What was implemented:**
+- Rewrote the "Agent Integration" section in the README to reflect the automated deployment of the Agentic Architecture.
+
+**Core files affected:**
+- `README.md` — Replaced manual copying instructions with a description of the automated `ai-memory init` deployment suite (covering IDE rules, `AGENTS.md`, `CLAUDE.md`, and Copilot).
+
+**Key changes:**
+- Removed outdated instructions about manually copying `AGENTS.md`.
+- Clearly explained the "why" and "how" of the automated instruction files to end-users.
+
+**Status & Testing:**
+- Documentation updated successfully.
+
+## 2026-06-03 23:37 - Register Agentic Architecture in Memory Store
+
+**What was implemented:**
+- Corrected a lapse in the memory process by formally registering the new `AGENTIC_ARCHITECTURE.md` knowledge into the project's semantic Memory Store.
+
+**Core files affected:**
+- `.ai-memory/memory-store/architecture/agent-rules.md` [NEW] — Written via the Memory Fabric storage API to ensure the agent architecture is preserved for future context windows.
+
+**Key changes:**
+- Used the internal `write_memory_store` python API to persist the summary of agent rule templates and the initialization deployment strategy.
+
+**Status & Testing:**
+- Memory written successfully.
+
+## 2026-06-03 23:35 - Create Agentic Architecture Registry
+
+**What was implemented:**
+- Created a central registry document to list all agentic rule files and explain how they integrate with various AI tools.
+
+**Core files affected:**
+- [AGENTIC_ARCHITECTURE.md](file:///c:/Users/rafael/Projetos/agentic-memory/AGENTIC_ARCHITECTURE.md) [NEW] — Documented the purpose of each rule file (`AGENTS.md`, `CLAUDE.md`, `.github/copilot-instructions.md`, `.agents/rules/*`) and explained the deployment strategy via `ai-memory init`.
+
+**Key changes:**
+- Mapped out the target audiences for each instruction file.
+- Documented guidelines for future developers on how to properly add new agent rules without bloating the core context windows.
+
+**Status & Testing:**
+- Documentation created successfully.
+
+## 2026-06-03 23:17 - Package Agent Instructions into CLI Installer
+
+**What was implemented:**
+- Hardcoded `AGENTS.md`, `.agents/rules/memory-store.md`, and `.agents/rules/dreaming.md` as templates inside the `memory-fabric` source code so they can be distributed to other repositories.
+- Updated `initialize_memory_fabric()` (the `ai-memory init` command) to automatically write these agent instructions into the target project, ensuring out-of-the-box compatibility with Cursor, Claude Code, GitHub Copilot, and other MCP-aware agents.
+
+**Core files affected:**
+- [src/memory_fabric/templates.py](file:///c:/Users/rafael/Projetos/agentic-memory/src/memory_fabric/templates.py) — Added `AGENT_INSTRUCTIONS_TEMPLATE`, `MEMORY_STORE_RULE_TEMPLATE`, and `DREAMING_RULE_TEMPLATE`.
+- [src/memory_fabric/storage.py](file:///c:/Users/rafael/Projetos/agentic-memory/src/memory_fabric/storage.py) — Updated `initialize_memory_fabric()` to create `.agents/rules/` and deploy `AGENTS.md`. It also creates or appends to `CLAUDE.md` and `.github/copilot-instructions.md`.
+
+**Key changes:**
+- Native IDE support: Automatically drops rule files into `.agents/rules/` for IDE agents.
+- Broad compatibility: Automatically targets `CLAUDE.md` and `.github/copilot-instructions.md` by cleanly appending instructions if those files already exist in a user's repo.
+
+**Status & Testing:**
+- Code implemented successfully. Ready for release.
+
+## 2026-06-03 22:50 - Document Agent Dreaming Instructions
+
+**What was implemented:**
+- Adopted a hybrid documentation approach for the `dream_tool` to keep main instruction files concise while providing detailed parameter guidelines for complex background maintenance.
+- Created a dedicated `.agents/rules/dreaming.md` file explaining `dream_tool` usage, including the critical `apply=True` requirement for saving state.
+
+**Core files affected:**
+- [.agents/rules/dreaming.md](file:///c:/Users/rafael/Projetos/agentic-memory/.agents/rules/dreaming.md) [NEW] — Detailed usage guide for the `dream_tool` parameter configuration.
+- [AGENTS.md](file:///c:/Users/rafael/Projetos/agentic-memory/AGENTS.md) — Appended a brief pointer section directing agents to the dreaming rules.
+- [.agents/rules/memory-store.md](file:///c:/Users/rafael/Projetos/agentic-memory/.agents/rules/memory-store.md) — Replicated the pointer section to maintain rule sync.
+
+**Key changes:**
+- Added clear instructions on when agents should invoke the `dream_tool` (e.g., after major refactoring).
+- Clarified the `mode`, `apply`, `llm_rewrite`, and `with_eval` flags.
+- Added a pointer in `AGENTS.md` to ensure the tool is discoverable without bloating standard context.
+
+**Status & Testing:**
+- Documentation created successfully.
+
+## 2026-06-03 22:47 - Explicitly document Active Memory Workflow using MCP tools
+
+**What was implemented:**
+- Updated agent instructions to explicitly outline the active memory retrieval process using MCP tools, directly matching the conceptual "Map, Search, and Deep Dive" workflow without relying on raw terminal commands.
+
+**Core files affected:**
+- [AGENTS.md](file:///c:/Users/rafael/Projetos/agentic-memory/AGENTS.md) — Updated the Startup & Retrieval section to explicitly detail the 3-step retrieval process.
+- [.agents/rules/memory-store.md](file:///c:/Users/rafael/Projetos/agentic-memory/.agents/rules/memory-store.md) — Replicated the same documentation update to keep all agent rule files perfectly in sync.
+
+**Key changes:**
+- Added a 3-step process: Session Map (`read_combined_context_tool`), Search & Target (`keyword_search_tool`), and Deep Dive (`read_memory_store_tool` or `read_section`).
+- Re-emphasized the active nature of the workflow while enforcing safe MCP tool boundaries.
+
+**Status & Testing:**
+- Documentation updated successfully.
+
+## 2026-06-03 22:42 - Remove AGENT_MEMORY_WORKFLOW.md to prevent conflicting instructions
+
+**What was implemented:**
+- Deleted `AGENT_MEMORY_WORKFLOW.md` because its instructions (using bash/grep for manual memory exploration) directly conflicted with the primary project rule in `AGENTS.md` which enforces the strict use of `memory-fabric` MCP tools and prohibits raw file-system tool interactions.
+
+**Core files affected:**
+- `AGENT_MEMORY_WORKFLOW.md` [DELETED] — Removed to maintain a single source of truth for agent instructions.
+- [AGENTS.md](file:///c:/Users/rafael/Projetos/agentic-memory/AGENTS.md) — Remains the sole authority on agent memory retrieval and writing workflows.
+
+**Key changes:**
+- Removed conflicting instructions on how agents should interact with memory.
+- Ensured all MCP clients follow the standard `read_combined_context_tool` and `keyword_search_tool` pathways.
+
+**Status & Testing:**
+- File successfully removed.
+
+## 2026-06-03 22:35 - Document Agent Memory Workflow
+
+**What was implemented:**
+- Created a new documentation file detailing the agent memory usage workflow based on direct system tool interaction instead of MCP tools.
+- Clarified that agents should use tools like bash and grep to explore the file system and search for information, and how they should read the index file to guide their deep dives.
+
+**Core files affected:**
+- [AGENT_MEMORY_WORKFLOW.md](file:///c:/Users/rafael/Projetos/agentic-memory/AGENT_MEMORY_WORKFLOW.md) — New documentation explaining the active manual memory retrieval process.
+
+**Key changes:**
+- Documented the session initialization and index review process.
+- Detailed the file system exploration and search strategy using grep.
+- Clarified the deep dive step for extracting necessary context.
+- Added explicit mention of `keyword_search_tool` (MCP) and `ai-memory query` (CLI) as the primary semantic search methods, with `grep` as a fallback.
+
+**Status & Testing:**
+- Documentation created successfully.
+
 ## 2026-06-03 20:20 - Update Documentation with Upgraded Instructions and MCP Sampling Guide
 
 **What was implemented:**

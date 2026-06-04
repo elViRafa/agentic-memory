@@ -35,7 +35,20 @@ from memory_fabric.frontmatter import FrontmatterError, dump_frontmatter, parse_
 from memory_fabric.locking import locked_file
 from memory_fabric.paths import global_memory_dir, local_memory_dir, memory_store_dir, project_root
 from memory_fabric.security import redact_secrets
-from memory_fabric.templates import LOCAL_GITIGNORE, SECTION_TEMPLATES, build_empty_section, build_memory_file, now_iso
+from memory_fabric.templates import (
+    LOCAL_GITIGNORE,
+    SECTION_TEMPLATES,
+    build_empty_section,
+    build_memory_file,
+    now_iso,
+    build_agents_md,
+    build_agents_rule_memory,
+    build_agents_rule_dreaming,
+    build_cursor_rule,
+    build_windsurf_rule,
+    build_claude_md,
+    build_copilot_md,
+)
 from memory_fabric.llm import call_llm
 from memory_fabric.version import __version__
 
@@ -126,13 +139,55 @@ def initialize_memory_fabric(
         elif prompt_path.exists():
             prompt_path.unlink()
 
+    # Deploy Agent Instructions and Rules to all supported platforms
+    def _deploy_file(path: Path, content: str, append_if_exists: bool = False) -> None:
+        """Write a file if it doesn't exist, or append Memory Fabric block if requested."""
+        if not path.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+            files_created.append(str(path))
+        elif append_if_exists:
+            existing = path.read_text(encoding="utf-8")
+            if "Memory Fabric" not in existing:
+                separator = "\n" if existing.endswith("\n") else "\n\n"
+                path.write_text(existing + separator + content, encoding="utf-8")
+                files_created.append(str(path) + " (appended)")
+
+    # Universal fallback (Gemini CLI, Codex, Antigravity)
+    _deploy_file(root / "AGENTS.md", build_agents_md())
+
+    # Generic IDE rules (.agents/rules/) — Cline, generic agents
+    agents_rules_dir = root / ".agents" / "rules"
+    agents_rules_dir.mkdir(parents=True, exist_ok=True)
+    _deploy_file(agents_rules_dir / "memory-store.md", build_agents_rule_memory())
+    _deploy_file(agents_rules_dir / "dreaming.md", build_agents_rule_dreaming())
+
+    # Cursor IDE (.cursor/rules/*.mdc)
+    cursor_rules_dir = root / ".cursor" / "rules"
+    cursor_rules_dir.mkdir(parents=True, exist_ok=True)
+    _deploy_file(cursor_rules_dir / "memory-fabric.mdc", build_cursor_rule())
+
+    # Windsurf IDE (.windsurf/rules/*.md)
+    windsurf_rules_dir = root / ".windsurf" / "rules"
+    windsurf_rules_dir.mkdir(parents=True, exist_ok=True)
+    _deploy_file(windsurf_rules_dir / "memory-fabric.md", build_windsurf_rule())
+
+    # Claude Code (CLAUDE.md) — create or append
+    _deploy_file(root / "CLAUDE.md", build_claude_md(), append_if_exists=True)
+
+    # GitHub Copilot (.github/copilot-instructions.md) — create or append
+    github_dir = root / ".github"
+    github_dir.mkdir(parents=True, exist_ok=True)
+    _deploy_file(github_dir / "copilot-instructions.md", build_copilot_md(), append_if_exists=True)
+
     if install_hooks:
         git_dir = root / ".git"
         if git_dir.exists() and git_dir.is_dir():
             hooks_dir = git_dir / "hooks"
             hooks_dir.mkdir(parents=True, exist_ok=True)
-            post_commit = hooks_dir / "post-commit"
             
+            # Post-commit hook (Dreaming)
+            post_commit = hooks_dir / "post-commit"
             hook_cmd = "ai-memory dream --mode light --apply || true"
             if post_commit.exists():
                 existing_content = post_commit.read_text(encoding="utf-8")
@@ -151,14 +206,37 @@ def initialize_memory_fabric(
                 post_commit.write_text(hook_content, encoding="utf-8")
                 files_created.append(str(post_commit))
                 
+            # Pre-commit hook (Agent Rules Sync)
+            pre_commit = hooks_dir / "pre-commit"
+            sync_cmd = "ai-memory sync-agents || true"
+            add_cmd = "git add .agents/rules/ .cursor/rules/memory-fabric.mdc .windsurf/rules/memory-fabric.md CLAUDE.md .github/copilot-instructions.md 2>/dev/null || true"
+            if pre_commit.exists():
+                existing_content = pre_commit.read_text(encoding="utf-8")
+                if sync_cmd not in existing_content:
+                    separator = "\n" if existing_content.endswith("\n") else "\n\n"
+                    new_content = existing_content + separator + f"# Added by Memory Fabric installer\n{sync_cmd}\n{add_cmd}\n"
+                    pre_commit.write_text(new_content, encoding="utf-8")
+                    files_created.append(str(pre_commit))
+            else:
+                hook_content = (
+                    "#!/bin/sh\n"
+                    "# Memory Fabric pre-commit hook\n"
+                    "echo \"Syncing Memory Fabric Agent Rules...\"\n"
+                    f"{sync_cmd}\n"
+                    f"{add_cmd}\n"
+                )
+                pre_commit.write_text(hook_content, encoding="utf-8")
+                files_created.append(str(pre_commit))
+
             if os.name != "nt":
                 try:
-                    mode = post_commit.stat().st_mode
-                    post_commit.chmod(mode | 0o111)
+                    for hook_file in [post_commit, pre_commit]:
+                        mode = hook_file.stat().st_mode
+                        hook_file.chmod(mode | 0o111)
                 except Exception as exc:
-                    warnings.append(f"Failed to set executable permissions on post-commit hook: {exc}")
+                    warnings.append(f"Failed to set executable permissions on git hooks: {exc}")
         else:
-            warnings.append("Git repository not found; post-commit hook was not installed.")
+            warnings.append("Git repository not found; hooks were not installed.")
 
     return {
         "created": bool(files_created),
@@ -166,6 +244,69 @@ def initialize_memory_fabric(
         "files_created": files_created,
         "warnings": warnings,
     }
+
+
+def sync_agent_rules(cwd: str) -> dict[str, Any]:
+    """Regenerate all agent instruction files from canonical templates.
+
+    This does NOT read from AGENTS.md. Instead, it regenerates all platform-specific
+    files directly from the canonical templates in templates.py, guaranteeing
+    consistency. AGENTS.md itself is left untouched so users can add project-specific
+    context to it without fear of it leaking into IDE rule files.
+    """
+    root = project_root(cwd)
+    synced_files: list[str] = []
+
+    def _write_if_different(path: Path, content: str) -> None:
+        if path.exists():
+            existing = path.read_text(encoding="utf-8")
+            if existing == content:
+                return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        synced_files.append(str(path))
+
+    # Generic IDE rules
+    _write_if_different(root / ".agents" / "rules" / "memory-store.md", build_agents_rule_memory())
+    _write_if_different(root / ".agents" / "rules" / "dreaming.md", build_agents_rule_dreaming())
+
+    # Cursor
+    _write_if_different(root / ".cursor" / "rules" / "memory-fabric.mdc", build_cursor_rule())
+
+    # Windsurf
+    _write_if_different(root / ".windsurf" / "rules" / "memory-fabric.md", build_windsurf_rule())
+
+    # Claude Code — only update if Memory Fabric content already exists (don't create)
+    claude_md = root / "CLAUDE.md"
+    if claude_md.exists():
+        existing = claude_md.read_text(encoding="utf-8")
+        if "Memory Fabric" in existing:
+            new_content = re.sub(
+                r"(?:# Agent Instructions — Memory Fabric|## Memory Fabric — Semantic Store Agent Instructions).*$",
+                build_claude_md().strip(),
+                existing,
+                flags=re.DOTALL,
+            )
+            if new_content != existing:
+                claude_md.write_text(new_content, encoding="utf-8")
+                synced_files.append(str(claude_md))
+
+    # GitHub Copilot — only update if Memory Fabric content already exists
+    copilot_md = root / ".github" / "copilot-instructions.md"
+    if copilot_md.exists():
+        existing = copilot_md.read_text(encoding="utf-8")
+        if "Memory Fabric" in existing:
+            new_content = re.sub(
+                r"(?:# Agent Instructions — Memory Fabric|## Memory Fabric — Semantic Store Agent Instructions).*$",
+                build_copilot_md().strip(),
+                existing,
+                flags=re.DOTALL,
+            )
+            if new_content != existing:
+                copilot_md.write_text(new_content, encoding="utf-8")
+                synced_files.append(str(copilot_md))
+
+    return {"success": True, "message": f"Synchronized {len(synced_files)} file(s).", "synced_files": synced_files}
 
 
 def read_combined_context(cwd: str, max_tokens: int = 4000) -> ContextBundle:

@@ -1,3 +1,8 @@
+---
+description: Memory Fabric — project memory management via MCP tools
+alwaysApply: true
+---
+
 ## Memory Fabric — Semantic Store Agent Instructions
 
 You must use the `memory-fabric` MCP tools for all project memory operations. Do not read or write `.ai-memory/` files using raw file-system tools.

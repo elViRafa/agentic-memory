@@ -181,47 +181,33 @@ Add to your MCP client configuration (for example Claude Code or Cursor):
 
 ---
 
-## Agent Integration (making agents use Memory Fabric automatically)
+## Agentic Architecture (making agents use Memory Fabric automatically)
 
-Registering the MCP server is necessary but not sufficient — AI agents will not use its
-tools unless explicitly instructed to do so. You must add agent instruction files to your
-project that mandate the workflow described below.
+Registering the MCP server is necessary but not sufficient — AI agents will not use its tools unless explicitly instructed to do so. 
 
-### Step 1 — Add instruction files to your project
+Memory Fabric provides an automated **Agentic Architecture** to handle this for you.
 
-**For Claude Code, Gemini CLI, and most modern agents — create `AGENTS.md` in the
-project root:**
+When you run `ai-memory init` in your project, the CLI automatically deploys a complete suite of agent instruction files tailored for every major AI tool:
 
-```markdown
-## Memory Fabric
+| Target | File(s) Created |
+|:---|:---|
+| **Gemini CLI / Codex / Antigravity** | `AGENTS.md` |
+| **Cursor IDE** | `.cursor/rules/memory-fabric.mdc` |
+| **Windsurf IDE** | `.windsurf/rules/memory-fabric.md` |
+| **Cline / Generic IDE Agents** | `.agents/rules/memory-store.md`, `.agents/rules/dreaming.md` |
+| **Claude Code** | `CLAUDE.md` (created or appended) |
+| **GitHub Copilot** | `.github/copilot-instructions.md` (created or appended) |
 
-Use the `memory-fabric` MCP tools for all memory operations — never write `.ai-memory/`
-files directly.
+### Single Source of Truth (Syncing)
+All these files are generated from **two canonical content blocks** inside the Memory Fabric Python package. Running `ai-memory sync-agents` regenerates every platform file from these templates, guaranteeing perfect consistency. If you used `ai-memory init --install-hooks`, a `pre-commit` git hook runs this sync automatically on every commit.
 
-- At session start: call `read_combined_context_tool(cwd="<project root>")`
-  (if `.ai-memory/` is missing, call `initialize_memory_fabric_tool(cwd=...)` first)
-- Before searching the codebase: call `keyword_search_tool(cwd="...", query="<topic>")`
-- After meaningful work: call `write_local_memory_tool(cwd="...", section="...", content="...", mode="append")`
-
-Sections: `decisions`, `architecture`, `debt`, `schemas`, `ubiquitous-language`, `framework-rules`
-```
-
-**For GitHub Copilot — create `.github/copilot-instructions.md` with the same content.**
-
-### Step 2 — Verify the MCP server is running
-
-The instruction files only work when the `memory-fabric` MCP server is reachable.
-Run `ai-memory doctor` in the project to confirm.
+For full details on the architecture, see [`AGENTIC_ARCHITECTURE.md`](AGENTIC_ARCHITECTURE.md).
 
 ### Why this matters
 
-Without these files, agents will:
-- Explain they "don't use MCP tools automatically"
-- Write markdown files directly using file-system tools, bypassing secret scanning,
-  token budgeting, and frontmatter management
+Without these instruction files, agents will often explain they "don't use MCP tools automatically," or worse, they will write memory markdown files directly using native file-system tools—bypassing secret scanning, token budgeting, and background Dreaming management.
 
-The instruction files are the authoritative mechanism to change this behaviour across
-Claude Code, Cursor, GitHub Copilot, and any other MCP-aware agent.
+By simply running `ai-memory init`, you get zero-configuration, plug-and-play capability across the entire agent ecosystem.
 
 ---
 
@@ -235,13 +221,10 @@ You can use a single installed instance of Memory Fabric across all your coding 
    cd /path/to/other-project
    ai-memory init --install-hooks
    ```
-   This creates `.ai-memory/`, ignores local cache files in `.gitignore`, and sets up the git post-commit hooks.
+   This automatically creates `.ai-memory/`, deploys the **Agentic Architecture** rule files, sets up `.gitignore`, and installs the git post-commit hooks.
 
-2. **Add Agent Instructions**:
-   Copy the `AGENTS.md` file (or `.github/copilot-instructions.md`) into your target project's root folder. This instructs your AI coding assistant to automatically utilize the MCP tools.
-
-3. **Global MCP Configuration**:
-   Verify your AI assistant's configuration points to the installed `memory-fabric-mcp` executable. The MCP tools automatically parse and use the active project's path passed by the assistant as the `cwd` argument, enabling a single global MCP server registration to support all your local workspaces.
+2. **Global MCP Configuration**:
+   Verify your AI assistant's configuration points to your globally installed `memory-fabric-mcp` executable. The MCP tools automatically parse and use the active project's path passed by the assistant as the `cwd` argument, enabling a single global MCP server registration to support all your local workspaces.
 
 ---
 

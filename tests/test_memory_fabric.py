@@ -263,7 +263,7 @@ class MemoryFabricTests(unittest.TestCase):
             post_commit_path = git_dir / "hooks" / "post-commit"
             
             self.assertTrue(post_commit_path.exists())
-            self.assertIn("post-commit", result["files_created"][-1])
+            self.assertTrue(any("post-commit" in f for f in result["files_created"]))
             self.assertIn("ai-memory dream --mode light --apply", post_commit_path.read_text(encoding="utf-8"))
 
     def test_init_install_hooks_without_git_emits_warning(self) -> None:
