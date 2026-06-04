@@ -177,6 +177,8 @@ Add to your MCP client configuration (for example Claude Code or Cursor):
 | `write_local_memory_tool` | Append or replace a section with secret scanning |
 | `propose_memory_patch_tool` | Preview proposed memory changes without applying |
 | `dream_tool` | Run memory maintenance / consolidation (--mode light|deep) |
+| `prepare_dream_payload_tool` | Prepare candidate snapshot and return consolidation prompt for client-driven dreaming |
+| `apply_dream_results_tool` | Apply LLM consolidated JSON output to candidate snapshot and save changes |
 | `evaluate_memory_fabric_tool` | Evaluate local memory quality |
 | `evaluate_dream_quality_tool` | Evaluate a Dreaming run against a snapshot |
 | `write_memory_store_tool` | Write a memory file to a semantic store path (e.g. `architecture/decisions/auth`) |
@@ -339,6 +341,16 @@ MCP Sampling allows Memory Fabric to run semantic Dreaming and evaluations **wit
 
 > [!IMPORTANT]
 > **CLI Limitation:** MCP Sampling relies on an active client-server session. Since the standalone terminal CLI (`ai-memory`) runs outside of an MCP client, running `ai-memory dream` from the command line **cannot** use MCP Sampling. To use LLM-based consolidation via the CLI, you must configure a direct LLM provider.
+
+### Client-Driven / Split-Tool Dreaming (Avoiding Deadlocks & Timeouts)
+
+In some sequential/blocking MCP client environments (like IDE extensions or agentic loops), executing a nested MCP Sampling request (`create_message`) while the client is waiting for a tool response can lead to a JSON-RPC deadlock or execution timeouts.
+
+To completely avoid this re-entrancy issue, Memory Fabric provides a client-driven split-tool dreaming protocol:
+
+1. **Prepare Payload**: The agent/client first calls `prepare_dream_payload_tool`. This returns a `consolidation_prompt` and a `candidate_store` ID, but performs no blocking LLM reasoning.
+2. **Execute Locally**: The client uses its own local LLM connection/context to execute the returned `consolidation_prompt` and captures the raw JSON output.
+3. **Apply Results**: The client sends the raw LLM JSON response back by calling `apply_dream_results_tool(candidate_store=..., llm_response=...)`. Memory Fabric parses the response, applies the consolidated changes to the candidate folder, and saves the new memory states.
 
 ### Direct LLM Providers Configuration
 
