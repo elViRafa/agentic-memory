@@ -1,3 +1,37 @@
+## 2026-06-04 09:20 - DRY Refactoring of Memory Fabric Dreaming Pipeline
+
+**What was implemented:**
+- Audited the codebase for over-engineering and logic redundancy. Converted duplicated candidate validation, secret scanning, stale checking, indexing, and promotion routines in the Dreaming process to call a unified private helper.
+
+**Core files affected:**
+- [src/memory_fabric/storage.py](file:///c:/Users/rafael/Projetos/agentic-memory/src/memory_fabric/storage.py) — Extracted JSON parsing and consolidated candidate promotion routines into new `_parse_llm_json_response` and `_process_and_finalize_candidate` private helpers.
+
+**Key changes:**
+- Combined duplicate blocks from both the direct `dream` and split-tool `apply_dream_results` pipelines.
+- Implemented fallback handling inside the unified promotion helper to properly manage non-LLM runs and hash-caching checks.
+- Kept zero-dependency HTTP adapters in `llm.py` intact to support CLI hook operations and prevent client deadlocks.
+
+**Status & Testing:**
+- Tested locally, all 72 pytest unit tests passed successfully.
+
+## 2026-06-04 08:28 - Configure Robust Git Hooks and Verify Memory Fabric in search-sermons
+
+**What was implemented:**
+- Updated the pre-commit and post-commit git hooks in the `search-sermons` repository to use `python -m memory_fabric.cli` instead of the direct `ai-memory` script. This prevents command-not-found failures during commits in environments where the Python User Scripts path is not added to the global system PATH.
+- Synchronized and updated all multi-platform agent rule files in the `search-sermons` workspace to match the latest template-driven format.
+
+**Core files affected:**
+- [C:\Users\rafael\Projetos\search-sermons\.git\hooks\pre-commit](file:///C:/Users/rafael/Projetos/search-sermons/.git/hooks/pre-commit) — Switched agent rule synchronization command to use the python module invocation.
+- [C:\Users\rafael\Projetos\search-sermons\.git\hooks\post-commit](file:///C:/Users/rafael/Projetos/search-sermons/.git/hooks/post-commit) — Switched background Dreaming/consolidation command to use the python module invocation.
+
+**Key changes:**
+- Changed `ai-memory sync-agents` to `python -m memory_fabric.cli sync-agents` inside the pre-commit hook script.
+- Changed `ai-memory dream` to `python -m memory_fabric.cli dream` inside the post-commit hook script.
+- Verified that all 9 memory files in `search-sermons` are fully recognized and healthy.
+
+**Status & Testing:**
+- Executed `python -m memory_fabric.cli doctor` inside the `search-sermons` workspace, returning `ok: True` with zero errors. Tested script executable invocation paths under Python 3.14.
+
 ## 2026-06-04 08:22 - Fix Split-Tool Protocol Instruction in Agent Rules
 
 **What was implemented:**
