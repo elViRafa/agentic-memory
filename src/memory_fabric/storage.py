@@ -1435,11 +1435,13 @@ def _get_git_diff(cwd: str) -> str:
         res = subprocess.run(
             ["git", "rev-parse", "--is-inside-work-tree"],
             cwd=cwd,
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             encoding="utf-8",
             errors="replace",
-            check=False
+            check=False,
+            timeout=5.0
         )
         if res.returncode != 0 or "true" not in res.stdout.lower():
             return ""
@@ -1450,11 +1452,13 @@ def _get_git_diff(cwd: str) -> str:
         res_diff = subprocess.run(
             ["git", "diff", "HEAD"],
             cwd=cwd,
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             encoding="utf-8",
             errors="replace",
-            check=False
+            check=False,
+            timeout=5.0
         )
         if res_diff.returncode == 0 and res_diff.stdout.strip():
             diff_text = res_diff.stdout
@@ -1466,11 +1470,13 @@ def _get_git_diff(cwd: str) -> str:
         res_log = subprocess.run(
             ["git", "log", "-n", "5", "--oneline"],
             cwd=cwd,
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             encoding="utf-8",
             errors="replace",
-            check=False
+            check=False,
+            timeout=5.0
         )
         if res_log.returncode == 0 and res_log.stdout.strip():
             git_info.append("=== Recent Git Commits ===\n" + res_log.stdout)
@@ -1651,7 +1657,15 @@ def _keyword_search_rg(query: str, roots: list[Path], max_results: int) -> list[
         query,
         *[str(root) for root in roots],
     ]
-    completed = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    completed = subprocess.run(
+        command,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=5.0
+    )
     if completed.returncode not in {0, 1}:
         return []
 

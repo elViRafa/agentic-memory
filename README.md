@@ -176,8 +176,13 @@ Add to your MCP client configuration (for example Claude Code or Cursor):
 | `keyword_search_tool` | Search memory with ripgrep or Python fallback |
 | `write_local_memory_tool` | Append or replace a section with secret scanning |
 | `propose_memory_patch_tool` | Preview proposed memory changes without applying |
+| `dream_tool` | Run memory maintenance / consolidation (--mode light|deep) |
 | `evaluate_memory_fabric_tool` | Evaluate local memory quality |
 | `evaluate_dream_quality_tool` | Evaluate a Dreaming run against a snapshot |
+| `write_memory_store_tool` | Write a memory file to a semantic store path (e.g. `architecture/decisions/auth`) |
+| `read_memory_store_tool` | Read a single memory-store file by its semantic path |
+| `list_memory_store_tool` | List files in the memory store, optionally filtered by prefix/tags |
+| `delete_memory_store_tool` | Remove a memory-store file by its semantic path |
 
 ---
 
@@ -288,6 +293,7 @@ Commands:
   eval            Score memory quality or Dreaming quality
   dream           Run memory maintenance (--mode light|deep)
   query           Search memory
+  store           CRUD operations on semantic memory store
   sync-global     Preview local-to-global promotions
   rollback        Restore from a snapshot
 ```

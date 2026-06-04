@@ -1,3 +1,40 @@
+## 2026-06-04 00:44 - Implementation of client-side MCP Sampling integration & bug fixes
+
+**What was implemented:**
+- Added robust subprocess execution controls to memory consolidation steps, eliminating pipe deadlocks on Windows environments. Integrated and validated full client-to-server MCP sampling delegating LLM consolidation requests back to client callbacks using a local Ollama model (`gemma4`). Updated documentation to catalog all available tools and subcommands.
+
+**Core files affected:**
+- `src/memory_fabric/storage.py` — Resolved Windows grandchild subprocess hangs by passing `stdin=subprocess.DEVNULL` and `timeout=5.0` to `subprocess.run` calls.
+- `C:\Users\rafael\Projetos\ToTestMemoryAgentic\test_mcp_sampling.py` — Client integration script declaring sampling capability, registering the Ollama `sampling_callback`, and executing server dreaming tools over stdio.
+- `README.md` — Updated the list of available MCP tools and the CLI commands reference.
+
+**Key changes:**
+- Modified `_get_git_diff` and `_keyword_search_rg` in `storage.py` to prevent stdout/stdin pipe inheritance conflicts on Windows when run under piped parent streams.
+- Developed `test_mcp_sampling.py` to emulate a sampling-aware client session using the official `mcp` SDK.
+- Demonstrated end-to-end delegation of deep consolidation prompts and section summarizations from the `memory-fabric-mcp` server back to the client's local Ollama engine.
+- Cataloged `dream_tool`, `write_memory_store_tool`, `read_memory_store_tool`, `list_memory_store_tool`, `delete_memory_store_tool`, and CLI `store` subcommand in the user documentation.
+
+**Status & Testing:**
+- Tested locally in the `ToTestMemoryAgentic` virtual environment; tests passed and all deep dreaming outputs were correctly written and indexed.
+
+## 2026-06-04 00:18 - Integration Testing & Verification of Memory Fabric
+
+**What was implemented:**
+- Created a dedicated test project `ToTestMemoryAgentic` and installed the local `memory-fabric` package in a Python virtual environment. Developed a comprehensive integration test suite `run_tests.py` verifying scaffolding initialization, memory store CRUD operations, query search, doctor commands, and both light and deep dreaming consolidation (using the local Ollama LLM provider).
+
+**Core files affected:**
+- `C:\Users\rafael\Projetos\ToTestMemoryAgentic\run_tests.py` [NEW] — Automated integration test script verifying all core memory fabric operations end-to-end.
+
+**Key changes:**
+- Verified that `ai-memory init --install-hooks` sets up git hooks and rule scaffolding correctly.
+- Checked `doctor` validation on clean repositories and `status` size reporting.
+- Confirmed that `store write` and `store read` accurately register memories and preserve metadata.
+- Tested `query` (search) capability to return relevant snippet context.
+- Successfully ran deep dreaming with LLM consolidation and contradiction warnings using a local Ollama instance (`gemma4`).
+
+**Status & Testing:**
+- All integration tests completed successfully, executing all CLI operations and confirming complete local LLM compatibility.
+
 ## 2026-06-04 00:05 - Agentic Instruction Architecture Redesign (Canonical Templates + Multi-Platform)
 
 **What was implemented:**
