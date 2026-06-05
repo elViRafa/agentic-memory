@@ -199,6 +199,7 @@ When you run `ai-memory init` in your project, the CLI automatically deploys a c
 | Target | File(s) Created |
 |:---|:---|
 | **Gemini CLI / Codex / Antigravity** | `AGENTS.md` |
+| **Grok (TUI / Build / Agent harness)** | `AGENTS.md` (primary project rules); full docs + MCP registration in `~/.grok/config.toml` or `.mcp.json`; see also `.grok/docs/user-guide/13-memory-fabric.md` when installed for the client |
 | **Cursor IDE** | `.cursor/rules/memory-fabric.mdc` |
 | **Windsurf IDE** | `.windsurf/rules/memory-fabric.md` |
 | **Cline / Generic IDE Agents** | `.agents/rules/memory-store.md`, `.agents/rules/dreaming.md` |
