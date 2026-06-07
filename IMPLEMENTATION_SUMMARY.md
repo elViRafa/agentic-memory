@@ -1,3 +1,19 @@
+## 2026-06-06 17:16 - Install and Update Memory Fabric (ai-memory) in search-sermons Workspace
+
+**What was implemented:**
+- Reinstalled/updated the `memory-fabric` package (providing the `ai-memory` CLI) in editable mode within the `search-sermons` virtual environment (`C:\Users\rafael\Projetos\search-sermons`).
+- Validated the installation inside the target project using the `ai-memory doctor` CLI command to ensure all local memory files and settings are healthy.
+
+**Core files affected:**
+- None in this repository (environment update in `C:\Users\rafael\Projetos\search-sermons`).
+
+**Key changes:**
+- Ran pip installation of `agentic-memory` (`memory-fabric`) in editable mode (`-e`) into the target workspace `.venv`.
+- Confirmed correct execution of `ai-memory doctor` in the target workspace.
+
+**Status & Testing:**
+- Tested locally, all checks passed and the CLI operates successfully.
+
 ## 2026-06-05 22:25 - Orchestrate Multi-Agent Validation and Optimization of Memory Fabric
 
 **What was implemented:**
