@@ -13,20 +13,41 @@ class LLMError(Exception):
     """Raised when an LLM API call fails."""
 
 
+# Module-level cache: maps (resolved_cwd, mtime_fingerprint) → True.
+# Avoids re-reading .env files on every MCP tool call within the same process.
+_env_load_cache: dict[tuple[str, float], bool] = {}
+
+
 def load_env_from_cwd(cwd: str | Any) -> None:
     """Load environment variables from .env files in the workspace directory.
 
     Checks `.env`, `.env.local`, and `.env.development` (in that order).
     Does not overwrite existing non-empty environment variables.
+
+    Results are cached by (resolved_cwd, max_mtime) so repeated calls during
+    the same MCP session do not re-read from disk unless a .env file changes.
     """
     if not cwd:
         return
-    import os
     from pathlib import Path
 
     try:
         cwd_path = Path(cwd).resolve()
-        for env_name in (".env", ".env.local", ".env.development"):
+        env_names = (".env", ".env.local", ".env.development")
+
+        # Build a cheap cache key from the max mtime of all env files present.
+        mtime_sum: float = 0.0
+        for env_name in env_names:
+            dotenv_path = cwd_path / env_name
+            if dotenv_path.is_file():
+                mtime_sum += dotenv_path.stat().st_mtime
+
+        cache_key = (str(cwd_path), mtime_sum)
+        if cache_key in _env_load_cache:
+            return  # Already loaded for this cwd + file state
+        _env_load_cache[cache_key] = True
+
+        for env_name in env_names:
             dotenv_path = cwd_path / env_name
             if dotenv_path.is_file():
                 with open(dotenv_path, "r", encoding="utf-8", errors="replace") as f:
@@ -48,6 +69,7 @@ def load_env_from_cwd(cwd: str | Any) -> None:
     except Exception:
         # Graceful fallback: do not crash if file access/parsing fails
         pass
+
 
 
 async def call_llm(prompt: str, system_instruction: str = "", context: Any = None) -> str:

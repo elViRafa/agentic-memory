@@ -40,6 +40,7 @@ class SearchResult(TypedDict):
     path: str
     line: int
     snippet: str
+    backend: NotRequired[str]  # 'ripgrep' | 'python' — which search backend was used
 
 
 class WriteResult(TypedDict):
@@ -52,6 +53,16 @@ class WriteResult(TypedDict):
 class PatchPreview(TypedDict):
     patch: str
     affected_files: list[str]
+    redactions: int
+    warnings: list[str]
+
+
+class EpisodicJournalResult(TypedDict):
+    """Result returned by write_session_journal_tool."""
+    changed: bool
+    store_path: str
+    path: str
+    date: str
     redactions: int
     warnings: list[str]
 

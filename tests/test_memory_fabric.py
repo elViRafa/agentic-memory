@@ -511,7 +511,7 @@ class MemoryFabricTests(unittest.TestCase):
         os.environ.pop("OLLAMA_MODEL", None)
 
 
-    @mock.patch("memory_fabric.storage.call_llm", new_callable=mock.AsyncMock)
+    @mock.patch("memory_fabric.storage._core.call_llm", new_callable=mock.AsyncMock)
     def test_dream_with_llm(self, mock_call_llm) -> None:
         import json
         with tempfile.TemporaryDirectory() as temp:
@@ -641,8 +641,8 @@ class MemoryFabricTests(unittest.TestCase):
             os.environ.pop("MEMORY_FABRIC_LLM_PROVIDER", None)
             os.environ.pop("GEMINI_API_KEY", None)
 
-    @mock.patch("memory_fabric.storage.now_iso")
-    @mock.patch("memory_fabric.storage.call_llm", new_callable=mock.AsyncMock)
+    @mock.patch("memory_fabric.storage._core.now_iso")
+    @mock.patch("memory_fabric.storage._core.call_llm", new_callable=mock.AsyncMock)
     def test_dream_summary_skips_when_hash_matches(self, mock_call_llm, mock_now_iso) -> None:
         import hashlib
         from memory_fabric.frontmatter import dump_frontmatter
@@ -702,8 +702,8 @@ class MemoryFabricTests(unittest.TestCase):
                 os.environ.pop("MEMORY_FABRIC_LLM_PROVIDER", None)
                 os.environ.pop("GEMINI_API_KEY", None)
 
-    @mock.patch("memory_fabric.storage.now_iso")
-    @mock.patch("memory_fabric.storage.call_llm", new_callable=mock.AsyncMock)
+    @mock.patch("memory_fabric.storage._core.now_iso")
+    @mock.patch("memory_fabric.storage._core.call_llm", new_callable=mock.AsyncMock)
     def test_dream_consolidation_skips_when_hash_matches(self, mock_call_llm, mock_now_iso) -> None:
         import json
         from memory_fabric.frontmatter import dump_frontmatter

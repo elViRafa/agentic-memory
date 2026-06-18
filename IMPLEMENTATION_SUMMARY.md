@@ -1,3 +1,55 @@
+## 2026-06-18 16:08 - Phase 2.1, 3.1, 4.1: Episodic Memory, Real Patch Preview, Query-aware Retrieval
+
+**What was implemented:**
+- **Phase 2.1 (Patch Previews):** Rewrote `propose_memory_patch` from a stub into a real implementation that reads the target file, deduplicates proposed additions, and returns a real unified diff without writing to disk.
+- **Phase 3 (Episodic Memory):** Added `write_session_journal` and the `write_session_journal_tool` MCP tool to allow agents to record what was accomplished during a session into daily episodic logs.
+- **Phase 4 (Query-aware Retrieval):** Added BM25-style relevance scoring to `read_combined_context` using an optional `query` parameter. This sorts memory sections by keyword overlap so the most relevant sections fit into the context window before lower-priority sections are cut. Also added an adaptive token budget (via `MEMORY_FABRIC_TOKEN_BUDGET`) and added a `backend` field to search results.
+
+**Core files affected:**
+- `src/memory_fabric/storage.py` — Rewrote `propose_memory_patch`, added `write_session_journal`, added BM25 logic to `read_combined_context`.
+- `src/memory_fabric/server.py` — Added `write_session_journal_tool` MCP endpoint and exposed `query` to `read_combined_context_tool`.
+- `src/memory_fabric/contracts.py` — Added `EpisodicJournalResult` and `backend` field to `SearchResult`.
+
+**Key changes:**
+- `read_combined_context` now sorts `sections_data` by score descending when a query is provided, skipping the cache to allow dynamic context assembly.
+- `propose_memory_patch` uses standard section/store path resolution and simulates the exact deduplication rules used by actual writes.
+- Search tools now indicate whether results came from `ripgrep` or `python` fallback.
+
+**Status & Testing:**
+- All 72 existing tests pass (`pytest tests/ -q` → 72 passed in ~6.3s).
+
+**Notes / Next steps:**
+- Proceed to Phase 1 (God Module split) and the remaining tests/improvements.
+
+
+
+**What was implemented:**
+- Fixed all 4 critical bugs identified in the analysis: Windows file locking data-corruption risk, dream_tool silently dropping `save_report`/`llm_review` params, stale cache serving outdated memory to agents, and missing path traversal protection on agent-supplied `cwd`.
+- Applied 3 Phase 2 quality improvements: mtime-based `.env` caching per MCP session, schema version migration on every file read (forward-only, no file rewrites), and Jaccard-similarity-based semantic deduplication for append operations.
+
+**Core files affected:**
+- `src/memory_fabric/locking.py` — Windows lock now covers full 4MiB range (not just 1 byte)
+- `src/memory_fabric/paths.py` — Added `validate_cwd()` with dangerous-path blocklist
+- `src/memory_fabric/server.py` — All 14 MCP tools now use `_safe_cwd()` (validation + env load); `dream_tool` correctly forwards all params
+- `src/memory_fabric/storage.py` — Stale cache fix (mtime check), PRIORITY_ORDER bug fixed (low=2 not 3), `_migrate_frontmatter()` added, `_jaccard_similar()` dedup added, `estimate_tokens()` accuracy improved
+- `src/memory_fabric/llm.py` — `load_env_from_cwd()` now cached per (cwd, mtime_fingerprint)
+
+**Key changes:**
+- `msvcrt.locking` now uses `_WIN_LOCK_NBYTES = 1 << 22` (4MiB) instead of `nbytes=1`
+- `consolidated_memory.md` cache is bypassed if any source `.md` file is newer than the cache
+- `validate_cwd()` rejects empty, non-existent, and known dangerous system paths
+- `_migrate_frontmatter()` adds missing `summary`, `priority`, `tags`, `last_updated` fields on read
+- Jaccard dedup requires ≥3 significant words to avoid false positives on short bullet items
+
+**Status & Testing:**
+- All 72 existing tests pass (`pytest tests/ -q` → 72 passed in 5.5s)
+- `validate_cwd('C:\\Windows')` correctly raises `ValueError`
+- Jaccard similarity correctly allows "Bullet 3" while blocking near-duplicate longer sentences
+
+**Notes / Next steps:**
+- Phase 1 (God Module split) and Phase 2.1 (propose_memory_patch impl) are next
+- Phase 3 (episodic memory) and Phase 4 (query-aware retrieval) follow
+
 ## 2026-06-18 10:09 - Hybrid Memory Store Migration
 
 **What was implemented:**

@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import os
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
+
+# A safe upper-bound for the number of bytes to lock on Windows.
+# msvcrt.locking requires a byte count; we use a large fixed value
+# so that the full range of any reasonably-sized lock file is covered.
+_WIN_LOCK_NBYTES = 1 << 22  # 4 MiB — larger than any lock file we create
 
 
 @contextmanager
@@ -30,7 +36,11 @@ def _lock(handle) -> None:
     try:
         import msvcrt
 
-        msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+        # Lock from the beginning of the file for _WIN_LOCK_NBYTES bytes.
+        # Using nbytes=1 (old bug) only locked the first byte, leaving concurrent
+        # writes to larger files completely unprotected on Windows.
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, _WIN_LOCK_NBYTES)
         return
     except ImportError:
         pass
@@ -44,8 +54,9 @@ def _unlock(handle) -> None:
     try:
         import msvcrt
 
+        # Must seek to 0 and use the same nbytes that was passed to locking().
         handle.seek(0)
-        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, _WIN_LOCK_NBYTES)
         return
     except ImportError:
         pass

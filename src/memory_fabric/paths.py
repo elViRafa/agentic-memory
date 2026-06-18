@@ -11,6 +11,14 @@ from typing import Mapping
 APP_DIR_NAME = "memory-fabric"
 LOCAL_MEMORY_DIR = ".ai-memory"
 
+# Directories that should never be used as a project root — writing memory
+# files here could corrupt the OS or expose sensitive files.
+_DANGEROUS_ROOTS: frozenset[str] = frozenset({
+    "/", "/etc", "/bin", "/sbin", "/usr", "/var", "/sys", "/proc", "/boot",
+    "/root", "/lib", "/lib64", "/dev", "/run",
+    "C:\\", "C:\\Windows", "C:\\Windows\\System32",
+})
+
 
 def get_global_root(
     platform_name: str | None = None,
@@ -44,9 +52,46 @@ def get_global_root(
     return (base / APP_DIR_NAME).resolve()
 
 
-def project_root(cwd: str | Path) -> Path:
-    """Resolve a project root from an explicit client-provided cwd."""
+def validate_cwd(cwd: str | Path) -> Path:
+    """Resolve and validate an agent-supplied working directory.
 
+    Raises ``ValueError`` if the path:
+    - Is empty or None
+    - Is not an existing directory
+    - Resolves to a known dangerous system root
+
+    This prevents prompt-injection-style path traversal where a malicious or
+    misconfigured agent passes ``cwd = "../../etc"`` to read or write files
+    outside of an intended project directory.
+    """
+    if not cwd:
+        raise ValueError("cwd must not be empty")
+
+    resolved = Path(cwd).expanduser().resolve()
+
+    # Reject known dangerous system paths
+    resolved_str = str(resolved)
+    for dangerous in _DANGEROUS_ROOTS:
+        if resolved_str == dangerous or resolved_str == dangerous.rstrip("/\\"):
+            raise ValueError(
+                f"cwd resolves to a dangerous system path and cannot be used "
+                f"as a Memory Fabric project root: {resolved}"
+            )
+
+    if not resolved.exists():
+        raise ValueError(f"cwd does not exist: {resolved}")
+    if not resolved.is_dir():
+        raise ValueError(f"cwd is not a directory: {resolved}")
+
+    return resolved
+
+
+def project_root(cwd: str | Path) -> Path:
+    """Resolve a project root from an explicit client-provided cwd.
+
+    For security-sensitive contexts (MCP tool calls from agents), prefer
+    ``validate_cwd()`` which enforces additional safety checks.
+    """
     return Path(cwd).expanduser().resolve()
 
 
@@ -61,10 +106,10 @@ def memory_store_dir(cwd: str | Path) -> Path:
     return local_memory_dir(cwd) / MEMORY_STORE_DIR
 
 
-
 def global_memory_dir(
     platform_name: str | None = None,
     env: Mapping[str, str] | None = None,
     home: Path | str | None = None,
 ) -> Path:
     return get_global_root(platform_name=platform_name, env=env, home=home) / "global"
+

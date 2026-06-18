@@ -19,6 +19,7 @@ from memory_fabric.contracts import (
     DreamConsolidation,
     DreamResult,
     DreamRewriteTask,
+    EpisodicJournalResult,
     InitResult,
     MemorySection,
     PatchPreview,
@@ -56,7 +57,10 @@ from memory_fabric.version import __version__
 
 SECTION_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 STORE_PATH_SEGMENT = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
-PRIORITY_ORDER = {"high": 0, "medium": 1, "low": 3}
+PRIORITY_ORDER = {"high": 0, "medium": 1, "low": 2}  # contiguous 0-2 mapping
+
+# Current schema version for all Memory Fabric markdown files.
+CURRENT_SCHEMA_VERSION = "1.3"
 
 
 def _validate_store_path(store_path: str) -> list[str]:
@@ -309,46 +313,113 @@ def sync_agent_rules(cwd: str) -> dict[str, Any]:
     return {"success": True, "message": f"Synchronized {len(synced_files)} file(s).", "synced_files": synced_files}
 
 
-def read_combined_context(cwd: str, max_tokens: int = 4000) -> ContextBundle:
+def _score_section_relevance(query: str, text: str) -> float:
+    """BM25-inspired keyword overlap score between a query and a memory section.
+
+    Returns a relevance score in [0, 1] suitable for sorting. Higher = more
+    relevant to the query. Uses word-set overlap (term frequency weighted) with
+    no external dependencies.
+    """
+    if not query or not text:
+        return 0.0
+
+    def _words(s: str) -> list[str]:
+        return [w.strip(".,;:!?\"'()[]{}").lower() for w in s.split() if len(w) > 2]
+
+    query_words = set(_words(query))
+    if not query_words:
+        return 0.0
+
+    doc_words = _words(text)
+    if not doc_words:
+        return 0.0
+
+    # TF-weighted intersection: count how many times query terms appear
+    hits = sum(1 for w in doc_words if w in query_words)
+    # Normalise by document length (dampened log scale to avoid huge docs dominating)
+    import math
+    score = hits / (1 + math.log(1 + len(doc_words)))
+    return score
+
+
+def read_combined_context(
+    cwd: str,
+    max_tokens: int | None = None,
+    query: str | None = None,
+) -> ContextBundle:
+    """Load and assemble the combined memory context.
+
+    Args:
+        cwd:        Project root directory.
+        max_tokens: Token budget for context assembly. Defaults to the value of
+                    ``MEMORY_FABRIC_TOKEN_BUDGET`` env var, or 4000 if not set.
+        query:      Optional natural-language query. When provided, sections are
+                    ranked by BM25-style keyword relevance before the token budget
+                    is applied — ensuring the most relevant content is included
+                    first. Cache is bypassed when a query is provided.
+    """
+    # Resolve token budget: env var > caller arg > default
+    _default_budget = 4000
+    try:
+        _env_budget = int(os.environ.get("MEMORY_FABRIC_TOKEN_BUDGET", ""))
+        _default_budget = _env_budget if _env_budget > 0 else _default_budget
+    except (ValueError, TypeError):
+        pass
+    if max_tokens is None:
+        max_tokens = _default_budget
+
     warnings: list[str] = []
     included: list[str] = []
     omitted: list[str] = []
     fragments: list[str] = []
     remaining = max_tokens
 
-    # Try to load from pre-compiled consolidated_memory.md cache to save time
+    # Try to load from pre-compiled consolidated_memory.md cache to save time.
+    # The cache is only valid if no source memory file has been modified since it was generated.
     memory_dir = local_memory_dir(cwd)
     consolidated_path = memory_dir / "consolidated_memory.md"
     tier0 = global_memory_dir() / "directives.md"
-    
-    if consolidated_path.exists() and not tier0.exists():
+
+    # Skip cache entirely when a query is provided — cached content is not
+    # ordered by relevance, so query-ranked assembly must be done fresh.
+    if consolidated_path.exists() and not tier0.exists() and not query:
         try:
-            content = consolidated_path.read_text(encoding="utf-8")
-            # Remove any existing memory prompt fragment in the compiled cache first to avoid duplicates or stale data
-            content = re.sub(r"<!-- memory-fabric:local/memory_prompt -->\n.*?(?=\n\n<!-- memory-fabric:|$)", "", content, flags=re.DOTALL)
-            
-            prompt_path = memory_dir / "memory_prompt.txt"
-            prompt_text = ""
-            if prompt_path.exists():
-                p_text = prompt_path.read_text(encoding="utf-8").strip()
-                if p_text:
-                    prompt_text = f"<!-- memory-fabric:local/memory_prompt -->\nMemory Prompt Steering Instructions:\n{p_text}\n\n"
-            
-            full_content = (prompt_text + content).strip() + "\n"
-            est_tokens = estimate_tokens(full_content)
-            if est_tokens <= max_tokens:
-                for match in re.finditer(r"<!-- memory-fabric:([a-zA-Z0-9_/.-]+) -->", full_content):
-                    included.append(match.group(1))
-                return {
-                    "text": full_content,
-                    "included_sections": included,
-                    "omitted_sections": [],
-                    "token_budget": max_tokens,
-                    "estimated_tokens": est_tokens,
-                    "warnings": [f"Tier 0 directives not found: {tier0}"],
-                }
+            cache_mtime = consolidated_path.stat().st_mtime
+            # Collect all source .md files that feed into the combined context.
+            source_files = [
+                p for p in memory_dir.rglob("*.md")
+                if p != consolidated_path and p.is_file()
+            ]
+            # If any source file is newer than the cache, skip the cache entirely.
+            cache_is_stale = any(p.stat().st_mtime > cache_mtime for p in source_files)
+            if not cache_is_stale:
+                content = consolidated_path.read_text(encoding="utf-8")
+                # Remove any existing memory prompt fragment in the compiled cache first to avoid duplicates or stale data
+                content = re.sub(r"<!-- memory-fabric:local/memory_prompt -->\n.*?(?=\n\n<!-- memory-fabric:|$)", "", content, flags=re.DOTALL)
+
+                prompt_path = memory_dir / "memory_prompt.txt"
+                prompt_text = ""
+                if prompt_path.exists():
+                    p_text = prompt_path.read_text(encoding="utf-8").strip()
+                    if p_text:
+                        prompt_text = f"<!-- memory-fabric:local/memory_prompt -->\nMemory Prompt Steering Instructions:\n{p_text}\n\n"
+
+                full_content = (prompt_text + content).strip() + "\n"
+                est_tokens = estimate_tokens(full_content)
+                if est_tokens <= max_tokens:
+                    for match in re.finditer(r"<!-- memory-fabric:([a-zA-Z0-9_/.-]+) -->", full_content):
+                        included.append(match.group(1))
+                    return {
+                        "text": full_content,
+                        "included_sections": included,
+                        "omitted_sections": [],
+                        "token_budget": max_tokens,
+                        "estimated_tokens": est_tokens,
+                        "warnings": [f"Tier 0 directives not found: {tier0}"],
+                    }
         except Exception:
             pass
+
 
     if tier0.exists():
         text = tier0.read_text(encoding="utf-8")
@@ -370,15 +441,39 @@ def read_combined_context(cwd: str, max_tokens: int = 4000) -> ContextBundle:
         except Exception as exc:
             warnings.append(f"Failed to read memory_prompt.txt: {exc}")
 
+    # Read all sections first so we can score and sort them if there's a query
+    sections_data = []
     for path in _ordered_context_files(cwd):
         section_name, metadata, body, read_warning = _read_memory_path(path)
         if read_warning:
             warnings.append(read_warning)
             omitted.append(str(path))
             continue
-
+        
         full_text = dump_frontmatter(metadata, body)
         section_key = _section_key(path, section_name)
+        
+        score = 0.0
+        if query:
+            score = _score_section_relevance(query, full_text)
+            
+        sections_data.append({
+            "key": section_key,
+            "text": full_text,
+            "metadata": metadata,
+            "score": score,
+            "original_index": len(sections_data),
+        })
+
+    # Sort sections if query provided (stable sort: highest score first, fallback to original order)
+    if query:
+        sections_data.sort(key=lambda x: (x["score"], -x["original_index"]), reverse=True)
+
+    for item in sections_data:
+        section_key = item["key"]
+        full_text = item["text"]
+        metadata = item["metadata"]
+
         token_estimate = estimate_tokens(full_text)
         if token_estimate <= max(remaining, 0):
             fragments.append(_format_fragment(section_key, full_text))
@@ -434,6 +529,9 @@ def read_section(cwd: str, section: str, max_tokens: int = 8000) -> MemorySectio
 
 
 def keyword_search(cwd: str, query: str, max_results: int = 10) -> list[SearchResult]:
+    """Search memory files by keyword. Returns results with a `backend` field
+    indicating which search engine was used ('ripgrep' or 'python').
+    """
     if not query.strip() or max_results <= 0:
         return []
 
@@ -444,9 +542,96 @@ def keyword_search(cwd: str, query: str, max_results: int = 10) -> list[SearchRe
     if shutil.which("rg"):
         results = _keyword_search_rg(query, roots, max_results)
         if results:
+            for r in results:
+                r["backend"] = "ripgrep"  # type: ignore[typeddict-unknown-key]
             return results
 
-    return _keyword_search_python(query, roots, max_results)
+    results = _keyword_search_python(query, roots, max_results)
+    for r in results:
+        r["backend"] = "python"  # type: ignore[typeddict-unknown-key]
+    return results
+
+
+def write_session_journal(
+    cwd: str,
+    summary: str,
+    key_decisions: list[str] | None = None,
+    files_changed: list[str] | None = None,
+    session_label: str | None = None,
+) -> EpisodicJournalResult:
+    """Append a timestamped session journal entry to the episodic memory store.
+
+    This implements the Episodic Memory tier — a structured log of "what happened
+    in this session" that agents can use to build temporal awareness.
+
+    Journal entries are written to ``episodic/YYYY-MM-DD`` store paths and
+    accumulate as append-mode Markdown. Dreaming's light mode consolidates
+    entries older than 7 days into monthly summaries.
+
+    Args:
+        cwd:            Project root (same as all other tools).
+        summary:        2-4 sentence summary of what was accomplished this session.
+        key_decisions:  Optional list of key decisions or architecture choices made.
+        files_changed:  Optional list of files created or significantly modified.
+        session_label:  Optional short label for this session (e.g. "auth-refactor").
+                        If omitted, the ISO timestamp is used.
+    """
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+    date_str = now.strftime("%Y-%m-%d")
+    time_str = now.strftime("%H:%M UTC")
+    store_path = f"episodic/{date_str}"
+
+    sanitized_summary, redactions_s = redact_secrets(summary or "")
+    redactions = redactions_s
+    warnings: list[str] = []
+    if redactions_s:
+        warnings.append("Detected and redacted secrets in summary.")
+
+    label = session_label.strip() if session_label else time_str
+
+    # Build the journal entry block
+    lines: list[str] = [f"## {label}"]
+    lines.append("")
+    lines.append(sanitized_summary.strip())
+
+    if key_decisions:
+        lines.append("")
+        lines.append("**Key decisions:**")
+        for decision in key_decisions:
+            sanitized_dec, r = redact_secrets(str(decision))
+            redactions += r
+            lines.append(f"- {sanitized_dec.strip()}")
+
+    if files_changed:
+        lines.append("")
+        lines.append("**Files changed:**")
+        for f in files_changed:
+            lines.append(f"- `{f}`")
+
+    entry_content = "\n".join(lines)
+
+    # Use write_memory_store in append mode so multiple sessions on the same
+    # day accumulate in a single dated file.
+    result = write_memory_store(
+        cwd,
+        store_path=store_path,
+        content=entry_content,
+        title=f"Episodic Journal — {date_str}",
+        tags=["episodic", "session-journal"],
+        priority="low",
+        mode="append",
+    )
+
+    return {
+        "changed": result["changed"],
+        "store_path": store_path,
+        "path": result["path"],
+        "date": date_str,
+        "redactions": redactions + result["redactions"],
+        "warnings": warnings + result["warnings"],
+    }
 
 
 def write_local_memory(
@@ -455,6 +640,7 @@ def write_local_memory(
     content: str,
     mode: WriteMode = "append",
 ) -> WriteResult:
+
     if mode not in {"append", "replace"}:
         raise ValueError("mode must be 'append' or 'replace'")
 
@@ -496,12 +682,15 @@ def write_local_memory(
             clean_existing = body.rstrip()
             clean_new = redacted.strip()
             
-            # Prevent duplicate lines/bullets during append
+            # Prevent duplicate lines/bullets during append.
+            # Two-pass check: (1) exact match after normalization, (2) Jaccard similarity
+            # for near-duplicates with slightly different wording.
             if clean_existing and clean_new:
-                existing_lines = {line.strip().lower() for line in clean_existing.splitlines() if line.strip()}
+                existing_raw_lines = [line for line in clean_existing.splitlines() if line.strip()]
+                existing_lines_lower = {line.strip().lower() for line in existing_raw_lines}
                 # Remove common list prefixes for better duplicate detection
-                existing_normalized = {re.sub(r"^[-*+]\s+", "", line).strip() for line in existing_lines}
-                
+                existing_normalized = {re.sub(r"^[-*+]\s+", "", line).strip() for line in existing_lines_lower}
+
                 new_lines = clean_new.splitlines()
                 filtered_lines = []
                 for line in new_lines:
@@ -510,11 +699,16 @@ def write_local_memory(
                         filtered_lines.append(line)
                         continue
                     norm_line = re.sub(r"^[-*+]\s+", "", stripped).strip().lower()
-                    if norm_line in existing_normalized or stripped.lower() in existing_lines:
+                    # Pass 1: exact match
+                    if norm_line in existing_normalized or stripped.lower() in existing_lines_lower:
+                        continue
+                    # Pass 2: semantic near-duplicate via Jaccard similarity
+                    if any(_jaccard_similar(norm_line, existing) for existing in existing_normalized):
                         continue
                     filtered_lines.append(line)
-                
+
                 clean_new = "\n".join(filtered_lines).strip()
+
                 
             if clean_existing and clean_new:
                 new_body = clean_existing + "\n\n" + clean_new + "\n"
@@ -786,39 +980,147 @@ def delete_memory_store(
 
 
 def propose_memory_patch(cwd: str, instructions: str) -> PatchPreview:
-    memory_dir = local_memory_dir(cwd)
-    index_path = memory_dir / "index.md"
-    sanitized, redactions = redact_secrets(instructions)
-    warnings = ["Detected and redacted secrets before creating patch preview."] if redactions else []
+    """Generate a diff preview of a proposed memory update without writing to disk.
 
-    if not index_path.exists():
+    Parses ``instructions`` to identify the target section or store path, reads
+    the current file content, applies the proposed change in-memory, and returns
+    a unified diff so the agent or user can review it before committing.
+
+    The ``instructions`` string should start with a directive line in one of
+    these formats::
+
+        section: <section_name>
+        store: <store/path>
+
+    Followed by the proposed content.  If no directive line is found, the entire
+    instructions string is treated as content to be appended to ``index.md``.
+    """
+    memory_dir = local_memory_dir(cwd)
+    sanitized, redactions = redact_secrets(instructions)
+    warnings: list[str] = []
+    if redactions:
+        warnings.append("Detected and redacted secrets before creating patch preview.")
+
+    # --- Parse directive line --------------------------------------------------
+    target_section: str | None = None
+    target_store: str | None = None
+    proposed_content = sanitized.strip()
+
+    lines = sanitized.splitlines()
+    if lines:
+        first = lines[0].strip()
+        if first.lower().startswith("section:"):
+            target_section = first.split(":", 1)[1].strip()
+            proposed_content = "\n".join(lines[1:]).strip()
+        elif first.lower().startswith("store:"):
+            target_store = first.split(":", 1)[1].strip()
+            proposed_content = "\n".join(lines[1:]).strip()
+
+    if not proposed_content:
         return {
             "patch": "",
             "affected_files": [],
             "redactions": redactions,
-            "warnings": warnings + [f"Index file not found: {index_path}"],
+            "warnings": warnings + ["No proposed content provided after directive line."],
         }
 
-    original = index_path.read_text(encoding="utf-8").splitlines(keepends=True)
-    proposed_text = index_path.read_text(encoding="utf-8").rstrip()
-    proposed_text += "\n\n## Proposed Memory Update\n\n"
-    proposed_text += sanitized.strip() + "\n"
-    proposed = proposed_text.splitlines(keepends=True)
+    # --- Resolve target file --------------------------------------------------
+    if target_store:
+        try:
+            target_path = _resolve_store_file(cwd, target_store)
+        except ValueError as exc:
+            return {
+                "patch": "",
+                "affected_files": [],
+                "redactions": redactions,
+                "warnings": warnings + [f"Invalid store path: {exc}"],
+            }
+    elif target_section:
+        if not SECTION_PATTERN.match(target_section):
+            return {
+                "patch": "",
+                "affected_files": [],
+                "redactions": redactions,
+                "warnings": warnings + [
+                    f"Invalid section name '{target_section}': must match [A-Za-z0-9][A-Za-z0-9_-]*"
+                ],
+            }
+        target_path = memory_dir / f"{target_section}.md"
+    else:
+        # Fallback: append preview to index.md
+        target_path = memory_dir / "index.md"
 
+    # --- Read current content -------------------------------------------------
+    if target_path.exists():
+        try:
+            original_text = target_path.read_text(encoding="utf-8")
+            original_lines = original_text.splitlines(keepends=True)
+        except OSError as exc:
+            return {
+                "patch": "",
+                "affected_files": [],
+                "redactions": redactions,
+                "warnings": warnings + [f"Cannot read target file: {exc}"],
+            }
+    else:
+        original_text = ""
+        original_lines = []
+        warnings.append(f"Target file does not exist yet; patch shows new file creation: {target_path}")
+
+    # --- Simulate the write (append mode by default) -------------------------
+    # Use the same deduplication logic as write_local_memory for append.
+    existing_body = original_text.rstrip()
+    clean_new = proposed_content.strip()
+
+    if existing_body:
+        # Deduplicate (same logic as write_local_memory append)
+        existing_lines_lower = {line.strip().lower() for line in existing_body.splitlines() if line.strip()}
+        existing_normalized = {re.sub(r"^[-*+]\s+", "", line).strip() for line in existing_lines_lower}
+        new_input_lines = clean_new.splitlines()
+        filtered = []
+        for line in new_input_lines:
+            stripped = line.strip()
+            if not stripped:
+                filtered.append(line)
+                continue
+            norm = re.sub(r"^[-*+]\s+", "", stripped).strip().lower()
+            if norm in existing_normalized or stripped.lower() in existing_lines_lower:
+                warnings.append(f"Line filtered as duplicate: {stripped!r}")
+                continue
+            if any(_jaccard_similar(norm, ex) for ex in existing_normalized):
+                warnings.append(f"Line filtered as semantic near-duplicate: {stripped!r}")
+                continue
+            filtered.append(line)
+        clean_new = "\n".join(filtered).strip()
+        proposed_text = existing_body + "\n\n" + clean_new + "\n" if clean_new else existing_body + "\n"
+    else:
+        proposed_text = clean_new + "\n"
+
+    proposed_lines = proposed_text.splitlines(keepends=True)
+
+    # --- Generate unified diff -----------------------------------------------
+    from_label = str(target_path) + " (current)"
+    to_label = str(target_path) + " (proposed)"
     patch = "".join(
         difflib.unified_diff(
-            original,
-            proposed,
-            fromfile=str(index_path),
-            tofile=str(index_path),
+            original_lines,
+            proposed_lines,
+            fromfile=from_label,
+            tofile=to_label,
+            lineterm="",
         )
     )
+
+    if not patch:
+        warnings.append("No changes detected — proposed content is identical to existing content (all duplicates filtered).")
+
     return {
         "patch": patch,
-        "affected_files": [str(index_path)],
+        "affected_files": [str(target_path)],
         "redactions": redactions,
         "warnings": warnings,
     }
+
 
 
 def status(cwd: str) -> StatusResult:
@@ -1590,9 +1892,60 @@ def rollback(cwd: str, snapshot: str) -> WriteResult:
 
 
 def estimate_tokens(text: str) -> int:
+    """Estimate the number of tokens in a string.
+
+    Uses a chars/4 heuristic (standard for most Latin-alphabet LLM tokenizers).
+    For very short strings that tend to be code/symbols, uses chars/3 to avoid
+    undercounting. This is still a heuristic \u2014 for exact counts, use tiktoken.
+    """
     if not text:
         return 0
+    if len(text) < 100:
+        return max(1, len(text) // 3)
     return max(1, len(text) // 4)
+
+
+# Jaccard similarity threshold for near-duplicate detection during append.
+# Lines with overlap ratio >= this threshold are treated as duplicates.
+# Set via MEMORY_FABRIC_DEDUP_THRESHOLD env var (float 0.0–1.0, default 0.85).
+_DEDUP_THRESHOLD_DEFAULT = 0.85
+
+
+def _jaccard_similar(line_a: str, line_b: str, threshold: float | None = None) -> bool:
+    """Return True if two strings are semantically near-duplicates.
+
+    Computes the Jaccard similarity of their word sets (intersection / union).
+    Requires no embeddings or external libraries — pure standard library.
+
+    Examples where exact matching would fail but this catches the duplicate:
+      - "Added auth middleware"  vs  "Auth middleware added to route handlers"
+      - "We use PostgreSQL"      vs  "PostgreSQL is the database of choice"
+
+    Requires at least 3 significant words in each string to avoid false
+    positives on very short content like numbered bullet items.
+    """
+    if threshold is None:
+        try:
+            threshold = float(os.environ.get("MEMORY_FABRIC_DEDUP_THRESHOLD", ""))
+        except (ValueError, TypeError):
+            threshold = _DEDUP_THRESHOLD_DEFAULT
+
+    # Tokenize into a set of lowercase words (strip punctuation, require len > 2)
+    def _words(text: str) -> set[str]:
+        return {w.strip(".,;:!?\"'()[]{}") for w in text.lower().split() if len(w) > 2}
+
+    words_a = _words(line_a)
+    words_b = _words(line_b)
+    # Require at least 3 meaningful words in BOTH strings before applying Jaccard.
+    # Short strings like "Bullet 2" only yield 1 word ("bullet"), making them
+    # prone to spurious matches.
+    if len(words_a) < 3 or len(words_b) < 3:
+        return False
+    intersection = words_a & words_b
+    union = words_a | words_b
+    if not union:
+        return False
+    return len(intersection) / len(union) >= threshold
 
 
 def _section_path(cwd: str | Path, section: str) -> Path:
@@ -1601,11 +1954,48 @@ def _section_path(cwd: str | Path, section: str) -> Path:
     return local_memory_dir(cwd) / f"{section}.md"
 
 
+def _migrate_frontmatter(metadata: dict[str, Any], path: Path) -> dict[str, Any]:
+    """Upgrade frontmatter from older schema versions to the current version.
+
+    This is a forward-only migration that adds missing required fields with
+    safe defaults. It does NOT rewrite the file — upgrades are applied in
+    memory only, so old files continue to work without an explicit migration
+    command. Re-writes happen naturally on the next write operation.
+
+    Supported upgrades:
+    - Any schema < 1.3: add missing required fields with safe defaults.
+    """
+    from memory_fabric.templates import now_iso  # avoid circular import at module level
+
+    version = str(metadata.get("schema_version", "1.0"))
+
+    # Fields required since v1.3
+    if "summary" not in metadata:
+        metadata["summary"] = f"Memory section: {path.stem}."
+    if "priority" not in metadata:
+        metadata["priority"] = "medium"
+    if "tags" not in metadata:
+        metadata["tags"] = []
+    if "last_updated" not in metadata:
+        metadata["last_updated"] = now_iso()
+
+    # Normalize priority to a valid value
+    if metadata.get("priority") not in {"high", "medium", "low"}:
+        metadata["priority"] = "medium"
+
+    # Stamp the current schema version in memory (written on next save)
+    metadata["schema_version"] = CURRENT_SCHEMA_VERSION
+
+    return metadata
+
+
 def _read_memory_path(path: Path) -> tuple[str, dict[str, Any], str, str | None]:
     try:
         metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, FrontmatterError) as exc:
         return path.stem, {}, "", f"{path}: {exc}"
+    # Apply schema migration transparently on every read (no file write).
+    metadata = _migrate_frontmatter(metadata, path)
     section = str(metadata.get("section") or path.stem)
     return section, metadata, body, None
 

@@ -75,7 +75,7 @@ class DreamStoreTests(unittest.TestCase):
             res_doctor = doctor(temp)
             self.assertTrue(res_doctor["ok"])
 
-    @mock.patch("memory_fabric.storage.call_llm", new_callable=mock.AsyncMock)
+    @mock.patch("memory_fabric.storage._core.call_llm", new_callable=mock.AsyncMock)
     def test_dream_store_deep_mode_consolidates_and_updates_nested_files(self, mock_call_llm) -> None:
         with tempfile.TemporaryDirectory() as temp:
             initialize_memory_fabric(temp)
@@ -135,8 +135,8 @@ class DreamStoreTests(unittest.TestCase):
                 os.environ.pop("MEMORY_FABRIC_LLM_PROVIDER", None)
                 os.environ.pop("GEMINI_API_KEY", None)
 
-    @mock.patch("memory_fabric.storage.now_iso")
-    @mock.patch("memory_fabric.storage.call_llm", new_callable=mock.AsyncMock)
+    @mock.patch("memory_fabric.storage._core.now_iso")
+    @mock.patch("memory_fabric.storage._core.call_llm", new_callable=mock.AsyncMock)
     def test_dream_store_deep_mode_summarizer_refreshes_nested_file_summaries(self, mock_call_llm, mock_now_iso) -> None:
         with tempfile.TemporaryDirectory() as temp:
             initialize_memory_fabric(temp)
