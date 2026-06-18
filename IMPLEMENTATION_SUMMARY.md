@@ -1,3 +1,21 @@
+## 2026-06-18 10:09 - Hybrid Memory Store Migration
+
+**What was implemented:**
+- Migrated the flat file documentation structure to a "Hybrid Granular" model where root files act as executive summaries (Maps) and detailed information is stored in granular files within `memory-store/`.
+
+**Core files affected:**
+- `decisions.md`, `debt.md`, `schemas.md`, `framework-rules.md`, `architecture.md` (Updated as Maps)
+- `.ai-memory/memory-store/` (Created 10 new granular files for architecture, CLI, and schemas)
+
+**Key changes:**
+- Rewrote root markdown files to serve as navigation hubs.
+- Moved ADRs, typed dicts, tool schemas, and technical debt tasks to corresponding nested directories in `memory-store/`.
+- Fixed frontmatter missing fields (`store_path`, `last_updated`).
+- Regenerated root and memory-store indices using `ai-memory dream --mode light --apply`.
+
+**Status & Testing:**
+- Tested locally; `ai-memory doctor` passes with `ok: True` and zero errors.
+
 ## 2026-06-18 00:29 - Enforce Critical Rules for Memory Fabric Tool Usage
 
 **What was implemented:**

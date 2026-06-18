@@ -71,3 +71,10 @@ Developer-level preferences that apply across all projects are stored in:
 The `global/directives.md` file acts as **Tier 0**: it is always loaded fully, bypassing token budgeting.
 
 The memory-fabric-mcp server CLI has been extended to support Server-Sent Events (SSE) transport alongside the default stdio transport. It supports `--transport sse`, `--host <host>`, `--port <port>`, and `--allow-all-origins` to ease CORS policies and DNS rebinding protections when connecting external clients like Open WebUI.
+
+## Granular Architecture Records
+
+Specific architectural deep-dives, testing strategies, and sub-system indexes are stored in the granular memory store.
+
+👉 [View Sub-Folder Hierarchy Decisions](memory-store/architecture/decisions/dream-store-subfolders.md)
+👉 [View Testing Architecture](memory-store/architecture/tests/isolated-unit-tests.md)

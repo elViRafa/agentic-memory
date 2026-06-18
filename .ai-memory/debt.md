@@ -1,32 +1,27 @@
 ---
 section: debt
-summary: "Tracks planned improvements for `dream_tool`, focusing on memory consolidation, non-destructive outputs, and agent-assisted rewrites."
+summary: "Executive summary map of technical debt and roadmap priorities across the MCP Server and CLI."
 priority: low
-tags: [debt, risk]
+tags: [debt, risk, map]
 schema_version: 1.3
-last_updated: "2026-06-02T10:59:34-04:00"
-summary_hash: 2591b3f73e838b3ae42af2337c1837cf
+last_updated: "2026-06-18T10:06:00-04:00"
 ---
 
-# Technical Debt
+# Technical Debt & Roadmap Map
 
-Record known risks and cleanup opportunities here.
+This section acts as a high-level executive summary of known technical debt, risks, and major planned improvements across the Memory Fabric ecosystem.
 
-## Dreaming roadmap: consolidation, non-destructive output, and agent-assisted rewrite
+## Debt Strategy
 
-Current limitation: `dream_tool` currently creates a snapshot and regenerates `index.md`, but it does not consolidate redundant memory, produce a separate candidate output store, or invoke an LLM/agent rewrite path.
+We prioritize debt that impacts **Agent Autonomy** (how well the MCP Server tools serve an LLM) and **Memory Integrity** (how safely the CLI modifies Markdown files without causing data loss).
 
-Planned improvements:
+## Granular Debt Records
 
-- Deduplication / consolidation: scan memory sections for repeated or overlapping entries, group related notes, and produce condensed candidate content that preserves provenance and avoids unbounded memory growth.
-- Non-destructive cloning: run Dreaming against a separate candidate memory store created from the latest snapshot, not directly against the live `.ai-memory` files. Promotion to live memory should require an explicit apply/promote step and should keep rollback snapshots available.
-- Agent-assisted LLM rewriting: do not rely only on `MEMORY_FABRIC_LLM_PROVIDER`. Add a workflow where `dream_tool` can return structured rewrite tasks, diffs, or prompts for the host agent to execute with its own available tools, then validate and apply the resulting patch through Memory Fabric write paths.
-- Search index upgrade: regenerate `index.md` as a navigable map with stable slugs pointing to sections and important entries, so future agents can read the index first before broad keyword search.
+Detailed technical debt tickets and roadmaps are stored in the granular memory store. Please refer to the specific files below:
 
-Acceptance criteria:
+### CLI: Dreaming & Consolidation
+Roadmap for upgrading the `dream` command to support candidate stores, dry-runs, and deduplication of redundant memory entries.
+👉 [View Dreaming Roadmap](memory-store/debt/dreaming-roadmap.md)
 
-- Dreaming has a dry-run or candidate-output mode that never mutates live memory before explicit promotion.
-- Tests prove live memory remains unchanged when candidate generation fails.
-- Consolidation detects duplicate bullets or near-identical saved notes and proposes a merged result.
-- Agent-assisted rewriting produces inspectable diffs and still passes secret redaction before write.
-- Dreaming evaluation compares pre-dream snapshot, candidate output, and promoted output.
+### MCP Server: Tool Limitations (Placeholder)
+*(Currently no open major debt tickets for the MCP server tool bindings. Future performance bottlenecks or context-window optimizations will be mapped here).*

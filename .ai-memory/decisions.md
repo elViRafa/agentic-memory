@@ -1,45 +1,38 @@
 ---
 section: decisions
-summary: "Records key architectural decisions, implementation details, and technical rationale for the memory system's evolution."
-priority: medium
-tags: [decisions, adr]
+summary: "Map of key architectural decisions, philosophies, and rationales for the memory system's evolution."
+priority: high
+tags: [decisions, adr, map]
 schema_version: 1.3
-last_updated: "2026-06-03T10:52:23-04:00"
-summary_hash: 8f674f25b684be55c855eb0c0679093b
+last_updated: "2026-06-18T10:06:00-04:00"
 ---
 
-# Decisions
+# Architecture Decisions Map
 
-Record durable decisions and rationale here.
+This section acts as an executive summary of the foundational engineering philosophies guiding the Memory Fabric project.
 
-- Decided to implement the post-commit git hook as an opt-in hook script `.git/hooks/post-commit` calling `ai-memory dream --mode light --apply`.
-- Added file permission checks, optional FastMCP checks, and index consistency verification to `doctor` command.
-- Added byte size and token estimate metrics to `status` command.
-- Decided to sanitize all Dreaming inputs and candidate markdown files, counting total redactions and returning them under `redactions` key.
-- Decided to auto-detect memory files not updated in the last 30 days and mark them as stale by setting `review_status: stale` in metadata.
+## Engineering Philosophy
 
-- Improved post-commit hooks installer to merge with existing post-commit hook instead of replacing it.
-- Enhanced interactive sync-global command to safely handle target file collisions by prompting for overwrite, append/merge, or skip.
-- Added directory permission verification checks to doctor command.
-- Enriched dreaming git input ingestion to include both git diff HEAD and recent commit logs (git log).
-- Optimized dreaming stale check to avoid writing metadata updates and warning logs for files already marked stale.
+1. **Zero-Dependency Core:** We favor standard library implementations (e.g., `urllib.request` over `requests`) to keep the MCP Server and CLI lightweight and easy to distribute.
+2. **Resilience First:** The system relies on exponential backoffs and sanitization to handle external LLM API rate limits gracefully, ensuring the AI agent's memory maintenance never crashes the main developer workflow.
+3. **Opt-In Automation:** Features like Git post-commit hooks must be opt-in, non-destructive, and merge smoothly with existing user configurations.
 
-- Corrected write_local_memory to automatically extract and parse frontmatter delimiters from incoming payload content, merging metadata fields directly instead of polluting the body.
-- Reinforced write_local_memory in append mode to filter out duplicate lines/bullets before writing, returning changed=False with a warning if no unique content is written.
+## Granular Decisions (ADR)
 
-- Decided to implement a zero-dependency LLM provider adapter in llm.py via standard library urllib.request to call Gemini, OpenAI, and Anthropic, keeping the memory fabric lightweight.
-- Integrated qualitative reviews into eval.py to generate architectural recommendations.
+Detailed Architectural Decision Records (ADRs) are categorized by component and stored in the granular memory store. Please refer to the specific files below for detailed logs and implementation rationales:
 
-- Decided to append `encoding="utf-8"` and `errors="replace"` to all git-related subprocess calls in storage.py to prevent UnicodeDecodeError crashes on Windows when processing files containing non-ASCII/UTF-8 characters.
+### CLI & User Experience
+Decisions concerning terminal outputs, the `doctor` command, the `status` command, and file permission checks.
+👉 [View CLI & UX Decisions](memory-store/decisions/cli-ux.md)
 
-- Decided to implement exponential backoff retry logic (up to 5 attempts) with jitter in `llm.py` for HTTP 429 (rate limits) and 5xx (transient errors) to handle Google Gemini / OpenAI / Anthropic API limit exceptions gracefully during Dreaming.
+### LLM Infrastructure
+Decisions regarding LLM provider integrations (OpenAI, Anthropic, Gemini, Ollama), retry logic, and token optimization.
+👉 [View LLM Infrastructure Decisions](memory-store/decisions/llm-infrastructure.md)
 
-- Decided to optimize the `dream` summary generation by calculating a body md5 hash and storing it as `summary_hash` in the frontmatter of memory files. If the hash matches the body and a custom summary already exists, we skip calling the LLM entirely, saving redundant API requests.
+### Git Integration
+Decisions concerning Git hooks (`post-commit`), subprocess calls, UTF-8 encoding, and context ingestion from `git diff`.
+👉 [View Git Integration Decisions](memory-store/decisions/git-integration.md)
 
-- Decided to optimize LLM consolidation during `dream` by generating a combined `consolidation_hash` from the post-consolidation memory file contents and external inputs (git diffs, transcripts, tool logs), storing it in the index frontmatter metadata. Successive `dream` runs compare the state against this hash to skip the consolidation LLM call when nothing has changed.
-
-- Decided to support local model options by adding the `"ollama"` LLM provider type in `llm.py` and `storage.py`, mapping requests to `/api/chat` using custom environment variables `OLLAMA_HOST` and `OLLAMA_MODEL`.
-
-- Decided to centralize version definition in `version.py` (avoiding circular imports) and expose the version key inside the JSON result of the `status` command, allowing downstream packages to check for updates.
-
-- **LLM Debug Logging**: Added the `--debug-llm` CLI option and `MEMORY_FABRIC_LLM_DEBUG` environment variable to enable request/response printing to stderr or file (e.g. `llm_debug.log`) with automatic authorization token redaction.
+### Core Storage & Memory Deduplication
+Decisions regarding Markdown file storage, YAML frontmatter parsing, duplicate line filtering, and staleness detection.
+👉 [View Core Storage Decisions](memory-store/decisions/core-storage.md)

@@ -15,43 +15,43 @@ SECTION_TEMPLATES: dict[str, dict[str, Any]] = {
         "priority": "high",
         "summary": "Map of available project memory sections.",
         "tags": ["index", "memory"],
-        "body": "# Project Memory Index\n\nThis file summarizes the memory sections available for this project.\n",
+        "body": "# Project Memory Index\n\nThis file summarizes the root memory sections available for this project. Granular files are indexed in `memory-store/index.md`.\n",
     },
     "architecture": {
         "priority": "high",
-        "summary": "Project architecture, boundaries, and important system flows.",
+        "summary": "Executive summary map of project architecture and system boundaries.",
         "tags": ["architecture"],
-        "body": "# Architecture\n\nRecord durable architecture context here.\n",
+        "body": "# Architecture\n\nThis is an executive map. Record granular architecture context in `memory-store/architecture/`.\n",
     },
     "schemas": {
         "priority": "high",
-        "summary": "Important data models, schemas, and contracts.",
+        "summary": "Executive summary map of important data models and contracts.",
         "tags": ["schemas", "contracts"],
-        "body": "# Schemas\n\nRecord important data contracts here.\n",
+        "body": "# Schemas\n\nThis is an executive map. Record granular data contracts in `memory-store/schemas/`.\n",
     },
     "decisions": {
-        "priority": "medium",
-        "summary": "Architecture and product decisions with rationale.",
+        "priority": "high",
+        "summary": "Executive summary map of architectural decisions and rationale.",
         "tags": ["decisions", "adr"],
-        "body": "# Decisions\n\nRecord durable decisions and rationale here.\n",
+        "body": "# Decisions\n\nThis is an executive map. Record granular decisions and ADRs in `memory-store/decisions/`.\n",
     },
     "debt": {
         "priority": "low",
-        "summary": "Known technical debt, risks, and cleanup targets.",
+        "summary": "Executive summary map of known technical debt and cleanup targets.",
         "tags": ["debt", "risk"],
-        "body": "# Technical Debt\n\nRecord known risks and cleanup opportunities here.\n",
+        "body": "# Technical Debt\n\nThis is an executive map. Record granular technical debt items in `memory-store/debt/`.\n",
     },
     "ubiquitous-language": {
         "priority": "medium",
-        "summary": "Project-specific vocabulary and domain terms.",
+        "summary": "Executive summary map of project-specific vocabulary and domain terms.",
         "tags": ["domain", "language"],
-        "body": "# Ubiquitous Language\n\nRecord project terminology here.\n",
+        "body": "# Ubiquitous Language\n\nThis is an executive map. Record granular domain terms in `memory-store/ubiquitous-language/`.\n",
     },
     "framework-rules": {
         "priority": "medium",
-        "summary": "Framework-specific conventions and constraints.",
+        "summary": "Executive summary map of framework-specific conventions and constraints.",
         "tags": ["framework", "rules"],
-        "body": "# Framework Rules\n\nRecord framework conventions here.\n",
+        "body": "# Framework Rules\n\nThis is an executive map. Record granular rules in `memory-store/rules/`.\n",
     },
 }
 
@@ -89,8 +89,8 @@ Use `write_memory_store_tool` to register standalone memories.
 - **`store_path` Rules:** Must be lowercase, alphanumeric segments separated by slashes. No spaces, capitals, or `.md` extension (e.g., `architecture/decisions/jwt-auth`). Max 5 levels of nesting.
 - **Parameters:** `cwd`, `store_path`, `content`, `title` (optional), `tags` (optional), `priority` (`high`/`medium`/`low`), `mode` (`replace`/`append`).
 
-### 3. Legacy Section Writes
-For legacy flat section files (e.g. `debt`), call `write_local_memory_tool(cwd, section, content, mode="append")`.
+### 3. Executive Map Updates
+For updating root map files (e.g., `debt`, `architecture`), call `write_local_memory_tool(cwd, section, content, mode="replace")`.
 
 ### 4. Security & Maintenance
 - **Security:** Do NOT store credentials, tokens, or passwords.
