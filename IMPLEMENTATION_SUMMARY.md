@@ -1,3 +1,22 @@
+## 2026-06-18 00:29 - Enforce Critical Rules for Memory Fabric Tool Usage
+
+**What was implemented:**
+- Updated the primary agent instructions to include a prominent "CRITICAL RULES - READ FIRST" section. This directly addresses edge cases where agents might mistakenly use the native Copilot memory tool, attempt to write raw files into the `.ai-memory` directory, or forget to load the `read_combined_context_tool` at startup.
+
+**Core files affected:**
+- `src/memory_fabric/templates.py` — Updated the canonical `MEMORY_INSTRUCTIONS` template with the new critical rules.
+- `AGENTS.md` — Updated the root agent documentation file to reflect the new critical rules.
+- `.agents/rules/memory-store.md`, `.github/copilot-instructions.md`, etc. — Synchronized the new rules across all IDE-specific instruction files.
+
+**Key changes:**
+- Added a strict prohibition against using the native VS Code Copilot `memory` tool.
+- Added a strict prohibition against using raw file system tools (like `create_file` or `write_to_file`) to bypass the `write_memory_store_tool`.
+- Emphasized that calling `read_combined_context_tool` at session startup is mandatory with no exceptions.
+- Ran `python -m memory_fabric.cli sync-agents` to propagate these updates to all supported IDE rule files.
+
+**Status & Testing:**
+- Tested locally, changes successfully synced to 5 integration files without errors.
+
 ## 2026-06-06 17:16 - Install and Update Memory Fabric (ai-memory) in search-sermons Workspace
 
 **What was implemented:**

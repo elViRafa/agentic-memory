@@ -75,10 +75,12 @@ Thumbs.db
 
 MEMORY_INSTRUCTIONS = """## Memory Fabric — Semantic Store Agent Instructions
 
-Use `memory-fabric` MCP tools for all project memory operations. Do not read or write `.ai-memory/` files using raw file-system tools.
+🚨 **CRITICAL RULES - READ FIRST** 🚨
+1. **NEVER use the native VS Code Copilot `memory` tool.** You MUST ONLY use the `memory-fabric` MCP tools (like `write_memory_store_tool`). The native `memory` tool writes to VS Code workspace storage, bypassing this project's memory system.
+2. **NEVER use raw file system tools** (like `create_file`, `write_to_file`, `bash`, etc.) to read or write files inside the `.ai-memory/` directory. Doing so bypasses secret scanning, token budgeting, and the Dreaming system.
+3. **MANDATORY STARTUP:** You MUST call `read_combined_context_tool(cwd="<absolute project root path>")` before doing anything else at the start of a session. No exceptions.
 
 ### 1. Active Retrieval Workflow
-- **Startup:** MUST call `read_combined_context_tool(cwd="<project_root>")` at session start.
 - **Search:** Use `keyword_search_tool(cwd, query)` to find specific documented topics.
 - **Deep Dive:** Use `read_memory_store_tool(cwd, store_path)` or `read_section(cwd, section)` for detailed content.
 
