@@ -74,7 +74,7 @@ if FastMCP is not None:
         Args:
             cwd:        Absolute path to the project root.
             max_tokens: Token budget for context assembly.  Defaults to the
-                        ``MEMORY_FABRIC_TOKEN_BUDGET`` env var, or 4 000 if
+                        ``MEMORY_FABRIC_TOKEN_BUDGET`` env var, or 4000 if
                         not set.
             query:      Optional natural-language query.  When provided,
                         sections are ranked by BM25-style keyword relevance so
@@ -145,11 +145,11 @@ if FastMCP is not None:
 
         Parses ``instructions`` to determine the target section or store path,
         applies the change in-memory, and returns a diff so it can be reviewed
-        before committing.  The instructions string should begin with a
-        directive line::
+        before committing.  The instructions string should begin with exactly
+        one of the following mutually exclusive directive lines::
 
-            section: <section_name>
-            store: <store/path>
+            section: <section_name>   # targets a flat .ai-memory/ section
+            store: <store/path>       # targets a memory-store/ semantic path
 
         Followed by the proposed content.  If no directive is found the content
         is treated as an append to ``index.md``.
