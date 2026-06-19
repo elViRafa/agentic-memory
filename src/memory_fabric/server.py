@@ -51,7 +51,7 @@ if FastMCP is not None:
         (architecture, decisions, debt, etc.), the semantic `memory-store/`
         directory, a `.gitignore`, and deploys agent instruction files for all
         supported platforms (GitHub Copilot, Claude Code, Gemini CLI, etc.).
-        Safe to call multiple times — existing files are never overwritten.
+        Safe to call multiple times — missing files are created, and existing content is preserved (some files may be appended or updated).
 
         Args:
             cwd:           Absolute path to the project root.
