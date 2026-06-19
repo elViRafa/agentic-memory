@@ -45,31 +45,119 @@ if FastMCP is not None:
 
     @mcp.tool()
     def initialize_memory_fabric_tool(cwd: str, memory_prompt: str | None = None):
+        """Bootstrap Memory Fabric in the project at *cwd*.
+
+        Creates the local `.ai-memory/` directory with starter section files
+        (architecture, decisions, debt, etc.), the semantic `memory-store/`
+        directory, a `.gitignore`, and deploys agent instruction files for all
+        supported platforms (GitHub Copilot, Claude Code, Gemini CLI, etc.).
+        Safe to call multiple times — missing files are created, and existing content is preserved (some files may be appended or updated).
+
+        Args:
+            cwd:           Absolute path to the project root.
+            memory_prompt: Optional plain-text prompt to persist as
+                           `memory_prompt.txt`, which agents prepend to every
+                           context load.  Pass an empty string to delete an
+                           existing prompt file.
+        """
         safe = _safe_cwd(cwd)
         return initialize_memory_fabric(safe, memory_prompt=memory_prompt)
 
     @mcp.tool()
     def read_combined_context_tool(cwd: str, max_tokens: int | None = None, query: str | None = None):
+        """Load and assemble the full memory context for the project.
+
+        Reads all local memory section files and memory-store entries, assembles
+        them into a single ``ContextBundle``, and trims to the token budget.
+        **Call this at the start of every session** before any other tool.
+
+        Args:
+            cwd:        Absolute path to the project root.
+            max_tokens: Token budget for context assembly.  Defaults to the
+                        ``MEMORY_FABRIC_TOKEN_BUDGET`` env var, or 4000 if
+                        not set.
+            query:      Optional natural-language query.  When provided,
+                        sections are ranked by BM25-style keyword relevance so
+                        the most relevant content is included first.  Bypasses
+                        the result cache.
+        """
         safe = _safe_cwd(cwd)
         return read_combined_context(safe, max_tokens=max_tokens, query=query)
 
     @mcp.tool()
     def read_section_tool(cwd: str, section: str, max_tokens: int = 8000):
+        """Read a single flat memory section file by name.
+
+        Flat sections live directly inside `.ai-memory/` (e.g. `architecture`,
+        `decisions`, `debt`).  Use ``read_memory_store_tool`` instead for
+        semantic store files under `memory-store/`.
+
+        Args:
+            cwd:        Absolute path to the project root.
+            section:    Section name without the `.md` extension
+                        (e.g. ``"architecture"``).
+            max_tokens: Maximum tokens to return.  If the file exceeds this
+                        limit only its frontmatter summary is returned.
+        """
         safe = _safe_cwd(cwd)
         return read_section(safe, section=section, max_tokens=max_tokens)
 
     @mcp.tool()
     def keyword_search_tool(cwd: str, query: str, max_results: int = 10):
+        """Search all memory files by keyword and return ranked results.
+
+        Uses ripgrep when available, falling back to a pure-Python search.
+        Results include both flat section files and semantic store files.
+        Each result contains a ``backend`` field indicating the search engine
+        used (``"ripgrep"`` or ``"python"``).
+
+        Args:
+            cwd:         Absolute path to the project root.
+            query:       Keyword or phrase to search for.
+            max_results: Maximum number of results to return (default 10).
+        """
         safe = _safe_cwd(cwd)
         return keyword_search(safe, query=query, max_results=max_results)
 
     @mcp.tool()
     def write_local_memory_tool(cwd: str, section: str, content: str, mode: str = "append"):
+        """Write or append content to a flat memory section file.
+
+        Flat sections live directly inside `.ai-memory/` (e.g. `architecture`,
+        `decisions`, `debt`).  Duplicate lines are automatically filtered out
+        when appending.  Secrets detected in ``content`` are redacted before
+        writing.  Use ``write_memory_store_tool`` to write to a semantic
+        store path instead.
+
+        Args:
+            cwd:     Absolute path to the project root.
+            section: Target section name without `.md` (e.g. ``"decisions"``).
+            content: Markdown content to write.
+            mode:    ``"append"`` (default) adds content after existing text;
+                     ``"replace"`` overwrites the section body entirely.
+        """
         safe = _safe_cwd(cwd)
         return write_local_memory(safe, section=section, content=content, mode=mode)  # type: ignore[arg-type]
 
     @mcp.tool()
     def propose_memory_patch_tool(cwd: str, instructions: str):
+        """Preview a proposed memory update as a unified diff without writing to disk.
+
+        Parses ``instructions`` to determine the target section or store path,
+        applies the change in-memory, and returns a diff so it can be reviewed
+        before committing.  The instructions string should begin with exactly
+        one of the following mutually exclusive directive lines::
+
+            section: <section_name>   # targets a flat .ai-memory/ section
+            store: <store/path>       # targets a memory-store/ semantic path
+
+        Followed by the proposed content.  If no directive is found the content
+        is treated as an append to ``index.md``.
+
+        Args:
+            cwd:          Absolute path to the project root.
+            instructions: Directive + content describing the proposed change.
+        """
         safe = _safe_cwd(cwd)
         return propose_memory_patch(safe, instructions=instructions)
 
@@ -85,6 +173,31 @@ if FastMCP is not None:
         llm_review: bool = False,
         context: Context = None,
     ):
+        """Run the Dreaming consolidation pass over memory files.
+
+        Dreaming deduplicates, summarises, and optionally rewrites memory
+        content in a candidate store, then applies the changes to live memory
+        when ``apply=True``.  A snapshot is always created before any writes.
+
+        Use ``prepare_dream_payload_tool`` + ``apply_dream_results_tool``
+        instead if the MCP client's LLM should perform the consolidation step
+        (split-tool protocol to avoid JSON-RPC deadlocks).
+
+        Args:
+            cwd:               Absolute path to the project root.
+            mode:              ``"light"`` regenerates the index and summaries
+                               only; ``"deep"`` performs full deduplication and
+                               consolidation.
+            apply:             Persist changes to live memory when ``True``.
+                               Dry-run (candidate-only) when ``False``.
+            llm_rewrite:       Ask the LLM to rewrite low-quality sections when
+                               ``True`` (requires an LLM to be configured).
+            max_rewrite_tasks: Maximum number of sections to rewrite per run.
+            with_eval:         Run a quality evaluation after applying changes
+                               (requires ``apply=True``).
+            save_report:       Persist the evaluation report to disk.
+            llm_review:        Include LLM commentary in the evaluation report.
+        """
         safe = _safe_cwd(cwd)
         result = await dream(
             safe,
@@ -140,6 +253,20 @@ if FastMCP is not None:
 
     @mcp.tool()
     async def evaluate_memory_fabric_tool(cwd: str, save_report: bool = False, llm_review: bool = False, context: Context = None):
+        """Evaluate the overall quality of the Memory Fabric for this project.
+
+        Scores multiple quality dimensions — section coverage, metadata
+        completeness, retrieval readiness, and safety — and returns a
+        structured ``EvalResult`` with per-category breakdowns, a composite
+        score (0-100), and actionable recommendations.
+
+        Args:
+            cwd:         Absolute path to the project root.
+            save_report: Persist the evaluation report as a Markdown file
+                         inside `.ai-memory/` when ``True``.
+            llm_review:  Append LLM-generated commentary to the report when
+                         ``True`` (requires an LLM to be configured).
+        """
         safe = _safe_cwd(cwd)
         return await evaluate_memory_fabric(safe, save_report=save_report, llm_review=llm_review, context=context)
 
@@ -151,6 +278,21 @@ if FastMCP is not None:
         llm_review: bool = False,
         context: Context = None,
     ):
+        """Score the quality improvement produced by a Dream run.
+
+        Compares memory state captured in ``snapshot`` against the current live
+        memory to measure how much the Dreaming pass improved (or regressed)
+        overall quality.  Returns a ``DreamEvalResult`` with score delta,
+        per-category comparisons, and detected regressions.
+
+        Args:
+            cwd:         Absolute path to the project root.
+            snapshot:    Snapshot name or ``"latest"`` as returned by
+                         ``dream_tool`` or ``prepare_dream_payload_tool``.
+            save_report: Persist the evaluation report to disk when ``True``.
+            llm_review:  Include LLM commentary in the report when ``True``
+                         (requires an LLM to be configured).
+        """
         safe = _safe_cwd(cwd)
         return await evaluate_dream_quality(safe, snapshot=snapshot, save_report=save_report, llm_review=llm_review, context=context)
 
