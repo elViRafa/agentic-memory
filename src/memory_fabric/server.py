@@ -175,6 +175,12 @@ if FastMCP is not None:
     ):
         """Run the Dreaming consolidation pass over memory files.
 
+        ⚠️  Do NOT use this tool as a substitute for saving new knowledge.
+        Call ``write_memory_store_tool`` first to persist specific, isolated
+        memories from the current session (e.g. bugs fixed, features built,
+        architecture decisions).  Dreaming consolidates EXISTING memory — it
+        does not capture new knowledge.
+
         Dreaming deduplicates, summarises, and optionally rewrites memory
         content in a candidate store, then applies the changes to live memory
         when ``apply=True``.  A snapshot is always created before any writes.
