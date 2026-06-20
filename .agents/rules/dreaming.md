@@ -4,6 +4,8 @@ trigger: always_on
 
 ## Memory Fabric — Dreaming Process Instructions
 
+⚠️ **Pre-requisite — Save discrete knowledge first:** Before calling any Dream tool, ensure all specific, isolated learnings from the current session have been persisted via `write_memory_store_tool`. Dream consolidates EXISTING memory — it does NOT substitute for creating new standalone memory files.
+
 Trigger a dream after significant changes or bug fixes to refresh indices and resolve contradictions.
 
 ### 1. Direct Dreaming
