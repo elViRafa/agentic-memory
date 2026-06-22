@@ -81,6 +81,7 @@ MEMORY_INSTRUCTIONS = """## Memory Fabric — Semantic Store Agent Instructions
 3. **MANDATORY STARTUP:** You MUST call `read_combined_context_tool(cwd="<absolute project root path>")` before doing anything else at the start of a session. No exceptions.
    > **MCP Resources alternative:** If your client supports MCP Resources and has auto-fetched `memory-fabric://context/<encoded-cwd>`, that context is already in your system prompt — skip the tool call.
 4. **NEVER call `dream_tool` as a substitute for saving new knowledge.** Before triggering any Dream tool, you MUST first call `write_memory_store_tool` to persist specific, isolated memories from the current session (e.g., bugs fixed, features built, architecture decisions). Dreaming consolidates existing memory — it does NOT capture new knowledge.
+5. **MANDATORY SESSION END:** Before your final response in a session, you MUST call `write_session_journal_tool` to log what was accomplished. Skip ONLY for trivial Q&A sessions with no code changes, decisions, or debugging.
 
 ### 1. Active Retrieval Workflow
 - **Search:** Use `keyword_search_tool(cwd, query)` to find specific documented topics.
@@ -97,6 +98,19 @@ For updating root map files (e.g., `debt`, `architecture`), call `write_local_me
 ### 4. Security & Maintenance
 - **Security:** Do NOT store credentials, tokens, or passwords.
 - **Dreaming:** Use `dream_tool` for consolidation only — after new knowledge has already been saved with `write_memory_store_tool`. Refer to `.agents/rules/dreaming.md` for guidelines.
+
+### 5. Session End — Automatic Journaling
+Before completing a session, call `write_session_journal_tool(cwd, summary, key_decisions, files_changed, session_label)` to capture what happened.
+
+**Always journal after:** feature implementations, bug fixes, refactoring, architecture decisions, debugging, config changes, or any session where you wrote or modified code.
+
+**Skip only for:** simple Q&A, quick lookups, or read-only explanations that produced no actionable changes.
+
+Parameters:
+- `summary`: 2-4 sentence description of what was accomplished.
+- `key_decisions`: List of architecture/design decisions made (optional).
+- `files_changed`: List of files created or significantly modified (optional).
+- `session_label`: Short descriptive label, e.g. `"auth-refactor"` (optional).
 """
 
 DREAMING_INSTRUCTIONS = """## Memory Fabric — Dreaming Process Instructions

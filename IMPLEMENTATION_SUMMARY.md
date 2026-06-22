@@ -1,3 +1,25 @@
+## 2026-06-22 09:35 - Mandatory Session-End Journaling Instructions
+
+**What was implemented:**
+- Added a "MANDATORY SESSION END" critical rule (#5) and a new "Section 5: Session End — Automatic Journaling" to the `MEMORY_INSTRUCTIONS` template in `templates.py`. This instructs AI agents to automatically call `write_session_journal_tool` before ending any session that involved code changes, decisions, or debugging — without the user having to ask.
+- The instruction mirrors the existing "MANDATORY STARTUP" pattern (rule #3) for symmetry. Agents are told to skip journaling only for trivial Q&A sessions.
+
+**Core files affected:**
+- `src/memory_fabric/templates.py` — Added critical rule #5 and section 5 to `MEMORY_INSTRUCTIONS`
+
+**Key changes:**
+- New critical rule: `5. **MANDATORY SESSION END:** Before your final response in a session, you MUST call write_session_journal_tool...`
+- New section with clear guidance on when to journal (always after code/decisions/debugging) vs. when to skip (trivial Q&A)
+- Parameter reference for `summary`, `key_decisions`, `files_changed`, `session_label`
+- All platform-specific agent files (AGENTS.md, CLAUDE.md, .cursor/rules, etc.) auto-inherit this on next `ai-memory init`
+
+**Status & Testing:**
+- 83/83 tests passing. No regressions.
+
+**Notes / Next steps:**
+- Existing projects need to re-run `ai-memory init` to pick up the updated agent instructions.
+- The `write_session_journal_tool` and its storage backend already existed — this change only adds the instruction for agents to call it automatically.
+
 ## 2026-06-22 09:09 - MCP Resources: Automatic Context Delivery
 
 **What was implemented:**
