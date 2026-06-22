@@ -1,4 +1,27 @@
+## 2026-06-22 09:09 - MCP Resources: Automatic Context Delivery
+
+**What was implemented:**
+- Added two MCP Resource Template registrations to `server.py` so that MCP clients supporting the Resources primitive (e.g. Claude Desktop) can automatically fetch memory context at session start — without any explicit agent tool call. The full context resource mirrors `read_combined_context_tool`; the index resource delivers only `index.md` for lightweight section discovery.
+- `cwd` is URL-encoded in the resource URI (`urllib.parse.quote(cwd, safe="")`) to safely carry Windows paths (backslashes, drive colons) and decoded on the server side. Both resources degrade gracefully to advisory text if `.ai-memory/` hasn't been initialized.
+- `initialize_memory_fabric_tool` now returns `resource_uris` in its `InitResult`, announcing the auto-fetch URIs to the client immediately after setup.
+
+**Core files affected:**
+- `src/memory_fabric/server.py` — Two `@mcp.resource()` template registrations + updated `initialize_memory_fabric_tool` to return `resource_uris`.
+- `src/memory_fabric/contracts.py` — Added `resource_uris: NotRequired[list[str]]` to `InitResult`.
+- `src/memory_fabric/templates.py` — Added Resources alternative note to `MEMORY_INSTRUCTIONS`.
+- `tests/test_resources.py` — 11 new tests covering both resource handlers and the updated init result.
+
+**Key changes:**
+- `memory-fabric://context/{encoded_cwd}` → full assembled context bundle (auto-fetched by supporting clients).
+- `memory-fabric://index/{encoded_cwd}` → lightweight index-only resource.
+- Graceful degradation: uninitialized projects return advisory strings, not exceptions.
+- `InitResult.resource_uris` allows clients to bookmark the URIs after `init`.
+
+**Status & Testing:**
+- 83/83 tests pass (`pytest tests/ -v`). New resource tests: 11 passed.
+
 ## 2026-06-18 16:08 - Phase 2.1, 3.1, 4.1: Episodic Memory, Real Patch Preview, Query-aware Retrieval
+
 
 **What was implemented:**
 - **Phase 2.1 (Patch Previews):** Rewrote `propose_memory_patch` from a stub into a real implementation that reads the target file, deduplicates proposed additions, and returns a real unified diff without writing to disk.

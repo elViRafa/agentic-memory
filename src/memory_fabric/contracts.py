@@ -15,6 +15,7 @@ class InitResult(TypedDict):
     memory_dir: str
     files_created: list[str]
     warnings: list[str]
+    resource_uris: NotRequired[list[str]]
 
 
 class ContextBundle(TypedDict):

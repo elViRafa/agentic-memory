@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import urllib.parse
+
 from memory_fabric.eval import evaluate_dream_quality, evaluate_memory_fabric
-from memory_fabric.paths import validate_cwd
+from memory_fabric.paths import local_memory_dir, validate_cwd
 from memory_fabric.storage import (
     delete_memory_store,
     dream,
@@ -53,6 +55,10 @@ if FastMCP is not None:
         supported platforms (GitHub Copilot, Claude Code, Gemini CLI, etc.).
         Safe to call multiple times — missing files are created, and existing content is preserved (some files may be appended or updated).
 
+        Also returns ``resource_uris`` with the MCP Resource URIs for this project.
+        Clients that support MCP Resources can auto-fetch context from those URIs
+        at session start without any explicit tool call.
+
         Args:
             cwd:           Absolute path to the project root.
             memory_prompt: Optional plain-text prompt to persist as
@@ -61,7 +67,13 @@ if FastMCP is not None:
                            existing prompt file.
         """
         safe = _safe_cwd(cwd)
-        return initialize_memory_fabric(safe, memory_prompt=memory_prompt)
+        result = initialize_memory_fabric(safe, memory_prompt=memory_prompt)
+        encoded = urllib.parse.quote(safe, safe="")
+        result["resource_uris"] = [
+            f"memory-fabric://context/{encoded}",
+            f"memory-fabric://index/{encoded}",
+        ]
+        return result
 
     @mcp.tool()
     def read_combined_context_tool(cwd: str, max_tokens: int | None = None, query: str | None = None):
@@ -380,6 +392,81 @@ if FastMCP is not None:
             files_changed=files_changed,
             session_label=session_label,
         )
+
+    # ------------------------------------------------------------------
+    # MCP Resources — auto-fetched by supporting clients (e.g. Claude
+    # Desktop) at session start without any agent tool call.
+    # URI template: the client encodes the absolute project path with
+    # urllib.parse.quote(cwd, safe="") and builds the URI.
+    # ------------------------------------------------------------------
+
+    @mcp.resource(
+        "memory-fabric://context/{encoded_cwd}",
+        name="memory-fabric-context",
+        title="Memory Fabric — Project Context",
+        description=(
+            "Full assembled project memory context (same as read_combined_context_tool). "
+            "Auto-fetched by MCP clients that support Resources at session start."
+        ),
+        mime_type="text/plain",
+    )
+    def memory_context_resource(encoded_cwd: str) -> str:
+        """Return the full assembled memory context for the given project.
+
+        The ``encoded_cwd`` path segment must be the project root encoded with
+        ``urllib.parse.quote(cwd, safe="")``.  MCP clients that auto-fetch
+        resources will call this before the first agent message, giving agents
+        memory context without requiring any explicit tool invocation.
+
+        If ``.ai-memory/`` has not been initialized, returns an advisory message
+        instead of raising an error so that clients do not show error dialogs.
+        """
+        cwd = urllib.parse.unquote(encoded_cwd)
+        try:
+            safe = _safe_cwd(cwd)
+        except ValueError as exc:
+            return f"# Memory Fabric\n\nInvalid project path: {exc}"
+        memory_dir = local_memory_dir(safe)
+        if not memory_dir.exists():
+            return (
+                f"# Memory Fabric\n\n"
+                f"No memory initialized at: `{safe}`\n\n"
+                f"Run `ai-memory init` or call `initialize_memory_fabric_tool` to get started."
+            )
+        bundle = read_combined_context(safe)
+        return bundle["text"]
+
+    @mcp.resource(
+        "memory-fabric://index/{encoded_cwd}",
+        name="memory-fabric-index",
+        title="Memory Fabric — Memory Index",
+        description=(
+            "Lightweight section index (index.md only). Use this for discovery — "
+            "to know what memory sections exist before doing targeted reads."
+        ),
+        mime_type="text/plain",
+    )
+    def memory_index_resource(encoded_cwd: str) -> str:
+        """Return the memory index file for the given project.
+
+        Returns only ``index.md`` — a small section map that lets agents and
+        users quickly see what memory categories exist without paying the token
+        cost of loading the full context bundle.
+        """
+        cwd = urllib.parse.unquote(encoded_cwd)
+        try:
+            safe = _safe_cwd(cwd)
+        except ValueError as exc:
+            return f"# Memory Fabric Index\n\nInvalid project path: {exc}"
+        memory_dir = local_memory_dir(safe)
+        index_path = memory_dir / "index.md"
+        if not index_path.exists():
+            return (
+                f"# Memory Fabric Index\n\n"
+                f"No index found at: `{safe}`\n\n"
+                f"Run `ai-memory init` or call `initialize_memory_fabric_tool` to create it."
+            )
+        return index_path.read_text(encoding="utf-8")
 
 else:
     mcp = None
