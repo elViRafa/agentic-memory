@@ -147,7 +147,10 @@ class LockReleaseTests(unittest.TestCase):
 
 class NonUtf8FileTests(unittest.TestCase):
     def _write_invalid_utf8_section(self, temp: str) -> Path:
-        memory_dir = Path(temp) / ".ai-memory"
+        # Resolve, matching validate_cwd()'s internal resolution: on Windows,
+        # tempfile's TEMP can be an 8.3 short-name path (e.g. RUNNER~1) that
+        # differs textually from the long-name form doctor() reports errors with.
+        memory_dir = Path(temp).resolve() / ".ai-memory"
         bad_path = memory_dir / "schemas.md"
         # 0xFF is never valid as a standalone UTF-8 byte.
         bad_path.write_bytes(b"---\nsection: schemas\n---\n\nBroken: \xff\xfe bytes here.\n")

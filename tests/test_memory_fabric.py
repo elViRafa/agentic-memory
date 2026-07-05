@@ -186,7 +186,10 @@ class MemoryFabricTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             initialize_memory_fabric(temp)
             result = evaluate_memory_fabric(temp)
-            memory_dir = Path(temp) / ".ai-memory"
+            # Resolve, matching validate_cwd()'s internal resolution: on Windows,
+            # tempfile's TEMP can be an 8.3 short-name path (e.g. RUNNER~1) that
+            # differs textually from the long-name form the app returns.
+            memory_dir = Path(temp).resolve() / ".ai-memory"
 
             self.assertTrue((memory_dir / "evals" / "latest.json").exists())
             self.assertTrue((memory_dir / "evals" / "latest.md").exists())

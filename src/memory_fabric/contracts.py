@@ -2,7 +2,21 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal, NotRequired, TypedDict
+import sys
+from typing import Any, Literal
+
+# pydantic (pulled in by the optional `mcp` extra, to build tool schemas from these
+# TypedDicts) rejects typing.TypedDict on Python < 3.12 in favor of typing_extensions'
+# version. typing_extensions is only guaranteed present when `mcp` is installed (it's a
+# transitive pydantic dependency) — core-only installs on 3.11 fall back to stdlib, which
+# is fine there since pydantic never touches these types without the `mcp` extra.
+if sys.version_info >= (3, 12):
+    from typing import NotRequired, TypedDict
+else:
+    try:
+        from typing_extensions import NotRequired, TypedDict
+    except ImportError:
+        from typing import NotRequired, TypedDict
 
 
 Priority = Literal["high", "medium", "low"]

@@ -115,6 +115,68 @@ were visible, not real tracebacks):
   pasting a failing step's log directly. Guessing at fixes blind, commit after commit,
   isn't worth the noise until the real error text is in hand.
 
+**RESOLVED 2026-07-05.** User ran `gh auth login`; `gh run view <id> --log-failed` gave
+real tracebacks. All 5 distinct root causes (not flakiness after all — every failure was
+deterministic given the right OS/version/timing) found and fixed:
+
+1. **`locking.py` mypy failure (the Lint job)**: `msvcrt.locking`/`LK_LOCK`/`LK_UNLCK` are
+   gated behind `sys.platform == "win32"` inside typeshed's stub, so mypy only recognizes
+   them when its *assumed* platform is win32 — which depends on the host mypy itself runs
+   on, not the code's target. The lint job pins `ubuntu-latest`, so it always saw "Module
+   has no attribute" on the msvcrt calls, while the paired `fcntl` calls' `# type:
+   ignore[attr-defined]` (needed only when mypy assumes win32) flagged as unused. This is
+   exactly why it passed clean every time it was checked locally on this Windows machine —
+   never on Linux. Rewrote `_lock`/`_unlock` from `try/except ImportError` to
+   `if sys.platform == "win32": ... else: ...`, the form mypy specifically recognizes for
+   platform-conditional checking (skips the non-matching branch entirely — no ignores
+   needed on either assumed platform). Verified with `mypy --platform {win32,linux,darwin}`,
+   all clean — no Linux box needed to confirm.
+2. **`test_initialized_eval_saves_reports_and_ignores_evals` (windows-latest, all versions;
+   macos-latest, all versions)**: test built its expected path as
+   `Path(temp) / ".ai-memory" / ...` (raw), while the app resolves `cwd` internally via
+   `validate_cwd()` (`.resolve()`, a deliberate path-traversal guard, not a bug) before
+   deriving report paths. Diverges textually whenever the OS's raw temp path isn't already
+   canonical: Windows short-name form (`RUNNER~1` vs `runneradmin` — GitHub's Windows
+   runner account name is long enough to need an 8.3 alias; this developer's own account
+   name is short enough that it never happens locally) or macOS's `/var` → `/private/var`
+   symlink. Fixed the test to `Path(temp).resolve()`, matching the app's own (correct)
+   behavior.
+3. **`NonUtf8FileTests::test_doctor_reports_error_but_does_not_raise`** (windows-latest, all
+   versions): identical root cause to #2, same fix, in `_write_invalid_utf8_section`'s
+   `memory_dir` construction.
+4. **`ERROR tests/test_resources.py` collecting (Python 3.11, all 3 OSes)**:
+   `pydantic.errors.PydanticUserError: Please use typing_extensions.TypedDict instead of
+   typing.TypedDict on Python < 3.12.` `contracts.py` imported `TypedDict`/`NotRequired`
+   from stdlib `typing` unconditionally; FastMCP's pydantic-based schema generation
+   rejects stdlib `TypedDict` before 3.12. Fixed with a version-gated import in
+   `contracts.py`: `typing_extensions` on <3.12 (present whenever `[mcp]` is installed —
+   it's an unconditional pydantic dependency, confirmed via `pip show pydantic`), falling
+   back to stdlib `typing` if `typing_extensions` isn't there at all (core-only install,
+   no pydantic in play anyway) — keeps the zero-required-deps guarantee for core-only
+   users.
+5. **`ConcurrentWriteTests::test_concurrent_appends_all_survive_without_corruption`**
+   (ubuntu-latest/3.14 in one run, not the other — the one that looked like flakiness):
+   a real TOCTOU race in `locking.py`. `locked_file()` unlinks the `.lock` sidecar only
+   *after* releasing the flock, so a new opener can create a fresh inode at the same path
+   while an *earlier* waiter — blocked in `_lock()` on the original inode before the
+   unlink happened — is still waiting. Once that waiter is finally granted its lock (on
+   the now-orphaned inode), it and the new opener hold locks on two different inodes that
+   merely share a path: no longer mutually exclusive, so both run their critical sections
+   at once, and one can observe the other's torn write (missing frontmatter delimiter —
+   exactly the error seen). Windows never hit this because `msvcrt`-locked files can't be
+   deleted while another handle has them open (raises `PermissionError`, already handled),
+   so the race window that exists on POSIX unlink doesn't exist there — consistent with
+   this only ever showing up on `ubuntu-latest`. Fixed with the standard flock-plus-unlink
+   pattern: after locking, re-`stat()` the path and compare identity
+   (`os.path.samestat`) against the locked fd; retry (close, reopen, relock) on mismatch.
+   Preserves the existing "no leaked `.lock` file after a crash" guarantee
+   (`test_lock_sidecar_file_does_not_leak_after_crash`) rather than trading it away by
+   just never unlinking. Stress-tested `test_robustness.py` 24+ consecutive runs locally
+   (up from the 5 that failed to reproduce it originally) with zero failures post-fix.
+
+Version bumped again: `0.4.0`'s tag never actually published (build/publish/github-release
+were skipped), so rather than force-move that tag, the next tag is `0.4.1`.
+
 Acceptance: `memory-fabric` page live on PyPI; release created from tag.
 
 ### A6. `[ ]` Verify the universal install path

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import sys
 from contextlib import contextmanager
 from pathlib import Path
 from typing import BinaryIO, Iterator
@@ -16,9 +18,8 @@ _WIN_LOCK_NBYTES = 1 << 22  # 4 MiB — larger than any lock file we create
 def locked_file(target: Path) -> Iterator[None]:
     lock_path = target.with_name(target.name + ".lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    handle = lock_path.open("a+b")
+    handle = _acquire_lock(lock_path)
     try:
-        _lock(handle)
         yield
     finally:
         try:
@@ -36,8 +37,35 @@ def locked_file(target: Path) -> Iterator[None]:
                 pass
 
 
+def _acquire_lock(lock_path: Path) -> BinaryIO:
+    """Open and lock lock_path, guarding against a TOCTOU race with unlink().
+
+    locked_file() unlinks lock_path only *after* releasing the lock (below), so
+    there's a window where a new opener creates a fresh inode at the same path
+    while an earlier waiter — already blocked inside _lock(), having opened the
+    old inode before the unlink — is still waiting on it. Once that earlier
+    waiter's lock is finally granted, it and the new opener hold locks on two
+    different inodes that merely happen to share a path: no longer mutually
+    exclusive, so both proceed into the critical section at once. Re-checking
+    identity after locking, and retrying on mismatch, closes that window: a
+    reopen always observes whichever inode is current, so it either contends
+    with whoever really holds it or safely finds no lock is currently held.
+    """
+    while True:
+        handle = lock_path.open("a+b")
+        _lock(handle)
+        try:
+            same_file = os.path.samestat(os.fstat(handle.fileno()), os.stat(lock_path))
+        except FileNotFoundError:
+            same_file = False
+        if same_file:
+            return handle
+        _unlock(handle)
+        handle.close()
+
+
 def _lock(handle: BinaryIO) -> None:
-    try:
+    if sys.platform == "win32":
         import msvcrt
 
         # Lock from the beginning of the file for _WIN_LOCK_NBYTES bytes.
@@ -48,26 +76,20 @@ def _lock(handle: BinaryIO) -> None:
         # PermissionError — matching fcntl.flock's default blocking behavior below.
         handle.seek(0)
         msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, _WIN_LOCK_NBYTES)
-        return
-    except ImportError:
-        pass
+    else:
+        import fcntl
 
-    import fcntl
-
-    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)  # type: ignore[attr-defined]
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
 
 
 def _unlock(handle: BinaryIO) -> None:
-    try:
+    if sys.platform == "win32":
         import msvcrt
 
         # Must seek to 0 and use the same nbytes that was passed to locking().
         handle.seek(0)
         msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, _WIN_LOCK_NBYTES)
-        return
-    except ImportError:
-        pass
+    else:
+        import fcntl
 
-    import fcntl
-
-    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)  # type: ignore[attr-defined]
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
