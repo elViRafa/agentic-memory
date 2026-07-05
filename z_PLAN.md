@@ -532,32 +532,148 @@ worth knowing if a user diffs the file and is surprised by the whitespace churn.
 
 ## Milestone D — Registry, badges, one-click bundles
 
-### D1. `[ ]` Official MCP Registry
+**Pre-work found while starting D (2026-07-05):** CI was red on `main` at `f788b9f`
+(Milestone C's commit) across every OS/Python matrix cell — not caused by anything in D,
+but blocking regardless since D1's own deliverable rides on `release.yml`'s `test` job.
+Two deterministic, 100%-reproducible bugs, both pure test-fixture issues (no production
+code touched):
 
-1. Add the ownership marker to the PyPI package: line `mcp-name: io.github.elvirafa/memory-fabric`
-   in README.md (registry validates PyPI ownership by finding this string on the PyPI page).
-2. `mcp-publisher init` → craft `server.json` (name `io.github.elvirafa/memory-fabric`,
-   package registry `pypi`, identifier `memory-fabric`, transport stdio).
-3. `mcp-publisher login github` → `mcp-publisher publish`.
-4. Append a registry-publish step to `release.yml` so every tag republishes the new version.
+1. `tests/test_clients.py::ConfigPathResolutionTests::{test_claude_desktop_path_per_os,
+   test_os_app_config_dir_is_platform_aware}` — the tests hand-flattened their expected
+   Windows path into one `Path(r"C:\Users\R\AppData\Roaming\Claude")` literal, but the
+   actual code builds it as `Path(appdata) / "Claude"` (two joined segments). On a
+   Windows test-runner both forms happen to produce the same `WindowsPath`, so this
+   passed locally for months — but `Path(...)` is host-OS-bound, and on a POSIX CI
+   runner it becomes `PosixPath`, which doesn't treat `\` as a separator, so the two
+   forms stop being equal. Fixed by mirroring the implementation's own join boundary in
+   the expected value (`Path(r"C:\Users\R\AppData\Roaming") / "Claude"`) instead of
+   hand-flattening it — makes the assertion host-OS-independent without touching
+   `clients.py` at all. (`test_memory_fabric.py`'s equivalent `get_global_root` test
+   already dodges this by asserting a suffix instead of exact equality — good prior art,
+   not applied to the newer `clients.py` tests when they were written.)
+2. `tests/test_installer.py::ClaudeCodeCliTests::test_claude_not_on_path_falls_back_to_project_mcp_json` —
+   the exact same not-`.resolve()`-d temp-dir bug Milestone A already fixed twice
+   elsewhere (macOS `/var`→`/private/var`, Windows `RUNNER~1` short name), just missed in
+   this newer test. One-line fix: `Path(temp)` → `Path(temp).resolve()`.
 
-Acceptance: server visible at registry.modelcontextprotocol.io; appears in VS Code's MCP
-server browsing and on Glama/PulseMCP within days (they index the registry).
+Pushed as its own `fix:` commit ahead of the Milestone D feature commit.
+`ConcurrentWriteTests::test_concurrent_appends_all_survive_without_corruption` also
+failed, but only once, only on `macos-latest`/Python 3.11 — not reproducible locally
+(this dev machine structurally can't hit the POSIX-unlink race per `locking.py`'s own
+docstring) and not deterministic across the matrix the way the two above are. Left
+alone rather than guess-patched; flagged as a follow-up needing real macOS CI logs, same
+discipline as the Milestone A CI blocker.
 
-### D2. `[ ]` One-click install badges in README
+### D1. `[x]` Official MCP Registry — DONE (2026-07-05)
 
-- VS Code: `vscode:mcp/install?<url-encoded server JSON>` badge (+ `vscode-insiders:` variant).
-- Cursor: `cursor://anysphere.cursor-deeplink/mcp/install?name=memory-fabric&config=<base64>` badge.
+Researched against current official docs rather than training data (registry docs
+reorganized since any likely training cutoff — the old `docs/guides/publishing/` path
+from the original one-liner above 404s now; current path is
+`docs/modelcontextprotocol-io/{quickstart,authentication,package-types,github-actions}.mdx`
++ `docs/reference/server-json/`, fetched via `gh api repos/modelcontextprotocol/registry/contents/...`
+since raw.githubusercontent.com was flaky this session).
 
-Acceptance: clicking each badge on a machine with that editor opens its install flow.
+- **Namespace casing verified, not assumed — and it came back different from this
+  plan's own text.** This file's step 1/2 above wrote `io.github.elvirafa` (lowercase).
+  Ran the real `mcp-publisher login github` OAuth flow (device code, user completed it
+  in-browser) and decoded the resulting token's own JWT claims (not the raw token —
+  only the non-secret `permissions`/`sub` claims): the registry grants
+  `io.github.elViRafa/*`, preserving GitHub's exact stored username case. Every registry
+  doc example happens to use an already-lowercase username, so this distinction never
+  surfaced in the docs — used `io.github.elViRafa/memory-fabric` in both `server.json`
+  and the README marker.
+- `mcp-name: io.github.elViRafa/memory-fabric` added to `README.md` as an HTML comment
+  (boundary-safe per the spec: the token must be followed by newline/whitespace/tag/`-->`).
+- `server.json` at repo root. `mcp-publisher` has no Go dependency — installed via the
+  official prebuilt-binary one-liner. One real schema question the one-liner plan
+  glossed over: this project's canonical invocation is
+  `uvx --from "memory-fabric[mcp]" memory-fabric-mcp` (package name ≠ script name, plus
+  an extra), while every documented `registryType: pypi` example assumes package name ==
+  script name. Fetched the live `server.schema.json` directly: `identifier` must stay the
+  bare PyPI project name (`memory-fabric`) since that's what ownership verification
+  looks up on pypi.org; the `--from` flag and the differing entry-point name both belong
+  in `runtimeArguments` (documented as "arguments passed to the package's *runtime*
+  command", vs. `packageArguments` for the server binary itself) — one `named` (`--from`,
+  `memory-fabric[mcp]`) plus one trailing `positional` (`memory-fabric-mcp`). Confirmed
+  schema-valid via `mcp-publisher validate server.json`, which round-trips against the
+  live registry (needs network, not auth) — passed clean on the first try after fixing
+  an unrelated `description` length cap (≤100 chars) the validator caught.
+- `mcp-publisher publish` **deliberately not run for real** — PyPI ownership verification
+  fetches `pypi.org/pypi/memory-fabric/json`, still 404 (Milestone A's pending-publisher
+  step, repo-owner-only, still outstanding). Same honest blocker, not a new one.
+- `registry-publish` job appended to `release.yml`, `needs: publish` (must run after the
+  PyPI job actually succeeds, since that's what makes the ownership check possible) using
+  `mcp-publisher login github-oidc` (zero stored secrets, `id-token: write`) — the
+  officially documented CI recipe. Also syncs `server.json`'s version to the release tag
+  via `jq` before publishing, so it never needs manual re-syncing against `version.py`.
 
-### D3. `[ ]` MCPB bundle for Claude Desktop (stretch)
+Acceptance (server visible at registry.modelcontextprotocol.io) is **not yet met** —
+correctly blocked on the same PyPI step as Milestone A, not a new gap.
 
-- `npx @anthropic-ai/mcpb init` → `manifest.json` (python server type; bundle deps per MCPB docs).
-- Build `.mcpb` in `release.yml`, attach to the GitHub Release.
-- Caution: Python-in-MCPB needs bundled deps/runtime testing on Win + macOS before advertising it.
+### D2. `[x]` One-click install badges in README — DONE (2026-07-05)
 
-Acceptance: drag-drop `.mcpb` into Claude Desktop → extension installs → memory tools available.
+- VS Code / VS Code Insiders: `vscode:mcp/install?<url-encoded JSON>` /
+  `vscode-insiders:mcp/install?<...>` with
+  `{"name":"memory-fabric","command":"uvx","args":["--from","memory-fabric[mcp]","memory-fabric-mcp"]}`.
+- Cursor: `cursor://anysphere.cursor-deeplink/mcp/install?name=memory-fabric&config=<base64>`,
+  confirmed against Cursor's own docs (`cursor.com/docs/context/mcp/install-links`); badge
+  image is Cursor's official asset (`cursor.com/deeplink/mcp-install-dark.svg`, confirmed
+  live via a direct HTTP check rather than guessed).
+- **Both badges click-tested for real on this machine** (both editors installed here),
+  not just eyeballed: VS Code showed a correct install prompt. Cursor went further and
+  actually attempted the `uv` resolution live, surfacing
+  `No solution found... memory-fabric[mcp]` — i.e. the deeplink, JSON encoding, and
+  Cursor's own parsing are all confirmed correct; the failure is the same PyPI blocker
+  as everywhere else in this milestone, not a badge defect. VS Code Insiders wasn't
+  independently click-tested (not installed here) but is byte-identical to the verified
+  VS Code payload apart from the URI scheme.
+
+Acceptance met for what's testable pre-PyPI-publish: badges open the correct install
+flow with the correct command on both installed editors.
+
+### D3. `[x]` MCPB bundle for Claude Desktop (stretch) — DONE (2026-07-05)
+
+Real deviation from this plan's one-liner, found by reading the current MCPB spec
+(`modelcontextprotocol/mcpb`'s `MANIFEST.md`) instead of assuming: `server.type: "python"`
+was the original idea, but the docs explicitly warn it "cannot portably bundle compiled
+dependencies (e.g., pydantic, which the MCP Python SDK requires)" — exactly the risk this
+file's original caution line was worried about. Used `server.type: "uv"` (MCPB v0.4+)
+instead, and further diverged from the one worked example available
+(`examples/hello-world-uv`, which bundles the server's *own* source + `pyproject.toml`
+and runs it via `uv run`): rather than duplicating this project's source into the bundle,
+`mcpb/` is a **thin shim** — `mcpb/pyproject.toml` depends on `memory-fabric[mcp]` (from
+PyPI, not bundled) and `mcpb/src/server.py` just imports and calls
+`memory_fabric.server.main()`. This stays inside the documented uv-runtime contract
+(bundle `pyproject.toml` + entry point, host manages the venv) while achieving the same
+"fetch fresh from PyPI, no compiled deps in the archive" outcome as `uvx --from` does for
+the CLI/badges — couldn't find a published registry example of this exact shim pattern,
+so this is a reasoned construction against the spec's stated rules, not a copied example.
+
+- `npm install -g @anthropic-ai/mcpb`, hand-wrote `mcpb/manifest.json` (repo root already
+  has its own real `pyproject.toml` for the actual package build — the mcpb bundle's
+  `pyproject.toml` has to live in a subdirectory, it can't share the root one).
+  `mcpb validate manifest.json` clean; `mcpb pack mcpb/ ...` produced a 1.2 KB `.mcpb`
+  (no bundled deps, as intended).
+- **Live-tested twice on this machine**: opening the packed `.mcpb` directly didn't
+  trigger a Windows file association (Claude Desktop apparently doesn't register one),
+  but dragging it into Claude Desktop's Settings → Extensions worked as documented and
+  reached the same real `uv` dependency-resolution step as the Cursor badge — same
+  `memory-fabric[mcp]` PyPI 404, confirming the bundle itself is structurally correct.
+  macOS install stays unverified (this machine is Windows-only), same asymmetry Milestone
+  A already lives with for CI.
+- `build-mcpb` job added to `release.yml` (`needs: test`, parallel to `build`/`publish`):
+  Node setup, syncs `manifest.json`'s version to the tag via `jq`, packs, uploads as an
+  artifact. `github-release` now also depends on `build-mcpb` and attaches the `.mcpb`
+  alongside the wheel/sdist.
+
+Acceptance met for what's testable pre-PyPI-publish: drag-drop installs the extension
+and reaches real dependency resolution; full "tools become available" end-to-end is
+blocked on the same PyPI step as D1/D2.
+
+**What's left for D, all gated on the one Milestone-A blocker (PyPI pending-publisher
+registration, repo-owner-only):** once that clears and a version actually publishes to
+PyPI, `registry-publish` and `build-mcpb`/`github-release` on the next tag push will
+exercise the full path for real — nothing else in D needs further code changes.
 
 ---
 
@@ -615,7 +731,11 @@ Each E-task: implement → tests → one README paragraph → minor version bump
 | 2 | A3 + A4 + A5 + A6 → **v0.4.0 on PyPI** |
 | 3–5 | B1 (one or two module extractions per session) + B2 |
 | 6–7 | ~~C1 + C2 + C3 (install engine + 3 first clients) then remaining clients + C4 + C5~~ — done in one session instead of two (2026-07-05); all 9 clients + tests + docs landed together, including the live-machine acceptance run (see C5) — `uv` installed via scoop, then `ai-memory install --client all` run for real, all 8 detected clients succeeded. Still need a version bump + tag for **v0.5.0** — not done yet, deliberately left as a separate release step rather than bundled into this session. |
-| 8 | D1 registry + D2 badges → **v0.6.0**, then G3 + G2 + G4 = launch window |
+| 8 | ~~D1 registry + D2 badges~~ — D1 + D2 + D3 (MCPB, stretch) all landed together
+(2026-07-05), plus an unplanned CI hotfix found while starting D (see Milestone D).
+Still need version bumps + tags for **v0.5.0** (Milestone C, still pending from
+session 6–7) and **v0.6.0** (Milestone D) — deliberately left as separate release
+steps, same as before. G3 + G2 + G4 launch window still ahead. |
 | 9+ | E and F tracks, ordered by user feedback |
 
 ## Decisions log
