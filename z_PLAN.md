@@ -171,11 +171,32 @@ deterministic given the right OS/version/timing) found and fixed:
    (`os.path.samestat`) against the locked fd; retry (close, reopen, relock) on mismatch.
    Preserves the existing "no leaked `.lock` file after a crash" guarantee
    (`test_lock_sidecar_file_does_not_leak_after_crash`) rather than trading it away by
-   just never unlinking. Stress-tested `test_robustness.py` 24+ consecutive runs locally
+   just never unlinking. Stress-tested `test_robustness.py` 50 consecutive runs locally
    (up from the 5 that failed to reproduce it originally) with zero failures post-fix.
 
 Version bumped again: `0.4.0`'s tag never actually published (build/publish/github-release
 were skipped), so rather than force-move that tag, the next tag is `0.4.1`.
+
+**CI confirmed green on GitHub itself for the first time** (`gh run watch 28728450615`):
+all of `Lint & type-check` + `Test` × {ubuntu,windows,macos} × {3.11,3.12,3.13,3.14} passed
+on push `7ef6d4e`. Tagged and pushed `v0.4.1` (`gh run watch 28728501482`): `Test before
+release` (full matrix) and `Build distribution` both passed — confirms the fixes are real,
+not a local-only artifact. `Publish to PyPI` then failed, exactly as expected since the
+pending-publisher step hasn't been done yet:
+
+```
+Trusted publishing exchange failure: invalid-publisher (Publisher with matching
+claims was not found)
+sub: repo:elViRafa/agentic-memory:environment:pypi
+workflow_ref: elViRafa/agentic-memory/.github/workflows/release.yml@refs/tags/v0.4.1
+```
+
+This is the expected, safe failure mode for an unregistered trusted publisher — no token
+leakage, no partial publish. `Create GitHub Release` correctly never ran (`needs: publish`).
+**Once the pending-publisher step (top of this section) is done, no new tag/version bump
+is needed** — re-run only the failed `Publish to PyPI` job on the existing `v0.4.1` run
+(`gh run rerun 28728501482 --failed`), which will pick up the already-built, already-tested
+artifacts.
 
 Acceptance: `memory-fabric` page live on PyPI; release created from tag.
 
