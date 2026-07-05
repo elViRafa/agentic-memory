@@ -1,0 +1,6 @@
+[project]
+name = "memory-fabric-mcpb"
+version = "0.4.1"
+description = "MCPB shim that installs and runs memory-fabric[mcp] from PyPI"
+requires-python = ">=3.11"
+dependencies = ["memory-fabric[mcp]"]

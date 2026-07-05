@@ -1,5 +1,7 @@
 # Memory Fabric
 
+<!-- mcp-name: io.github.elViRafa/memory-fabric -->
+
 [![CI](https://github.com/elViRafa/agentic-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/elViRafa/agentic-memory/actions/workflows/ci.yml)
 
 **File-first, local-first memory layer for MCP-compatible AI coding assistants.**
@@ -169,6 +171,17 @@ Dream eval compares the pre-dream snapshot to current memory and reports score d
 
 One command per client. Safe to re-run: merges with your existing config, never
 overwrites it, and backs up the original file if it can't be parsed.
+
+### One-click install
+
+[![Install in VS Code](https://img.shields.io/badge/VS_Code-Install_Server-0098FF?style=flat-square&logo=visualstudiocode&logoColor=white)](vscode:mcp/install?%7B%22name%22%3A%22memory-fabric%22%2C%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22--from%22%2C%22memory-fabric%5Bmcp%5D%22%2C%22memory-fabric-mcp%22%5D%7D)
+[![Install in VS Code Insiders](https://img.shields.io/badge/VS_Code_Insiders-Install_Server-24bfa5?style=flat-square&logo=visualstudiocode&logoColor=white)](vscode-insiders:mcp/install?%7B%22name%22%3A%22memory-fabric%22%2C%22command%22%3A%22uvx%22%2C%22args%22%3A%5B%22--from%22%2C%22memory-fabric%5Bmcp%5D%22%2C%22memory-fabric-mcp%22%5D%7D)
+[![Install in Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](cursor://anysphere.cursor-deeplink/mcp/install?name=memory-fabric&config=eyJjb21tYW5kIjoidXZ4IiwiYXJncyI6WyItLWZyb20iLCJtZW1vcnktZmFicmljW21jcF0iLCJtZW1vcnktZmFicmljLW1jcCJdfQ==)
+
+These call `uvx --from "memory-fabric[mcp]" memory-fabric-mcp` under the hood — same
+canonical invocation as `ai-memory install`, just without the CLI step. Requires
+[`uv`](https://docs.astral.sh/uv/) and won't fully resolve until `memory-fabric` is
+live on PyPI (see [Status](#status) above).
 
 | Client | Command |
 |---|---|

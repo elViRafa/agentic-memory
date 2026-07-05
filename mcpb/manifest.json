@@ -1,0 +1,34 @@
+{
+  "manifest_version": "0.4",
+  "name": "memory-fabric",
+  "display_name": "Memory Fabric",
+  "version": "0.4.1",
+  "description": "File-first, local-first MCP memory for AI coding assistants: Markdown + YAML, no vector DB.",
+  "long_description": "Memory Fabric gives AI coding assistants a consistent, project-aware context layer without locking you into one model, editor, cloud provider, or operating system. Memory is stored as human-readable Markdown with YAML frontmatter in your repo — no vector database, no cloud account, no telemetry.",
+  "author": {
+    "name": "Memory Fabric Contributors",
+    "url": "https://github.com/elViRafa/agentic-memory"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/elViRafa/agentic-memory.git"
+  },
+  "homepage": "https://github.com/elViRafa/agentic-memory",
+  "support": "https://github.com/elViRafa/agentic-memory/issues",
+  "license": "MIT",
+  "keywords": ["memory", "mcp", "coding-agent", "markdown", "local-first"],
+  "server": {
+    "type": "uv",
+    "entry_point": "src/server.py",
+    "mcp_config": {
+      "command": "uv",
+      "args": ["run", "--directory", "${__dirname}", "src/server.py"]
+    }
+  },
+  "compatibility": {
+    "platforms": ["darwin", "linux", "win32"],
+    "runtimes": {
+      "python": ">=3.11"
+    }
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.elViRafa/memory-fabric",
+  "description": "File-first, local-first MCP memory for AI coding assistants: Markdown + YAML, no vector DB.",
+  "title": "Memory Fabric",
+  "repository": {
+    "url": "https://github.com/elViRafa/agentic-memory",
+    "source": "github"
+  },
+  "version": "0.4.1",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "memory-fabric",
+      "version": "0.4.1",
+      "runtimeHint": "uvx",
+      "runtimeArguments": [
+        {
+          "type": "named",
+          "name": "--from",
+          "value": "memory-fabric[mcp]"
+        },
+        {
+          "type": "positional",
+          "value": "memory-fabric-mcp"
+        }
+      ],
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}
