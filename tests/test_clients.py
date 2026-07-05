@@ -63,7 +63,7 @@ class ConfigPathResolutionTests(unittest.TestCase):
             env={"XDG_CONFIG_HOME": "/home/r/.config"},
             home="/home/r",
         )
-        self.assertEqual(windows, Path(r"C:\Users\R\AppData\Roaming\Claude"))
+        self.assertEqual(windows, Path(r"C:\Users\R\AppData\Roaming") / "Claude")
         self.assertEqual(mac, Path("/Users/r/Library/Application Support/Claude"))
         self.assertEqual(linux, Path("/home/r/.config/Claude"))
 
@@ -79,7 +79,7 @@ class ConfigPathResolutionTests(unittest.TestCase):
             project=False, cwd=Path("."), platform_name="Darwin", env={}, home="/Users/r"
         )
         self.assertEqual(
-            windows, Path(r"C:\Users\R\AppData\Roaming\Claude\claude_desktop_config.json")
+            windows, Path(r"C:\Users\R\AppData\Roaming") / "Claude" / "claude_desktop_config.json"
         )
         self.assertEqual(
             mac, Path("/Users/r/Library/Application Support/Claude/claude_desktop_config.json")

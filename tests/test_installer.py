@@ -342,7 +342,7 @@ class ClaudeCodeCliTests(unittest.TestCase):
 
             self.assertEqual(result["method"], "json-merge")
             path = Path(result["path"])
-            self.assertEqual(path, Path(temp) / ".mcp.json")
+            self.assertEqual(path, Path(temp).resolve() / ".mcp.json")
             data = json.loads(path.read_text(encoding="utf-8"))
             self.assertIn("memory-fabric", data["mcpServers"])
 
