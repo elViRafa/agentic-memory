@@ -42,13 +42,13 @@ class FrontmatterTests(unittest.TestCase):
         self.assertIn("Missing closing YAML frontmatter delimiter", str(ctx.exception))
 
     def test_parse_invalid_line_format(self) -> None:
-        text = "---\n" "invalid_line_no_colon\n" "---\n" "content"
+        text = "---\ninvalid_line_no_colon\n---\ncontent"
         with self.assertRaises(FrontmatterError) as ctx:
             parse_frontmatter(text)
         self.assertIn("Invalid frontmatter line", str(ctx.exception))
 
     def test_parse_empty_key(self) -> None:
-        text = "---\n" ": value\n" "---\n" "content"
+        text = "---\n: value\n---\ncontent"
         with self.assertRaises(FrontmatterError) as ctx:
             parse_frontmatter(text)
         self.assertIn("Empty frontmatter key", str(ctx.exception))

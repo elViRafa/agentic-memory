@@ -48,6 +48,8 @@ except ImportError:  # pragma: no cover - exercised only when optional mcp is ab
     TransportSecuritySettings = None  # type: ignore[assignment, misc]
 
 
+mcp: FastMCP[Any] | None
+
 if FastMCP is not None:
     from memory_fabric.llm import load_env_from_cwd
 

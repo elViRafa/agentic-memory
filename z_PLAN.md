@@ -13,47 +13,46 @@ Status legend: `[ ]` todo · `[~]` in progress · `[x]` done
 
 Target: `pip install memory-fabric` works worldwide; CI proves it on 3 OSes.
 
-### A1. `[ ]` CI workflow
+### A1. `[x]` CI workflow — DONE
 
-Create `.github/workflows/ci.yml`:
+`.github/workflows/ci.yml` matches the spec: matrix `{ubuntu,windows,macos} x
+{3.11,3.12,3.13,3.14}`, `pip install -e ".[mcp,test]"` → `pytest tests/ -v`, plus an
+entry-point sanity check (`which`/`where memory-fabric-mcp`). Separate `lint` job runs
+`ruff check .`, `ruff format --check .`, `mypy src/memory_fabric`. CI badge already in
+README. Not yet confirmed green on GitHub itself (no `gh auth` in this session) — confirm
+after the next push.
 
-- Trigger: `push` to `main` + all PRs.
-- Matrix: `os: [ubuntu-latest, windows-latest, macos-latest]` × `python: ["3.11", "3.12", "3.13", "3.14"]`.
-- Steps: checkout → setup-python → `pip install -e ".[mcp,test]"` → `pytest tests/ -q`.
-- Add a separate fast `lint` job: `ruff check .` + `ruff format --check .`.
+### A2. `[x]` Lint/type config — DONE (2026-07-04)
 
-Acceptance: badge green in README; a PR with a failing test blocks merge.
+`[tool.ruff]` (line-length 100, target-version py311) and `[tool.mypy]`
+(`disallow_untyped_defs`, `warn_unused_ignores`, `warn_redundant_casts`) were already in
+`pyproject.toml`. Verification found 2 real gaps the checkboxes hadn't caught yet:
 
-### A2. `[ ]` Lint/type config
+1. `ruff format --check .` failed on `llm.py` and `test_frontmatter.py` — implicit
+   string-literal concatenation (`"a\n" "b\n"`) that `ruff format` collapses to one string.
+   Cosmetic; fixed by running `ruff format`.
+2. `mypy src/memory_fabric` failed at `server.py:509`: the module-level `mcp` name is
+   assigned `FastMCP("Memory Fabric")` in the `if FastMCP is not None:` branch and `None`
+   in the `else:` branch; mypy infers `FastMCP[Any]` from the first assignment and rejects
+   the second. Fixed with an explicit `mcp: FastMCP[Any] | None` annotation before the
+   branch — matches how `main()` already treats `mcp` as Optional at runtime.
 
-In `pyproject.toml` add `[tool.ruff]` (line-length 100, target-version py311) and
-`[tool.mypy]` (strict-ish: `disallow_untyped_defs`, package already ships `py.typed`).
-Fix whatever ruff/mypy flags. Add `mypy` to the lint CI job once clean.
+`ruff check .`, `ruff format --check .`, and `mypy src/memory_fabric` all exit 0 now.
 
-Acceptance: `ruff check .` and `mypy src/` exit 0 locally and in CI.
+### A3. `[x]` Single-source the version — DONE
 
-### A3. `[ ]` Single-source the version
+Already wired: `pyproject.toml` has `dynamic = ["version"]` +
+`[tool.setuptools.dynamic] version = { attr = "memory_fabric.version.__version__" }`, and
+`cli.py` has `--version`. Verified: `import memory_fabric; memory_fabric.__version__` and
+`ai-memory --version` both print `0.3.0`, matching `version.py`.
 
-`src/memory_fabric/version.py` is the source of truth. In `pyproject.toml`:
+### A4. `[x]` README truth pass — DONE
 
-```toml
-[project]
-dynamic = ["version"]
-
-[tool.setuptools.dynamic]
-version = { attr = "memory_fabric.version.__version__" }
-```
-
-Remove the hardcoded `version = "0.3.0"`.
-
-Acceptance: `pip install -e .` then `python -c "import memory_fabric; print(memory_fabric.__version__)"`
-matches; `ai-memory --version` (add flag if missing) prints the same.
-
-### A4. `[ ]` README truth pass
-
-- Fix "v0.1.0" → current version (or remove the number, point to Releases).
-- Verify every command in README actually runs on this machine.
-- Add CI badge.
+Version claim was already accurate ("v0.3.0 — functional, not yet published to PyPI"), not
+the stale "v0.1.0" the roadmap flagged — no change needed there. CI badge present.
+Verified every Quick Start command actually runs end-to-end against a fresh `.ai-memory/`
+in a scratch dir: `init`, `doctor`, `eval`, `query`, `dream --mode light`, `status` all
+succeed.
 
 ### A5. `[ ]` PyPI trusted publishing
 
@@ -66,6 +65,21 @@ matches; `ai-memory --version` (add flag if missing) prints the same.
    - Job 2 `publish`: environment `pypi`, `permissions: id-token: write`,
      `pypa/gh-action-pypi-publish@release/v1`. No API tokens anywhere.
 3. Bump `version.py` to `0.4.0`, tag `v0.4.0`, push tag.
+
+**`release.yml` already exists and exceeds the spec** (2026-07-04): `test` (full OS×Python
+matrix, mirrors CI) → `build` (also asserts the git tag matches `version.py`, fails loudly
+on mismatch instead of publishing the wrong version) → `publish` (OIDC trusted publishing,
+no tokens, exactly as specced) → `github-release` (auto-creates the GitHub Release with
+`gh release create --generate-notes`, attaching the built artifacts). Still outstanding,
+in order:
+
+- [ ] Step 1 above (pending-publisher registration) — **requires the repo owner's own
+      pypi.org login; cannot be done by an agent.**
+- [ ] Confirm CI is green on GitHub itself (this session only verified locally — no
+      `gh auth` available; push first, then check the Actions tab or `gh run list`).
+- [ ] Bump `version.py` 0.3.0 → 0.4.0, tag `v0.4.0`, push tag — this is the action that
+      actually triggers a real, irreversible PyPI publish. Do this deliberately, not as a
+      drive-by.
 
 Acceptance: `memory-fabric` page live on PyPI; release created from tag.
 

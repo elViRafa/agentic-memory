@@ -366,9 +366,7 @@ def _http_post(url: str, payload: dict[str, Any], headers: dict[str, str]) -> di
             raise LLMError(f"HTTP Error {exc.code}: {exc.reason}. Detail: {err_body}") from exc
         except Exception as exc:
             # Log network or parsing errors
-            _log_debug(
-                f"--- LLM ERROR ---\n" f"URL: {url}\n" f"Error: {exc}\n" f"-----------------"
-            )
+            _log_debug(f"--- LLM ERROR ---\nURL: {url}\nError: {exc}\n-----------------")
             raise LLMError(f"Network request failed: {exc}") from exc
 
     raise LLMError(f"Failed to get a response from {url} after {max_retries} attempts.")
