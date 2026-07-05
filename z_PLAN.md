@@ -75,11 +75,45 @@ in order:
 
 - [ ] Step 1 above (pending-publisher registration) — **requires the repo owner's own
       pypi.org login; cannot be done by an agent.**
-- [ ] Confirm CI is green on GitHub itself (this session only verified locally — no
-      `gh auth` available; push first, then check the Actions tab or `gh run list`).
-- [ ] Bump `version.py` 0.3.0 → 0.4.0, tag `v0.4.0`, push tag — this is the action that
-      actually triggers a real, irreversible PyPI publish. Do this deliberately, not as a
-      drive-by.
+- [x] Bump `version.py` 0.3.0 → 0.4.0 (`0c8f535`), tag `v0.4.0`, push tag — done
+      2026-07-05. **Discovered CI is not actually green on GitHub** (see below) — the
+      publish did not go through, safely.
+
+**BLOCKER found 2026-07-05, unresolved:** pushing `v0.4.0` surfaced that CI has been
+*failing* on GitHub across the last 3 pushes to `main` — including `4d59005`, the commit
+*before* this session touched anything, so this predates Milestone A work and was never
+actually caught (nobody had checked the Actions tab; local `pytest`/`ruff`/`mypy` were
+genuinely green every time they were checked, which is what made the "not yet confirmed
+green on GitHub" note above necessary in the first place).
+
+Confirmed via the public `checks-runs`/`actions/runs` API (no `gh auth` in this session,
+Chrome extension bridge also unreachable, and GitHub's job-log download endpoint requires
+admin auth even for public repos, so only pass/fail + generic "exit code 1" annotations
+were visible, not real tracebacks):
+
+- Pattern: `ubuntu-latest` mostly passes (3.12/3.13 clean both runs; 3.11/3.14 inconsistent
+  — *passed* in `release.yml`'s test job but *failed* in `ci.yml`'s test job for the exact
+  same commit/SHA). `windows-latest` and `macos-latest` fail across all 4 Python versions,
+  in both workflows. The `Lint & type-check` job (ubuntu-latest, single Python 3.12) also
+  failed — same commands (`ruff check .`, `ruff format --check .`, `mypy src/memory_fabric`)
+  pass clean locally.
+- The same commit giving a different result across two workflow runs points at **flakiness**
+  (timing/ordering-sensitive, not deterministic per-OS) rather than a pure platform bug —
+  prime suspects are the concurrency/timeout-based tests in `test_robustness.py`
+  (`ConcurrentWriteTests`, `LockReleaseTests`, `LargeStorePerformanceTests`'s 15s bound).
+  Ran `test_robustness.py` 5x locally in a genuinely fresh venv (not the possibly-stale
+  `.venv/` used for the "green locally" check earlier this session) — no failures, so it
+  hasn't reproduced yet locally either. Doesn't rule out the Windows/macOS jobs being a
+  separate, real, consistent bug rather than flakiness — the Lint job failing is the odd
+  one out and doesn't fit the timing-test theory at all.
+- **Confirmed safe**: `release.yml`'s `build` → `publish` → `github-release` jobs all show
+  `conclusion: skipped` for the `v0.4.0` tag push (they `need: test`, which failed) — so
+  no package was actually uploaded to PyPI. The tag itself is public on GitHub now, but
+  that alone has no PyPI-side effect.
+- **Next step needs either**: `gh auth login` (so `gh run view --log-failed` can pull the
+  actual tracebacks) or working browser access to the Actions tab, or the repo owner
+  pasting a failing step's log directly. Guessing at fixes blind, commit after commit,
+  isn't worth the noise until the real error text is in hand.
 
 Acceptance: `memory-fabric` page live on PyPI; release created from tag.
 
