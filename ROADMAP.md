@@ -66,6 +66,10 @@ This phase is the direct answer to "usable in VS Code, Claude, Codex, Antigravit
 
 ### 3.2 One-command client setup: `ai-memory install`
 
+**Done (2026-07-05) — see `z_PLAN.md` Milestone C for the full implementation record,**
+including two path/root-key corrections found by checking current docs instead of
+relying on training-data knowledge for the fast-moving clients (VS Code, Antigravity).
+
 New CLI command that detects/receives a client name and writes the right config,
 idempotently, with `--dry-run` support:
 

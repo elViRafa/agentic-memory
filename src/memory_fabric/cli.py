@@ -10,8 +10,10 @@ from pathlib import Path
 from typing import Any
 
 from memory_fabric.version import __version__
+from memory_fabric.clients import CLIENTS
 from memory_fabric.contracts import DreamEvalResult, EvalResult
 from memory_fabric.eval import evaluate_dream_quality, evaluate_memory_fabric
+from memory_fabric.installer import install, install_all
 from memory_fabric.paths import local_memory_dir
 from memory_fabric.storage import (
     delete_memory_store,
@@ -60,6 +62,22 @@ def main(argv: list[str] | None = None) -> int:
             doctor_result = doctor(cwd)
             _print_result(doctor_result, args.json)
             return 0 if doctor_result["ok"] else 1
+        if args.command == "install":
+            if args.client == "all":
+                install_all_result = install_all(
+                    cwd, project=args.project, dry_run=args.dry_run, uninstall=args.uninstall
+                )
+                _print_result(install_all_result, args.json)
+                return 0 if all(r["ok"] for r in install_all_result["results"]) else 1
+            install_result = install(
+                cwd,
+                args.client,
+                project=args.project,
+                dry_run=args.dry_run,
+                uninstall=args.uninstall,
+            )
+            _print_result(install_result, args.json)
+            return 0 if install_result["ok"] else 1
         if args.command == "dream":
             dream_result = asyncio.run(
                 dream(
@@ -285,6 +303,27 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers.add_parser("status", help="Show memory status")
     subparsers.add_parser("doctor", help="Validate memory files and environment")
+
+    install_parser = subparsers.add_parser(
+        "install", help="Configure an MCP client to use memory-fabric"
+    )
+    install_parser.add_argument(
+        "--client",
+        required=True,
+        choices=["all", *CLIENTS.keys()],
+        help="Client to configure, or 'all' to detect and configure every installed client",
+    )
+    install_parser.add_argument(
+        "--project",
+        action="store_true",
+        help="Write project-scoped config instead of global/user config",
+    )
+    install_parser.add_argument(
+        "--dry-run", action="store_true", help="Preview the change without writing"
+    )
+    install_parser.add_argument(
+        "--uninstall", action="store_true", help="Remove the memory-fabric entry only"
+    )
 
     dream_parser = subparsers.add_parser("dream", help="Run local memory maintenance")
     dream_parser.add_argument("--mode", choices=["light", "deep"], default="light")

@@ -25,7 +25,7 @@ Memory is stored as human-readable Markdown with YAML frontmatter. No vector dat
 
 ## Status
 
-**v0.4.0 — published to PyPI.**
+**v0.4.1 — not yet published to PyPI** (PyPI trusted-publisher registration still pending); install from GitHub in the meantime.
 Core CLI and MCP tools work end-to-end.
 
 ---
@@ -165,19 +165,28 @@ Dream eval compares the pre-dream snapshot to current memory and reports score d
 
 ---
 
-## MCP Server
+## MCP Server — Install
 
-Add to your MCP client configuration (for example Claude Code or Cursor):
+One command per client. Safe to re-run: merges with your existing config, never
+overwrites it, and backs up the original file if it can't be parsed.
 
-```json
-{
-  "mcpServers": {
-    "memory-fabric": {
-      "command": "memory-fabric-mcp"
-    }
-  }
-}
-```
+| Client | Command |
+|---|---|
+| Claude Code | `ai-memory install --client claude-code` |
+| Claude Desktop | `ai-memory install --client claude-desktop` |
+| VS Code | `ai-memory install --client vscode` |
+| Cursor | `ai-memory install --client cursor` |
+| Windsurf | `ai-memory install --client windsurf` |
+| Codex | `ai-memory install --client codex` |
+| Antigravity | `ai-memory install --client antigravity` |
+| Gemini CLI | `ai-memory install --client gemini-cli` |
+| Cline | `ai-memory install --client cline` |
+| All detected clients | `ai-memory install --client all` |
+
+Add `--project` to write project-scoped config instead of the global/user config
+(where the client supports it). Add `--dry-run` to preview the change as a unified
+diff without writing anything. Add `--uninstall` to remove only the memory-fabric
+entry, leaving everything else in the file untouched.
 
 ### Available MCP Tools
 
@@ -306,6 +315,7 @@ Commands:
   init            Create .ai-memory/ scaffolding
   status          Show memory status
   doctor          Validate memory files and environment
+  install         Configure an MCP client to use memory-fabric (--client <name|all>)
   eval            Score memory quality or Dreaming quality
   dream           Run memory maintenance (--mode light|deep)
   query           Search memory

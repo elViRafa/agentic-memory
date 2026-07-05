@@ -122,6 +122,24 @@ class DoctorResult(TypedDict):
     checked_files: list[str]
 
 
+class InstallResult(TypedDict):
+    client: str
+    scope: Literal["global", "project"]
+    method: Literal["json-merge", "toml-append", "cli"]
+    ok: bool
+    changed: bool
+    path: str
+    diff: str
+    backup_path: str
+    command: str
+    warnings: list[str]
+
+
+class InstallAllResult(TypedDict):
+    results: list[InstallResult]
+    warnings: list[str]
+
+
 class StatusResult(TypedDict):
     cwd: str
     memory_dir: str

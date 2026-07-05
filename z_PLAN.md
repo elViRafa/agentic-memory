@@ -354,63 +354,179 @@ the test to use genuinely distinct topics instead of relying on a numeric suffix
 
 The core deliverable for "usable in VS Code, Claude, Codex, Antigravity and others."
 
-### C1. `[ ]` Client registry module
+### C1. `[x]` Client registry module — DONE (2026-07-05)
 
-New `src/memory_fabric/clients.py`: one declarative entry per client.
+`src/memory_fabric/clients.py` was built close to the original sketch, with three
+changes made concrete once actual write logic needed to consume the registry:
 
-```python
-@dataclass(frozen=True)
-class ClientSpec:
-    name: str                      # "vscode", "codex", ...
-    config_path: Callable[[], Path]   # resolves per-OS location
-    fmt: Literal["json", "toml"]
-    root_key: str                  # "mcpServers" | "servers" | "mcp_servers"
-    scope: Literal["global", "project"]
-    entry: dict                    # the server block to insert
-```
+- `entry: dict` became `build_entry(use_uvx: bool) -> dict`, a free function rather
+  than a per-client static field — the uvx-vs-fallback choice is a single
+  `shutil.which("uv")` check made once per install run, not something to duplicate
+  across 9 dict literals.
+- Added `supports_project: bool` / `supports_global: bool` flags (the original
+  `scope: Literal["global", "project"]` single field can't represent a client that
+  supports both, which turned out to be most of them). `--project` on a client with
+  `supports_project=False` falls back to global with a warning instead of erroring.
+- Added `extra_entry_keys: dict | None` (VS Code's `"type": "stdio"`) and
+  `detect_installed: Callable[..., bool]` (for `--client all`).
 
-Canonical server entry (same everywhere):
-`command: "uvx"`, `args: ["--from", "memory-fabric[mcp]", "memory-fabric-mcp"]`,
-with a `pipx`/absolute-path fallback variant when `uv` is not on PATH (detect via `shutil.which`).
+`config_path` and `detect_installed` share one keyword-only signature across all 9
+clients — `(*, project, cwd, platform_name=None, env=None, home=None)` — mirroring
+the DI pattern already established by `paths.get_global_root()` (same optional
+`platform_name`/`env`/`home` kwargs, tested the same way in
+`tests/test_memory_fabric.py:137-150`). Most resolvers ignore most of these kwargs;
+uniformity keeps the one call site in `installer.py` simple. A small private
+`_os_app_config_dir(app_name, ...)` helper (the same Windows-`APPDATA`/macOS-`Library`/
+Linux-`XDG_CONFIG_HOME` branch as `get_global_root`, parametrized on app name instead
+of hardcoding `"memory-fabric"`) is shared by claude-desktop and VS Code/Cline's common
+`.../Code/User` base — kept local to `clients.py` rather than merged into `paths.py`,
+since `get_global_root` already ships a tested `MEMORY_FABRIC_HOME`-override contract
+not relevant here.
 
-### C2. `[ ]` Config paths per client (verify each on first implementation)
+### C2. `[x]` Config paths per client — DONE, verified against current docs (2026-07-05)
 
-| Client | Path | Notes |
-|---|---|---|
-| claude-code | project `.mcp.json`, or shell out to `claude mcp add memory-fabric -- uvx --from "memory-fabric[mcp]" memory-fabric-mcp` | prefer CLI when `claude` on PATH |
-| claude-desktop | Win: `%APPDATA%\Claude\claude_desktop_config.json` · macOS: `~/Library/Application Support/Claude/claude_desktop_config.json` · Linux: `~/.config/Claude/claude_desktop_config.json` | key `mcpServers` |
-| vscode | project `.vscode/mcp.json` (key `servers`, add `"type": "stdio"`); user scope via `code --add-mcp '<json>'` if available | Copilot agent mode |
-| cursor | project `.cursor/mcp.json` or `~/.cursor/mcp.json` | key `mcpServers` |
-| windsurf | `~/.codeium/windsurf/mcp_config.json` | key `mcpServers` |
-| codex | `~/.codex/config.toml`, table `[mcp_servers.memory-fabric]`; project scope `.codex/config.toml` | TOML |
-| antigravity | `~/.gemini/config/mcp_config.json` (Antigravity 2.0 IDE/CLI + Gemini CLI shared central config) | key `mcpServers` |
-| gemini-cli | same central config; legacy fallback `~/.gemini/settings.json` `mcpServers` | detect which exists |
-| cline | VS Code globalStorage `saoudrizwan.claude-dev/settings/cline_mcp_settings.json` (per-OS base) | key `mcpServers` |
+Two of the fast-moving/post-training-cutoff ones came back **different from the
+original table above** after checking current documentation instead of trusting
+memory (Antigravity ships after this assistant's training cutoff; VS Code's MCP
+scheme evolves quickly):
 
-### C3. `[ ]` Safe write engine
+- **VS Code does have a real global/user scope** — not just the project
+  `.vscode/mcp.json` the original table implied. Confirmed via
+  code.visualstudio.com: a genuine `mcp.json` lives at `<VSCodeUserDir>/mcp.json`
+  (Win `%APPDATA%\Code\User\mcp.json`, mac `~/Library/Application Support/Code/User/mcp.json`,
+  Linux `~/.config/Code/User/mcp.json`) — the exact same base directory Cline's
+  `globalStorage` path descends from, so both resolvers share one helper.
+- **VS Code's root key is `"servers"`, not `"mcpServers"`** — confirmed directly
+  from VS Code's own MCP configuration reference page. Would have silently produced
+  a config VS Code never reads if left as originally guessed.
+- Codex's `command`/`args` TOML fields, Cline's path and `saoudrizwan.claude-dev`
+  publisher id, Windsurf's `~/.codeium/windsurf/mcp_config.json` (no OS branching —
+  same relative-to-home path on every OS, confirmed via Windsurf's own docs), Claude
+  Code's `claude mcp add <name> [opts] -- <cmd> [args...]` / `claude mcp remove <name>`
+  syntax, and Antigravity/Gemini CLI's shared `~/.gemini/config/mcp_config.json` (root
+  key `mcpServers`) all came back matching the original table — confirmed anyway
+  rather than assumed, since C2's own title says "verify each."
+- `gemini-cli`'s legacy-fallback detection (`~/.gemini/settings.json` if the central
+  `~/.gemini/config/` dir doesn't exist yet) implemented exactly as originally noted.
 
-- JSON: parse → deep-merge only our key → write back preserving other entries.
-  Never truncate on parse failure: back up the original to `<file>.bak-<ts>` first, abort with a clear message.
-- TOML (Codex): read with stdlib `tomllib` to check existence; if absent, **append** a
-  `[mcp_servers.memory-fabric]` text block at EOF (append preserves user formatting; no
-  TOML-writer dependency — keeps `dependencies = []`).
-- Flags: `--dry-run` (print unified diff, write nothing), `--uninstall` (remove our
-  entry only), `--client all` (detect installed clients by config-dir existence and do each).
+### C3. `[x]` Safe write engine — DONE (2026-07-05)
 
-### C4. `[ ]` Tests
+`src/memory_fabric/installer.py`. Notable deviations from the original one-line spec:
 
-Temp-dir + monkeypatched `HOME`/`APPDATA` for every client spec: fresh install, second
-run idempotent, merge with pre-existing user servers, uninstall leaves others intact,
-malformed existing JSON → abort + `.bak` file created, TOML append + idempotence.
+- "Deep-merge only our key" turned out to just mean a **targeted single-key merge**
+  (`config[root_key]["memory-fabric"] = entry`) — there's no actual deep-merging
+  logic needed since nothing else is ever touched; `json.loads`/`json.dumps`
+  round-tripping keeps every other key, and their original insertion order,
+  byte-for-identical for free.
+- Backup (`<file>.bak-<ts>`) is created **only** on a parse failure, never on a
+  normal write — the timestamp reuses the exact
+  `now_iso().replace(":", "").replace("+", "_").replace("-", "")` sanitizing idiom
+  `storage/snapshots.py:23-25` already established, rather than inventing a new one.
+- TOML uninstall wasn't specified by the original one-liner ("append... if absent"
+  only covers install). Implemented as a `# >>> memory-fabric install ... >>>` /
+  `# <<< memory-fabric install <<<` marker-comment pair around the appended block;
+  uninstall regex-slices between the exact markers and re-parses the remainder with
+  `tomllib.loads()` before writing, aborting instead of writing if that fails (only
+  possible if a user hand-edited between the markers in a file-breaking way).
+- All writes (JSON and TOML) go through `locking.py`'s `locked_file()` — not
+  required by the spec text, but free to reuse and already Windows-safe.
+- `claude-code` prefers shelling out to `claude mcp add`/`claude mcp remove`
+  (argv-list `subprocess.run`, no `shell=True`, 15s timeout, `stdin=DEVNULL`) when
+  `claude` is on PATH, built from `build_entry(uv_available())` rather than a
+  hardcoded `"uvx"` literal so it gets the same fallback as every other client;
+  falls back to writing project `.mcp.json` directly via the JSON engine otherwise.
+- **`install` is deliberately CLI-only, never an MCP tool** — every other MCP tool
+  in `server.py` operates only inside the caller's own project `cwd`; this is the
+  only feature that reaches into shared, machine-wide app config
+  (`%APPDATA%\Claude\...`, `~/.cursor/mcp.json`, etc.), so it gets the same
+  CLI-only treatment the codebase already gives `sync-global` for the same reason.
 
-### C5. `[ ]` Wire into CLI + docs
+**One real bug found while writing tests (see C4):** the JSON engine's uninstall
+path originally inferred `changed` by comparing serialized text
+(`new_text != old_text`), which produced a false `changed=True` when uninstalling
+against a config file that had never been created — `""` (the "no file" sentinel)
+never equals any valid JSON serialization, even of an empty, unchanged `{}`. Fixed
+by making the uninstall branch use `_remove_entry`'s own explicit `removed: bool`
+return value directly instead of re-deriving it from text comparison — the TOML
+engine's append/remove functions already returned an explicit `changed` boolean and
+never had this bug.
 
-`cli.py`: `ai-memory install --client <name|all> [--project] [--dry-run] [--uninstall]`.
-README: replace the manual MCP JSON section with the per-client matrix (one command each).
+### C4. `[x]` Tests — DONE (2026-07-05)
 
-Acceptance: on this Windows machine, run `ai-memory install --client all`; every client
-you have installed (at minimum Claude Code, VS Code, Antigravity, Codex if present) lists
-memory-fabric tools after restart.
+Two new files instead of one, matching the module split: `tests/test_clients.py`
+(pure path-resolution correctness — one test per resolver per relevant OS, mirroring
+`test_global_path_resolution_is_platform_aware`'s style) and `tests/test_installer.py`
+(engine + orchestration — 29 tests covering fresh install, idempotence, merge-preserves-
+others, uninstall (present and absent), malformed JSON/TOML → backup + abort, dry-run
+diffs, TOML append/idempotence/uninstall, claude-code's subprocess argv and PATH
+fallback, and `install_all`'s detection-gated dispatch). 47 tests total between the
+two files; 140 pass repo-wide.
+
+**Isolation approach diverges from the spec's literal wording** ("monkeypatched
+`HOME`/`APPDATA`") **on purpose**: rather than mutating real `os.environ`/`Path.home`
+for the duration of each test, `install()`/`install_all()`/`detect_installed_clients()`
+all accept the same optional `platform_name`/`env`/`home` keyword overrides as the
+`clients.py` resolvers, threaded straight through. This gets the same isolation
+(tests never touch this machine's real Claude Desktop/VS Code/Cursor/etc. config)
+without any risk of a failed test leaking a poisoned `APPDATA` into a later test — and
+it's free, since the lower layer already needed these params for C1/C2's own testing.
+One gotcha hit while writing the `install_all` detection tests: passing `home=<fake>`
+alone is **not** sufficient isolation on Windows for the OS-branching clients
+(claude-desktop, vscode, cline) — `_os_app_config_dir` checks the real `APPDATA` env
+var first and only falls back to `home/AppData/Roaming` if it's unset, so a real
+`APPDATA` on the test machine silently overrides a `home=`-only override. Tests that
+need full isolation pass `env={}` alongside `home=`, exactly like
+`test_global_path_resolution_is_platform_aware` already did for `get_global_root`.
+
+### C5. `[x]` Wire into CLI + docs — DONE (2026-07-05)
+
+`cli.py`: `ai-memory install --client <name|all> [--project] [--dry-run] [--uninstall]`,
+`--client` choices generated from `CLIENTS.keys()` (plus `"all"`) rather than a second
+hardcoded list, so the two can't drift. README: the old generic "add this JSON" snippet
+under `## MCP Server` replaced with the per-client one-command table; `install` added
+to the CLI Reference command list.
+
+Verified end-to-end on this machine: `pytest -q` (140 passed), `ruff check .` /
+`ruff format --check .` clean, `mypy src/memory_fabric` clean under the default
+(win32) platform assumption **and** under `--platform linux` / `--platform darwin`
+(Milestone A's lesson — mypy's platform-conditional typeshed stubs mean "passes
+locally on Windows" doesn't prove Linux/macOS CI will agree — applied here even
+though `installer.py`/`clients.py` don't touch `msvcrt`/`fcntl` themselves).
+`ai-memory install --client vscode --project --dry-run` exercised through the real
+CLI entry point (not just the Python API) end-to-end.
+
+**Acceptance criterion run for real, with a check-in first** — same instinct as the
+PyPI publish step in Milestone A (this is the first thing in the whole project that
+writes to shared application state outside this repo, so implementation stopped short
+of it until the repo owner confirmed). `ai-memory install --client all --dry-run` ran
+first and surfaced a real finding worth having caught before writing anything: `uv`
+was not on this machine's PATH, and 3 of the 8 detected clients (vscode, antigravity,
+gemini-cli — the last two share one file) already had a **working** `memory-fabric`
+entry pointing at a specific project's venv (`.../search-sermons/.venv/Scripts/memory-fabric-mcp.exe`,
+`.../agentic-memory/.venv/Scripts/memory-fabric-mcp.exe`) rather than `uvx`. Without
+`uv`, the install would have replaced those with a bare `memory-fabric-mcp` command
+with no path to resolve against — a downgrade, not an upgrade, for those three. Fixed
+by installing `uv` via `scoop install uv` (repo owner's explicit choice, matching the
+project's own "`uvx` is the canonical install vector" decision), confirmed `uv`/`uvx`
+resolve afterward, re-ran `--dry-run` to confirm every client now generates the
+canonical `uvx --from "memory-fabric[mcp]" memory-fabric-mcp` entry, then ran the real
+`ai-memory install --client all`. All 8 detected clients (`claude-code` was not
+detected — `claude` isn't on this particular PATH) succeeded (`ok=True`); `gemini-cli`
+correctly reported `changed=False` since it shares Antigravity's file and Antigravity's
+write already landed the identical entry first. Spot-checked the real files afterward:
+VS Code's other 10 servers and Antigravity/Gemini's other 5 (including one with
+`"disabled": true`) are all still present with unchanged values; Codex's `config.toml`
+(model, sandbox, 5 `[projects.*]` trust-level tables, a `[plugins.*]` table) is
+untouched above the appended, clearly-marked block.
+
+**One honest cosmetic side effect worth recording:** the JSON engine rewrites the
+*entire* file through `json.dumps(..., indent=2)`, so a file that previously used tab
+indentation (VS Code's `mcp.json` did) comes back 2-space-indented — a formatting
+change to every line, not just the ones we touched. No data, keys, or values are lost
+or altered (confirmed above), and every other JSON-writing tool in this ecosystem
+reformats files it manages the same way, but it's not byte-for-byte "untouched" in the
+way `--uninstall`'s more surgical description implies for our own key specifically —
+worth knowing if a user diffs the file and is surprised by the whitespace churn.
 
 ---
 
@@ -498,8 +614,7 @@ Each E-task: implement → tests → one README paragraph → minor version bump
 | 1 | A1 + A2 (CI green, lint clean) |
 | 2 | A3 + A4 + A5 + A6 → **v0.4.0 on PyPI** |
 | 3–5 | B1 (one or two module extractions per session) + B2 |
-| 6 | C1 + C2 + C3 (install engine + 3 first clients: claude-code, vscode, antigravity) |
-| 7 | C2/C3 remaining clients + C4 tests + C5 docs → **v0.5.0** |
+| 6–7 | ~~C1 + C2 + C3 (install engine + 3 first clients) then remaining clients + C4 + C5~~ — done in one session instead of two (2026-07-05); all 9 clients + tests + docs landed together, including the live-machine acceptance run (see C5) — `uv` installed via scoop, then `ai-memory install --client all` run for real, all 8 detected clients succeeded. Still need a version bump + tag for **v0.5.0** — not done yet, deliberately left as a separate release step rather than bundled into this session. |
 | 8 | D1 registry + D2 badges → **v0.6.0**, then G3 + G2 + G4 = launch window |
 | 9+ | E and F tracks, ordered by user feedback |
 
