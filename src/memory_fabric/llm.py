@@ -61,7 +61,11 @@ def load_env_from_cwd(cwd: str | Any) -> None:
                             val = val.strip()
 
                             # Strip quotes if present
-                            if len(val) >= 2 and val.startswith(('"', "'")) and val.endswith(val[0]):
+                            if (
+                                len(val) >= 2
+                                and val.startswith(('"', "'"))
+                                and val.endswith(val[0])
+                            ):
                                 val = val[1:-1]
 
                             if key and not os.environ.get(key):
@@ -71,11 +75,10 @@ def load_env_from_cwd(cwd: str | Any) -> None:
         pass
 
 
-
 async def call_llm(prompt: str, system_instruction: str = "", context: Any = None) -> str:
     """Execute a text completion request to the configured LLM provider or via MCP Sampling."""
     import asyncio
-    
+
     # 1. Prefer configured LLM
     provider = (os.environ.get("MEMORY_FABRIC_LLM_PROVIDER") or "").strip().lower()
     if provider:
@@ -100,15 +103,14 @@ async def call_llm(prompt: str, system_instruction: str = "", context: Any = Non
                 and getattr(client_params.capabilities, "sampling", None) is not None
             ):
                 from mcp.types import SamplingMessage, TextContent
+
                 messages = [
-                    SamplingMessage(
-                        role="user",
-                        content=TextContent(type="text", text=prompt)
-                    )
+                    SamplingMessage(role="user", content=TextContent(type="text", text=prompt))
                 ]
-                
+
                 # Output preemptive warning to stderr in case of blocking clients
                 import sys
+
                 sys.stderr.write(
                     "\n[Memory Fabric] Warning: Fallback to MCP Sampling requested. In sequential client loops "
                     "(like IDE extensions), this may deadlock. If it hangs, please configure a direct LLM provider "
@@ -148,25 +150,15 @@ async def call_llm(prompt: str, system_instruction: str = "", context: Any = Non
     raise LLMError("MEMORY_FABRIC_LLM_PROVIDER is not configured and MCP Sampling is unavailable.")
 
 
-
-
 def _call_gemini(prompt: str, system_instruction: str) -> str:
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         raise LLMError("GEMINI_API_KEY is not set.")
 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
-    payload: dict[str, Any] = {
-        "contents": [
-            {
-                "parts": [{"text": prompt}]
-            }
-        ]
-    }
+    payload: dict[str, Any] = {"contents": [{"parts": [{"text": prompt}]}]}
     if system_instruction:
-        payload["systemInstruction"] = {
-            "parts": [{"text": system_instruction}]
-        }
+        payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
 
     headers = {"Content-Type": "application/json"}
     response_data = _http_post(url, payload, headers)
@@ -179,8 +171,12 @@ def _call_gemini(prompt: str, system_instruction: str) -> str:
 
 def _call_openai(prompt: str, system_instruction: str) -> str:
     api_key = os.environ.get("OPENAI_API_KEY")
-    base_url = os.environ.get("OPENAI_API_BASE") or os.environ.get("OPENAI_BASE_URL") or "https://api.openai.com/v1"
-    
+    base_url = (
+        os.environ.get("OPENAI_API_BASE")
+        or os.environ.get("OPENAI_BASE_URL")
+        or "https://api.openai.com/v1"
+    )
+
     if not api_key:
         if "api.openai.com" not in base_url:
             api_key = "dummy"
@@ -195,14 +191,8 @@ def _call_openai(prompt: str, system_instruction: str) -> str:
         messages.append({"role": "system", "content": system_instruction})
     messages.append({"role": "user", "content": prompt})
 
-    payload = {
-        "model": model,
-        "messages": messages
-    }
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
+    payload = {"model": model, "messages": messages}
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     response_data = _http_post(url, payload, headers)
 
     try:
@@ -220,9 +210,7 @@ def _call_anthropic(prompt: str, system_instruction: str) -> str:
     payload: dict[str, Any] = {
         "model": "claude-3-5-haiku-20241022",
         "max_tokens": 4096,
-        "messages": [
-            {"role": "user", "content": prompt}
-        ]
+        "messages": [{"role": "user", "content": prompt}],
     }
     if system_instruction:
         payload["system"] = system_instruction
@@ -230,7 +218,7 @@ def _call_anthropic(prompt: str, system_instruction: str) -> str:
     headers = {
         "x-api-key": api_key,
         "anthropic-version": "2023-06-01",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
     }
     response_data = _http_post(url, payload, headers)
 
@@ -244,26 +232,22 @@ def _call_ollama(prompt: str, system_instruction: str) -> str:
     host = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
     model = os.environ.get("OLLAMA_MODEL", "gemma2")
     url = f"{host}/api/chat"
-    
+
     messages = []
     if system_instruction:
         messages.append({"role": "system", "content": system_instruction})
     messages.append({"role": "user", "content": prompt})
-    
+
     payload = {
         "model": model,
         "messages": messages,
         "stream": False,
         "think": False,
-        "options": {
-            "num_predict": 8192,
-            "num_ctx": 8192,
-            "temperature": 0.1
-        }
+        "options": {"num_predict": 8192, "num_ctx": 8192, "temperature": 0.1},
     }
     headers = {"Content-Type": "application/json"}
     response_data = _http_post(url, payload, headers)
-    
+
     try:
         return response_data["message"]["content"]
     except (KeyError, TypeError) as exc:
@@ -332,14 +316,17 @@ def _http_post(url: str, payload: dict[str, Any], headers: dict[str, str]) -> di
     )
 
     headers_copy = dict(headers)
-    headers_copy.setdefault("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+    headers_copy.setdefault(
+        "User-Agent",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    )
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers=headers_copy, method="POST")
-    
+
     max_retries = 5
     backoff_factor = 2.0
     initial_delay = 1.0  # seconds
-    
+
     for attempt in range(max_retries):
         try:
             with urllib.request.urlopen(req, timeout=180) as resp:
@@ -359,7 +346,7 @@ def _http_post(url: str, payload: dict[str, Any], headers: dict[str, str]) -> di
                 err_body = exc.read().decode("utf-8")
             except Exception:
                 err_body = ""
-            
+
             # Log the HTTP error
             _log_debug(
                 f"--- LLM HTTP ERROR ---\n"
@@ -372,19 +359,16 @@ def _http_post(url: str, payload: dict[str, Any], headers: dict[str, str]) -> di
 
             # Retry on rate limit (429) or transient server errors (500, 502, 503, 504)
             if exc.code in {429, 500, 502, 503, 504} and attempt < max_retries - 1:
-                delay = initial_delay * (backoff_factor ** attempt) + random.uniform(0, 1.0)
+                delay = initial_delay * (backoff_factor**attempt) + random.uniform(0, 1.0)
                 time.sleep(delay)
                 continue
-            
+
             raise LLMError(f"HTTP Error {exc.code}: {exc.reason}. Detail: {err_body}") from exc
         except Exception as exc:
             # Log network or parsing errors
             _log_debug(
-                f"--- LLM ERROR ---\n"
-                f"URL: {url}\n"
-                f"Error: {exc}\n"
-                f"-----------------"
+                f"--- LLM ERROR ---\n" f"URL: {url}\n" f"Error: {exc}\n" f"-----------------"
             )
             raise LLMError(f"Network request failed: {exc}") from exc
 
-
+    raise LLMError(f"Failed to get a response from {url} after {max_retries} attempts.")

@@ -15,7 +15,7 @@ class FrontmatterTests(unittest.TestCase):
         text = (
             "---\n"
             "priority: high\n"
-            "summary: \"A test summary\"\n"
+            'summary: "A test summary"\n'
             "tags: [test, docs, frontmatter]\n"
             "active: true\n"
             "---\n"
@@ -42,23 +42,13 @@ class FrontmatterTests(unittest.TestCase):
         self.assertIn("Missing closing YAML frontmatter delimiter", str(ctx.exception))
 
     def test_parse_invalid_line_format(self) -> None:
-        text = (
-            "---\n"
-            "invalid_line_no_colon\n"
-            "---\n"
-            "content"
-        )
+        text = "---\n" "invalid_line_no_colon\n" "---\n" "content"
         with self.assertRaises(FrontmatterError) as ctx:
             parse_frontmatter(text)
         self.assertIn("Invalid frontmatter line", str(ctx.exception))
 
     def test_parse_empty_key(self) -> None:
-        text = (
-            "---\n"
-            ": value\n"
-            "---\n"
-            "content"
-        )
+        text = "---\n" ": value\n" "---\n" "content"
         with self.assertRaises(FrontmatterError) as ctx:
             parse_frontmatter(text)
         self.assertIn("Empty frontmatter key", str(ctx.exception))
@@ -72,7 +62,7 @@ class FrontmatterTests(unittest.TestCase):
         }
         body = "Some body content."
         dumped = dump_frontmatter(metadata, body)
-        
+
         # Verify it can be parsed back correctly
         parsed_metadata, parsed_body = parse_frontmatter(dumped)
         self.assertEqual(parsed_metadata["priority"], "low")

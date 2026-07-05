@@ -7,7 +7,11 @@ from pathlib import Path
 from unittest import mock
 
 import asyncio
-from memory_fabric.eval import evaluate_dream_quality as _async_evaluate_dream_quality, evaluate_memory_fabric as _async_evaluate_memory_fabric, latest_snapshot
+from memory_fabric.eval import (
+    evaluate_dream_quality as _async_evaluate_dream_quality,
+    evaluate_memory_fabric as _async_evaluate_memory_fabric,
+    latest_snapshot,
+)
 from memory_fabric.frontmatter import parse_frontmatter
 from memory_fabric.version import __version__
 from memory_fabric.paths import get_global_root
@@ -25,18 +29,21 @@ from memory_fabric.storage import (
 )
 from memory_fabric.llm import call_llm as _async_call_llm
 
+
 def dream(*args, **kwargs):
     return asyncio.run(_async_dream(*args, **kwargs))
+
 
 def evaluate_dream_quality(*args, **kwargs):
     return asyncio.run(_async_evaluate_dream_quality(*args, **kwargs))
 
+
 def evaluate_memory_fabric(*args, **kwargs):
     return asyncio.run(_async_evaluate_memory_fabric(*args, **kwargs))
 
+
 def call_llm(*args, **kwargs):
     return asyncio.run(_async_call_llm(*args, **kwargs))
-
 
 
 class MemoryFabricTests(unittest.TestCase):
@@ -49,7 +56,9 @@ class MemoryFabricTests(unittest.TestCase):
             self.assertTrue((memory_dir / "index.md").exists())
             self.assertTrue((memory_dir / ".gitignore").exists())
 
-            metadata, _body = parse_frontmatter((memory_dir / "architecture.md").read_text(encoding="utf-8"))
+            metadata, _body = parse_frontmatter(
+                (memory_dir / "architecture.md").read_text(encoding="utf-8")
+            )
             self.assertEqual(metadata["section"], "architecture")
             self.assertEqual(metadata["schema_version"], "1.3")
             self.assertIn(metadata["priority"], {"high", "medium", "low"})
@@ -57,14 +66,19 @@ class MemoryFabricTests(unittest.TestCase):
     def test_init_with_memory_prompt(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             # 1. Init with memory prompt
-            result = initialize_memory_fabric(temp, memory_prompt="Only save architecture guidelines.")
+            result = initialize_memory_fabric(
+                temp, memory_prompt="Only save architecture guidelines."
+            )
             memory_dir = Path(temp) / ".ai-memory"
             prompt_file = memory_dir / "memory_prompt.txt"
-            
+
             self.assertTrue(result["created"])
             self.assertTrue(prompt_file.exists())
-            self.assertEqual(prompt_file.read_text(encoding="utf-8").strip(), "Only save architecture guidelines.")
-            
+            self.assertEqual(
+                prompt_file.read_text(encoding="utf-8").strip(),
+                "Only save architecture guidelines.",
+            )
+
             # Verify combined context includes memory prompt
             context = read_combined_context(temp)
             self.assertIn("local/memory_prompt", context["included_sections"])
@@ -77,14 +91,16 @@ class MemoryFabricTests(unittest.TestCase):
             self.assertIn("local/memory_prompt", consolidated_path.read_text(encoding="utf-8"))
 
             # 3. Unlink memory prompt via empty init
-            result2 = initialize_memory_fabric(temp, memory_prompt="")
+            _ = initialize_memory_fabric(temp, memory_prompt="")
             self.assertFalse(prompt_file.exists())
-            
+
             context2 = read_combined_context(temp)
             self.assertNotIn("local/memory_prompt", context2["included_sections"])
             self.assertNotIn("Only save architecture guidelines.", context2["text"])
 
-    def test_combined_context_includes_tier_zero_and_uses_summary_when_budget_is_small(self) -> None:
+    def test_combined_context_includes_tier_zero_and_uses_summary_when_budget_is_small(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temp, tempfile.TemporaryDirectory() as global_home:
             os.environ["MEMORY_FABRIC_HOME"] = global_home
             try:
@@ -119,9 +135,15 @@ class MemoryFabricTests(unittest.TestCase):
             self.assertNotIn("sk-abcdefghijklmnopqrstuvwxyz1234567890", section["text"])
 
     def test_global_path_resolution_is_platform_aware(self) -> None:
-        windows = get_global_root(platform_name="Windows", env={"APPDATA": r"C:\Users\R\AppData\Roaming"}, home="C:/Users/R")
+        windows = get_global_root(
+            platform_name="Windows",
+            env={"APPDATA": r"C:\Users\R\AppData\Roaming"},
+            home="C:/Users/R",
+        )
         mac = get_global_root(platform_name="Darwin", env={}, home="/Users/r")
-        linux = get_global_root(platform_name="Linux", env={"XDG_CONFIG_HOME": "/home/r/.config"}, home="/home/r")
+        linux = get_global_root(
+            platform_name="Linux", env={"XDG_CONFIG_HOME": "/home/r/.config"}, home="/home/r"
+        )
 
         self.assertTrue(str(windows).endswith("memory-fabric"))
         self.assertEqual(mac, Path("/Users/r/Library/Application Support/memory-fabric").resolve())
@@ -176,13 +198,13 @@ class MemoryFabricTests(unittest.TestCase):
             initialize_memory_fabric(temp)
             result = evaluate_memory_fabric(temp, save_report=False, llm_review=True)
             check_ids = [
-                check["id"]
-                for category in result["categories"]
-                for check in category["checks"]
+                check["id"] for category in result["categories"] for check in category["checks"]
             ]
 
             self.assertIn("architecture_placeholder", check_ids)
-            self.assertTrue(any("MEMORY_FABRIC_LLM_PROVIDER" in note for note in result["llm_notes"]))
+            self.assertTrue(
+                any("MEMORY_FABRIC_LLM_PROVIDER" in note for note in result["llm_notes"])
+            )
 
     def test_dream_eval_compares_snapshot_and_current_memory(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -211,7 +233,12 @@ class MemoryFabricTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             initialize_memory_fabric(temp)
             create_snapshot(temp, name="memory_old")
-            write_local_memory(temp, "schemas", "# Schemas\n\nCustomerProfile includes locale and timezone.", mode="replace")
+            write_local_memory(
+                temp,
+                "schemas",
+                "# Schemas\n\nCustomerProfile includes locale and timezone.",
+                mode="replace",
+            )
             latest = create_snapshot(temp, name="memory_new")
             (Path(temp) / ".ai-memory" / "schemas.md").unlink()
 
@@ -219,13 +246,17 @@ class MemoryFabricTests(unittest.TestCase):
             result = evaluate_dream_quality(temp, snapshot="latest", save_report=False)
 
             self.assertEqual(result["baseline_snapshot"], "memory_new")
-            self.assertTrue(any("removed memory sections" in item for item in result["regressions"]))
+            self.assertTrue(
+                any("removed memory sections" in item for item in result["regressions"])
+            )
 
     def test_dream_candidate_mode_is_non_destructive(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             initialize_memory_fabric(temp)
             line = "Shared architecture note that is intentionally duplicated across sections for consolidation checks."
-            write_local_memory(temp, "architecture", f"# Architecture\n\n- {line}\n", mode="replace")
+            write_local_memory(
+                temp, "architecture", f"# Architecture\n\n- {line}\n", mode="replace"
+            )
             write_local_memory(temp, "decisions", f"# Decisions\n\n- {line}\n", mode="replace")
 
             before_arch = read_section(temp, "architecture")["text"]
@@ -245,7 +276,9 @@ class MemoryFabricTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             initialize_memory_fabric(temp)
             line = "This duplicate line should be consolidated by Dreaming apply mode for live memory updates."
-            write_local_memory(temp, "architecture", f"# Architecture\n\n- {line}\n", mode="replace")
+            write_local_memory(
+                temp, "architecture", f"# Architecture\n\n- {line}\n", mode="replace"
+            )
             write_local_memory(temp, "schemas", f"# Schemas\n\n- {line}\n", mode="replace")
 
             result = dream(temp, mode="deep", apply=True)
@@ -261,10 +294,12 @@ class MemoryFabricTests(unittest.TestCase):
             git_dir.mkdir()
             result = initialize_memory_fabric(temp, install_hooks=True)
             post_commit_path = git_dir / "hooks" / "post-commit"
-            
+
             self.assertTrue(post_commit_path.exists())
             self.assertTrue(any("post-commit" in f for f in result["files_created"]))
-            self.assertIn("ai-memory dream --mode light --apply", post_commit_path.read_text(encoding="utf-8"))
+            self.assertIn(
+                "ai-memory dream --mode light --apply", post_commit_path.read_text(encoding="utf-8")
+            )
 
     def test_init_install_hooks_without_git_emits_warning(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -274,9 +309,11 @@ class MemoryFabricTests(unittest.TestCase):
     def test_status_includes_memory_sizes(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             initialize_memory_fabric(temp)
-            write_local_memory(temp, "architecture", "# Architecture\n\nSome important rules.", mode="replace")
+            write_local_memory(
+                temp, "architecture", "# Architecture\n\nSome important rules.", mode="replace"
+            )
             res = status(temp)
-            
+
             self.assertIn("architecture.md", res["memory_sizes"])
             self.assertGreater(res["memory_sizes"]["architecture.md"]["bytes"], 0)
             self.assertGreater(res["memory_sizes"]["architecture.md"]["tokens"], 0)
@@ -287,32 +324,40 @@ class MemoryFabricTests(unittest.TestCase):
             initialize_memory_fabric(temp)
             res = doctor(temp)
             self.assertTrue(res["ok"])
-            
+
             (Path(temp) / ".ai-memory" / "schemas.md").unlink()
             res2 = doctor(temp)
-            self.assertTrue(any("missing from index.md" in w or "file does not exist" in w for w in res2["warnings"]))
+            self.assertTrue(
+                any(
+                    "missing from index.md" in w or "file does not exist" in w
+                    for w in res2["warnings"]
+                )
+            )
 
     def test_dream_ingests_git_diff_and_scans_secrets_and_marks_stale(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             initialize_memory_fabric(temp)
-            
+
             arch_path = Path(temp) / ".ai-memory" / "architecture.md"
             arch_text = arch_path.read_text(encoding="utf-8")
             metadata, body = parse_frontmatter(arch_text)
             metadata["last_updated"] = "2020-01-01T12:00:00-04:00"
             from memory_fabric.frontmatter import dump_frontmatter
+
             arch_path.write_text(dump_frontmatter(metadata, body), encoding="utf-8")
-            
+
             private_dir = Path(temp) / ".ai-memory" / "private"
             private_dir.mkdir(exist_ok=True)
-            (private_dir / "session_transcripts.md").write_text("API_KEY = 'sk-abcdefghijklmnopqrstuvwxyz1234567890'", encoding="utf-8")
-            
+            (private_dir / "session_transcripts.md").write_text(
+                "API_KEY = 'sk-abcdefghijklmnopqrstuvwxyz1234567890'", encoding="utf-8"
+            )
+
             result = dream(temp, apply=True, mode="light")
-            
+
             self.assertTrue(any("marked as stale" in w for w in result["warnings"]))
             self.assertTrue(any("redacted" in w for w in result["warnings"]))
             self.assertGreater(result["redactions"], 0)
-            
+
             new_arch_text = arch_path.read_text(encoding="utf-8")
             new_metadata, _ = parse_frontmatter(new_arch_text)
             self.assertEqual(new_metadata.get("review_status"), "stale")
@@ -321,15 +366,18 @@ class MemoryFabricTests(unittest.TestCase):
     @mock.patch("builtins.input", return_value="y")
     def test_cli_sync_global_interactive(self, mock_input, mock_isatty) -> None:
         from memory_fabric.cli import main
+
         with tempfile.TemporaryDirectory() as temp, tempfile.TemporaryDirectory() as global_home:
             os.environ["MEMORY_FABRIC_HOME"] = global_home
             try:
                 initialize_memory_fabric(temp)
-                write_local_memory(temp, "decisions", "# Decisions\n\nRule details.", mode="replace")
-                
+                write_local_memory(
+                    temp, "decisions", "# Decisions\n\nRule details.", mode="replace"
+                )
+
                 ret = main(["--cwd", temp, "sync-global"])
                 self.assertEqual(ret, 0)
-                
+
                 global_decisions = Path(global_home) / "global" / "decisions.md"
                 self.assertTrue(global_decisions.exists())
                 self.assertIn("Rule details", global_decisions.read_text(encoding="utf-8"))
@@ -344,8 +392,8 @@ class MemoryFabricTests(unittest.TestCase):
             hooks_dir.mkdir()
             post_commit_path = hooks_dir / "post-commit"
             post_commit_path.write_text("#!/bin/sh\necho 'hello'\n", encoding="utf-8")
-            
-            result = initialize_memory_fabric(temp, install_hooks=True)
+
+            _ = initialize_memory_fabric(temp, install_hooks=True)
             self.assertTrue(post_commit_path.exists())
             content = post_commit_path.read_text(encoding="utf-8")
             self.assertIn("echo 'hello'", content)
@@ -354,28 +402,34 @@ class MemoryFabricTests(unittest.TestCase):
     @mock.patch("sys.stdin.isatty", return_value=True)
     def test_cli_sync_global_interactive_append(self, mock_isatty) -> None:
         from memory_fabric.cli import main
+
         with tempfile.TemporaryDirectory() as temp, tempfile.TemporaryDirectory() as global_home:
             os.environ["MEMORY_FABRIC_HOME"] = global_home
             try:
                 initialize_memory_fabric(temp)
-                write_local_memory(temp, "decisions", "# Decisions\n\nRule details local.", mode="replace")
-                
+                write_local_memory(
+                    temp, "decisions", "# Decisions\n\nRule details local.", mode="replace"
+                )
+
                 # Delete other markdown files to ensure only decisions.md is sync'd
                 for p in (Path(temp) / ".ai-memory").glob("*.md"):
                     if p.name not in {"decisions.md"}:
                         p.unlink()
-                
+
                 global_dir = Path(global_home) / "global"
                 global_dir.mkdir(parents=True)
                 global_decisions = global_dir / "decisions.md"
                 from memory_fabric.templates import build_memory_file
                 from memory_fabric.frontmatter import parse_frontmatter, dump_frontmatter
+
                 meta, body = parse_frontmatter(build_memory_file("decisions"))
-                global_decisions.write_text(dump_frontmatter(meta, "# Decisions\n\nRule details global."), encoding="utf-8")
-                
+                global_decisions.write_text(
+                    dump_frontmatter(meta, "# Decisions\n\nRule details global."), encoding="utf-8"
+                )
+
                 with mock.patch("builtins.input", side_effect=["y", "n", "y"]):
                     ret = main(["--cwd", temp, "sync-global"])
-                
+
                 self.assertEqual(ret, 0)
                 updated_content = global_decisions.read_text(encoding="utf-8")
                 self.assertIn("Rule details global.", updated_content)
@@ -389,36 +443,38 @@ class MemoryFabricTests(unittest.TestCase):
             input_content = (
                 "---\n"
                 "priority: high\n"
-                "summary: \"Extracted decisions summary.\"\n"
+                'summary: "Extracted decisions summary."\n'
                 "tags: [db, schema]\n"
                 "---\n"
                 "- Bullet 1\n"
             )
             res = write_local_memory(temp, "decisions", input_content, mode="replace")
             self.assertTrue(res["changed"])
-            
+
             section = read_section(temp, "decisions")
             self.assertEqual(section["metadata"]["priority"], "high")
             self.assertEqual(section["metadata"]["summary"], "Extracted decisions summary.")
             self.assertEqual(section["metadata"]["tags"], ["db", "schema"])
             self.assertIn("- Bullet 1", section["text"])
-            self.assertNotIn("---", section["text"].split("---", 2)[2]) # verify no second frontmatter in body
+            self.assertNotIn(
+                "---", section["text"].split("---", 2)[2]
+            )  # verify no second frontmatter in body
 
     def test_write_local_memory_filters_duplicates_on_append(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             initialize_memory_fabric(temp)
             write_local_memory(temp, "decisions", "- Bullet 1\n- Bullet 2", mode="replace")
-            
+
             # Try appending a duplicate and a unique bullet
             res = write_local_memory(temp, "decisions", "- Bullet 2\n- Bullet 3", mode="append")
             self.assertTrue(res["changed"])
-            
+
             section = read_section(temp, "decisions")
             # Bullet 2 should not be duplicated
             text = section["text"]
             self.assertEqual(text.count("Bullet 2"), 1)
             self.assertEqual(text.count("Bullet 3"), 1)
-            
+
             # Try appending only duplicates
             res2 = write_local_memory(temp, "decisions", "- Bullet 1\n- Bullet 3", mode="append")
             self.assertFalse(res2["changed"])
@@ -433,16 +489,21 @@ class MemoryFabricTests(unittest.TestCase):
                 self.data = data
                 self.code = code
                 self.reason = reason
+
             def read(self, *args, **kwargs):
                 return self.data
+
             def __enter__(self):
                 return self
+
             def __exit__(self, *args):
                 pass
 
         # 1. Test Gemini
         mock_urlopen.return_value = MockResponse(
-            json.dumps({"candidates": [{"content": {"parts": [{"text": "gemini result"}]}}]}).encode("utf-8")
+            json.dumps(
+                {"candidates": [{"content": {"parts": [{"text": "gemini result"}]}}]}
+            ).encode("utf-8")
         )
         os.environ["MEMORY_FABRIC_LLM_PROVIDER"] = "gemini"
         os.environ["GEMINI_API_KEY"] = "gemini-key"
@@ -510,23 +571,25 @@ class MemoryFabricTests(unittest.TestCase):
         os.environ.pop("ANTHROPIC_API_KEY", None)
         os.environ.pop("OLLAMA_MODEL", None)
 
-
-    @mock.patch("memory_fabric.storage._core.call_llm", new_callable=mock.AsyncMock)
+    @mock.patch("memory_fabric.storage.dream.call_llm", new_callable=mock.AsyncMock)
     def test_dream_with_llm(self, mock_call_llm) -> None:
         import json
+
         with tempfile.TemporaryDirectory() as temp:
             initialize_memory_fabric(temp)
 
             os.environ["MEMORY_FABRIC_LLM_PROVIDER"] = "gemini"
             os.environ["GEMINI_API_KEY"] = "gemini-key"
 
-            consolidation_response = json.dumps({
-                "consolidated_files": {
-                    "architecture": "# Architecture\n\nConsolidated LLM content."
-                },
-                "contradictions": ["Mismatched settings"],
-                "warnings": ["Warning about schema"]
-            })
+            consolidation_response = json.dumps(
+                {
+                    "consolidated_files": {
+                        "architecture": "# Architecture\n\nConsolidated LLM content."
+                    },
+                    "contradictions": ["Mismatched settings"],
+                    "warnings": ["Warning about schema"],
+                }
+            )
 
             def mock_llm_func(prompt, system_instruction="", *args, **kwargs):
                 if "consolidated_files" in prompt:
@@ -537,8 +600,12 @@ class MemoryFabricTests(unittest.TestCase):
 
             result = dream(temp, mode="deep", apply=True)
             self.assertTrue(result["changed"])
-            self.assertTrue(any("Contradiction detected: Mismatched settings" in w for w in result["warnings"]))
-            self.assertTrue(any("Consolidation warning: Warning about schema" in w for w in result["warnings"]))
+            self.assertTrue(
+                any("Contradiction detected: Mismatched settings" in w for w in result["warnings"])
+            )
+            self.assertTrue(
+                any("Consolidation warning: Warning about schema" in w for w in result["warnings"])
+            )
 
             # Verify architecture is updated
             arch_text = read_section(temp, "architecture")["text"]
@@ -556,10 +623,14 @@ class MemoryFabricTests(unittest.TestCase):
             os.environ["MEMORY_FABRIC_LLM_PROVIDER"] = "gemini"
             os.environ["GEMINI_API_KEY"] = "gemini-key"
 
-            mock_call_llm.return_value = "- Focus on schema definitions.\n- Simplify code standards."
+            mock_call_llm.return_value = (
+                "- Focus on schema definitions.\n- Simplify code standards."
+            )
 
             result = evaluate_memory_fabric(temp, save_report=False, llm_review=True)
-            self.assertTrue(any("Focus on schema definitions" in note for note in result["llm_notes"]))
+            self.assertTrue(
+                any("Focus on schema definitions" in note for note in result["llm_notes"])
+            )
             self.assertTrue(any("Simplify code standards" in note for note in result["llm_notes"]))
 
             # Clean up env
@@ -577,7 +648,12 @@ class MemoryFabricTests(unittest.TestCase):
             mock_call_llm.side_effect = Exception("API connection timed out")
 
             result = evaluate_memory_fabric(temp, save_report=False, llm_review=True)
-            self.assertTrue(any("Failed to generate qualitative LLM review" in note for note in result["llm_notes"]))
+            self.assertTrue(
+                any(
+                    "Failed to generate qualitative LLM review" in note
+                    for note in result["llm_notes"]
+                )
+            )
             self.assertTrue(any("API connection timed out" in note for note in result["llm_notes"]))
 
             # Clean up env
@@ -595,16 +671,21 @@ class MemoryFabricTests(unittest.TestCase):
                 self.data = data
                 self.code = code
                 self.reason = reason
+
             def read(self, *args, **kwargs):
                 return self.data
+
             def __enter__(self):
                 return self
+
             def __exit__(self, *args):
                 pass
 
         err_response = urllib.error.HTTPError("url", 429, "Too Many Requests", {}, None)
         success_response = MockResponse(
-            json.dumps({"candidates": [{"content": {"parts": [{"text": "retry success"}]}}]}).encode("utf-8")
+            json.dumps(
+                {"candidates": [{"content": {"parts": [{"text": "retry success"}]}}]}
+            ).encode("utf-8")
         )
 
         mock_urlopen.side_effect = [err_response, success_response]
@@ -641,14 +722,22 @@ class MemoryFabricTests(unittest.TestCase):
             os.environ.pop("MEMORY_FABRIC_LLM_PROVIDER", None)
             os.environ.pop("GEMINI_API_KEY", None)
 
-    @mock.patch("memory_fabric.storage._core.now_iso")
-    @mock.patch("memory_fabric.storage._core.call_llm", new_callable=mock.AsyncMock)
-    def test_dream_summary_skips_when_hash_matches(self, mock_call_llm, mock_now_iso) -> None:
+    @mock.patch("memory_fabric.storage.finalize.call_llm", new_callable=mock.AsyncMock)
+    def test_dream_summary_skips_when_hash_matches(self, mock_call_llm) -> None:
         import hashlib
         from memory_fabric.frontmatter import dump_frontmatter
-        with tempfile.TemporaryDirectory() as temp:
+
+        # dream() calls call_llm directly (consolidation prompt) and finalize's
+        # _process_and_finalize_candidate also calls it (per-section summaries) —
+        # both references must be the *same* mock so call_count/side_effect are shared.
+        with (
+            tempfile.TemporaryDirectory() as temp,
+            mock.patch("memory_fabric.storage.dream.call_llm", new=mock_call_llm),
+            mock.patch("memory_fabric.storage.finalize.now_iso") as mock_now_iso,
+            mock.patch("memory_fabric.storage.snapshots.now_iso") as mock_snapshot_now_iso,
+        ):
             initialize_memory_fabric(temp)
-            
+
             # Let's delete other sections so we have a clean test with just one section
             for p in (Path(temp) / ".ai-memory").glob("*.md"):
                 if p.name not in {"architecture.md"}:
@@ -657,59 +746,79 @@ class MemoryFabricTests(unittest.TestCase):
             os.environ["MEMORY_FABRIC_LLM_PROVIDER"] = "gemini"
             os.environ["GEMINI_API_KEY"] = "gemini-key"
 
-            # Return different times on successive calls to prevent snapshot collisions
+            # Return different times on successive calls to prevent snapshot collisions.
+            # Shared across both mocks (dream's own now_iso + snapshots.create_snapshot's
+            # now_iso) so the counter doesn't restart and collide between the two.
             call_count = 0
+
             def increment_now_iso():
                 nonlocal call_count
                 call_count += 1
                 return f"2026-06-02T13:00:{call_count:02d}-04:00"
+
             mock_now_iso.side_effect = increment_now_iso
+            mock_snapshot_now_iso.side_effect = increment_now_iso
 
             try:
                 # 1. Run first dream: will generate a summary
                 mock_call_llm.return_value = "Custom architecture summary."
                 res1 = dream(temp, mode="deep", apply=True)
-                
+
                 self.assertTrue(res1["changed"])
-                self.assertEqual(mock_call_llm.call_count, 2)  # 1 consolidation call + 1 summary call
-                
+                self.assertEqual(
+                    mock_call_llm.call_count, 2
+                )  # 1 consolidation call + 1 summary call
+
                 # Check that summary_hash exists in metadata
                 arch_path = Path(temp) / ".ai-memory" / "architecture.md"
                 metadata, body = parse_frontmatter(arch_path.read_text(encoding="utf-8"))
                 self.assertEqual(metadata.get("summary"), "Custom architecture summary.")
                 expected_hash = hashlib.md5(body.strip().encode("utf-8")).hexdigest()
                 self.assertEqual(metadata.get("summary_hash"), expected_hash)
-                
+
                 # 2. Run second dream: body is identical, summary is custom, hash matches -> skips LLM call
                 mock_call_llm.reset_mock()
-                res2 = dream(temp, mode="deep", apply=True)
-                self.assertEqual(mock_call_llm.call_count, 1)  # 1 consolidation call + 0 summary calls
-                
+                _ = dream(temp, mode="deep", apply=True)
+                self.assertEqual(
+                    mock_call_llm.call_count, 1
+                )  # 1 consolidation call + 0 summary calls
+
                 # 3. Modify body: hash mismatch -> calls LLM
                 metadata["last_updated"] = "2026-06-02T13:00:00-04:00"
                 body = "# Architecture\n\nNew modified content here."
                 arch_path.write_text(dump_frontmatter(metadata, body), encoding="utf-8")
-                
+
                 mock_call_llm.reset_mock()
                 mock_call_llm.return_value = "New custom architecture summary."
-                res3 = dream(temp, mode="deep", apply=True)
-                self.assertEqual(mock_call_llm.call_count, 2)  # 1 consolidation call + 1 summary call
-                
+                _ = dream(temp, mode="deep", apply=True)
+                self.assertEqual(
+                    mock_call_llm.call_count, 2
+                )  # 1 consolidation call + 1 summary call
+
                 metadata2, body2 = parse_frontmatter(arch_path.read_text(encoding="utf-8"))
                 self.assertEqual(metadata2.get("summary"), "New custom architecture summary.")
-                
+
             finally:
                 os.environ.pop("MEMORY_FABRIC_LLM_PROVIDER", None)
                 os.environ.pop("GEMINI_API_KEY", None)
 
-    @mock.patch("memory_fabric.storage._core.now_iso")
-    @mock.patch("memory_fabric.storage._core.call_llm", new_callable=mock.AsyncMock)
-    def test_dream_consolidation_skips_when_hash_matches(self, mock_call_llm, mock_now_iso) -> None:
+    @mock.patch("memory_fabric.storage.finalize.call_llm", new_callable=mock.AsyncMock)
+    def test_dream_consolidation_skips_when_hash_matches(self, mock_call_llm) -> None:
         import json
         from memory_fabric.frontmatter import dump_frontmatter
-        with tempfile.TemporaryDirectory() as temp:
+
+        # dream() calls call_llm directly (consolidation prompt) and finalize's
+        # _process_and_finalize_candidate also calls it (per-section summaries) —
+        # both references must be the *same* mock so call_count/side_effect are shared.
+        with (
+            tempfile.TemporaryDirectory() as temp,
+            mock.patch("memory_fabric.storage.dream.call_llm", new=mock_call_llm),
+            mock.patch("memory_fabric.storage.finalize.now_iso") as mock_now_iso,
+            mock.patch("memory_fabric.storage.snapshots.now_iso") as mock_snapshot_now_iso,
+            mock.patch("memory_fabric.storage.consolidation.now_iso") as mock_consolidation_now_iso,
+        ):
             initialize_memory_fabric(temp)
-            
+
             # Let's delete other sections so we have a clean test with just one section
             for p in (Path(temp) / ".ai-memory").glob("*.md"):
                 if p.name not in {"architecture.md"}:
@@ -719,21 +828,29 @@ class MemoryFabricTests(unittest.TestCase):
             os.environ["GEMINI_API_KEY"] = "gemini-key"
 
             call_count = 0
+
             def increment_now_iso():
                 nonlocal call_count
                 call_count += 1
                 return f"2026-06-02T13:00:{call_count:02d}-04:00"
+
             mock_now_iso.side_effect = increment_now_iso
+            mock_snapshot_now_iso.side_effect = increment_now_iso
+            mock_consolidation_now_iso.side_effect = increment_now_iso
 
             try:
                 # 1. First dream run
                 mock_call_llm.side_effect = [
-                    json.dumps({
-                        "consolidated_files": {"architecture": "# Architecture\n\nConsolidated."},
-                        "contradictions": [],
-                        "warnings": []
-                    }),
-                    "Architecture summary."
+                    json.dumps(
+                        {
+                            "consolidated_files": {
+                                "architecture": "# Architecture\n\nConsolidated."
+                            },
+                            "contradictions": [],
+                            "warnings": [],
+                        }
+                    ),
+                    "Architecture summary.",
                 ]
                 res1 = dream(temp, mode="deep", apply=True)
                 self.assertTrue(res1["changed"])
@@ -742,26 +859,32 @@ class MemoryFabricTests(unittest.TestCase):
                 # 2. Second run: content, git diff, and files are identical -> skips consolidation LLM call!
                 mock_call_llm.reset_mock()
                 res2 = dream(temp, mode="deep", apply=True)
-                self.assertEqual(mock_call_llm.call_count, 0) # exactly 0 calls!
+                self.assertEqual(mock_call_llm.call_count, 0)  # exactly 0 calls!
                 self.assertEqual(res2["affected_files"], ["index.md"])
 
                 # 3. Third run: let's modify the file content so hash mismatches
                 arch_path = Path(temp) / ".ai-memory" / "architecture.md"
                 arch_meta, arch_body = parse_frontmatter(arch_path.read_text(encoding="utf-8"))
-                arch_path.write_text(dump_frontmatter(arch_meta, arch_body + "\nNew change.\n"), encoding="utf-8")
+                arch_path.write_text(
+                    dump_frontmatter(arch_meta, arch_body + "\nNew change.\n"), encoding="utf-8"
+                )
 
                 mock_call_llm.reset_mock()
                 mock_call_llm.side_effect = [
-                    json.dumps({
-                        "consolidated_files": {"architecture": "# Architecture\n\nConsolidated again."},
-                        "contradictions": [],
-                        "warnings": []
-                    }),
-                    "New architecture summary."
+                    json.dumps(
+                        {
+                            "consolidated_files": {
+                                "architecture": "# Architecture\n\nConsolidated again."
+                            },
+                            "contradictions": [],
+                            "warnings": [],
+                        }
+                    ),
+                    "New architecture summary.",
                 ]
                 res3 = dream(temp, mode="deep", apply=True)
                 self.assertTrue(res3["changed"])
-                self.assertEqual(mock_call_llm.call_count, 2) # Consolidation + summary refreshed
+                self.assertEqual(mock_call_llm.call_count, 2)  # Consolidation + summary refreshed
 
             finally:
                 os.environ.pop("MEMORY_FABRIC_LLM_PROVIDER", None)
@@ -781,7 +904,7 @@ class MemoryFabricTests(unittest.TestCase):
                     "## Decision 2: Run with CUDA\n"
                     "We decided to run with CUDA acceleration.\n"
                 ),
-                mode="replace"
+                mode="replace",
             )
             # Write another section with only lists (no H2)
             write_local_memory(
@@ -793,26 +916,30 @@ class MemoryFabricTests(unittest.TestCase):
                     "- Clean the workspace files\n"
                     "- Add more logs\n"
                 ),
-                mode="replace"
+                mode="replace",
             )
-            
+
             # Trigger Dreaming (light mode is enough to regenerate index)
             dream(temp, mode="light", apply=True)
-            
+
             index_path = Path(temp) / ".ai-memory" / "index.md"
             self.assertTrue(index_path.exists())
             index_text = index_path.read_text(encoding="utf-8")
-            
+
             # Verify the headers are updated in index table
             self.assertIn("| Section | Priority | Summary | Key Topics |", index_text)
             self.assertIn("| --- | --- | --- | --- |", index_text)
-            
+
             # Verify the extracted H2 topics are correct in the table
-            self.assertIn("• Decision 1: Use local model<br>• Decision 2: Run with CUDA", index_text)
-            
+            self.assertIn(
+                "• Decision 1: Use local model<br>• Decision 2: Run with CUDA", index_text
+            )
+
             # Verify fallback bullet list topics are correct
-            self.assertIn("• Fix the imports<br>• Clean the workspace files<br>• Add more logs", index_text)
-            
+            self.assertIn(
+                "• Fix the imports<br>• Clean the workspace files<br>• Add more logs", index_text
+            )
+
             # Run doctor to ensure index consistency validation is happy
             res_doctor = doctor(temp)
             self.assertTrue(res_doctor["ok"])
@@ -820,43 +947,50 @@ class MemoryFabricTests(unittest.TestCase):
     def test_consolidated_memory_generation_and_optimization(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             initialize_memory_fabric(temp)
-            write_local_memory(temp, "architecture", "# Architecture\n\nActive arch details.", mode="replace")
-            write_local_memory(temp, "decisions", "# Decisions\n\nActive decision details.", mode="replace")
-            
+            write_local_memory(
+                temp, "architecture", "# Architecture\n\nActive arch details.", mode="replace"
+            )
+            write_local_memory(
+                temp, "decisions", "# Decisions\n\nActive decision details.", mode="replace"
+            )
+
             # 1. Trigger Dreaming to generate index.md and consolidated_memory.md
             dream(temp, mode="light", apply=True)
-            
+
             memory_dir = Path(temp) / ".ai-memory"
             consolidated_path = memory_dir / "consolidated_memory.md"
             self.assertTrue(consolidated_path.exists())
-            
+
             consolidated_text = consolidated_path.read_text(encoding="utf-8")
             self.assertIn("<!-- memory-fabric:local/architecture -->", consolidated_text)
             self.assertIn("Active arch details.", consolidated_text)
             self.assertIn("<!-- memory-fabric:local/decisions -->", consolidated_text)
             self.assertIn("Active decision details.", consolidated_text)
-            
+
             # 2. Check that consolidated_memory.md is ignored by standard lists and status
             status_res = status(temp)
             self.assertNotIn("consolidated_memory.md", status_res["memory_sizes"])
-            
+
             doctor_res = doctor(temp)
             self.assertTrue(doctor_res["ok"])
             self.assertNotIn(str(consolidated_path), doctor_res["checked_files"])
-            
+
             # 3. Check read_combined_context uses the cached file when within token budget
             bundle = read_combined_context(temp, max_tokens=4000)
             self.assertIn("Active arch details.", bundle["text"])
             self.assertIn("local/architecture", bundle["included_sections"])
             self.assertIn("local/decisions", bundle["included_sections"])
             self.assertEqual(bundle["omitted_sections"], [])
-            
+
             # 4. Check read_combined_context budget fallback (falls back to selective reading if budget too low)
             small_bundle = read_combined_context(temp, max_tokens=20)
-            self.assertIn("omitted because it exceeded the remaining token budget", small_bundle["text"])
+            self.assertIn(
+                "omitted because it exceeded the remaining token budget", small_bundle["text"]
+            )
 
     def test_server_main_stdio(self) -> None:
         import memory_fabric.server as server
+
         with mock.patch.object(server.FastMCP, "run") as mock_run:
             code = server.main(["--transport", "stdio"])
             self.assertEqual(code, 0)
@@ -864,25 +998,33 @@ class MemoryFabricTests(unittest.TestCase):
 
     def test_server_main_sse(self) -> None:
         import memory_fabric.server as server
+
         with mock.patch.object(server.FastMCP, "run") as mock_run:
             orig_host = server.mcp.settings.host
             orig_port = server.mcp.settings.port
             orig_enable = server.mcp.settings.transport_security.enable_dns_rebinding_protection
             orig_hosts = server.mcp.settings.transport_security.allowed_hosts
             orig_origins = server.mcp.settings.transport_security.allowed_origins
-            
+
             try:
-                code = server.main([
-                    "--transport", "sse",
-                    "--host", "127.0.0.1",
-                    "--port", "8888",
-                    "--allow-all-origins"
-                ])
+                code = server.main(
+                    [
+                        "--transport",
+                        "sse",
+                        "--host",
+                        "127.0.0.1",
+                        "--port",
+                        "8888",
+                        "--allow-all-origins",
+                    ]
+                )
                 self.assertEqual(code, 0)
                 mock_run.assert_called_once_with(transport="sse")
                 self.assertEqual(server.mcp.settings.host, "127.0.0.1")
                 self.assertEqual(server.mcp.settings.port, 8888)
-                self.assertFalse(server.mcp.settings.transport_security.enable_dns_rebinding_protection)
+                self.assertFalse(
+                    server.mcp.settings.transport_security.enable_dns_rebinding_protection
+                )
                 self.assertEqual(server.mcp.settings.transport_security.allowed_hosts, ["*"])
                 self.assertEqual(server.mcp.settings.transport_security.allowed_origins, ["*"])
             finally:
@@ -900,10 +1042,13 @@ class MemoryFabricTests(unittest.TestCase):
         class MockResponse:
             def __init__(self, data: bytes):
                 self.data = data
+
             def read(self, *args, **kwargs):
                 return self.data
+
             def __enter__(self):
                 return self
+
             def __exit__(self, *args):
                 pass
 
@@ -929,13 +1074,27 @@ class MemoryFabricTests(unittest.TestCase):
                 os.environ["MEMORY_FABRIC_LLM_DEBUG"] = "stderr"
                 mock_stderr.write.reset_mock()
                 call_llm("test prompt", "system instructions")
-                
+
                 # Check that stderr received the log containing prompt and URL
-                self.assertTrue(any("--- LLM REQUEST ---" in call[0][0] for call in mock_stderr.write.call_args_list))
-                self.assertTrue(any("openai" in call[0][0] for call in mock_stderr.write.call_args_list))
-                self.assertTrue(any("[REDACTED]" in call[0][0] for call in mock_stderr.write.call_args_list))
+                self.assertTrue(
+                    any(
+                        "--- LLM REQUEST ---" in call[0][0]
+                        for call in mock_stderr.write.call_args_list
+                    )
+                )
+                self.assertTrue(
+                    any("openai" in call[0][0] for call in mock_stderr.write.call_args_list)
+                )
+                self.assertTrue(
+                    any("[REDACTED]" in call[0][0] for call in mock_stderr.write.call_args_list)
+                )
                 # Ensure sk-super-secret-key was NOT written
-                self.assertFalse(any("sk-super-secret-key" in call[0][0] for call in mock_stderr.write.call_args_list))
+                self.assertFalse(
+                    any(
+                        "sk-super-secret-key" in call[0][0]
+                        for call in mock_stderr.write.call_args_list
+                    )
+                )
                 self.assertFalse(Path("llm_debug.log").exists())
 
                 # 3. Debug logging to a custom file path
@@ -957,7 +1116,12 @@ class MemoryFabricTests(unittest.TestCase):
                 os.environ["MEMORY_FABRIC_LLM_DEBUG"] = "1"
                 mock_stderr.write.reset_mock()
                 call_llm("test prompt", "system instructions")
-                self.assertTrue(any("--- LLM REQUEST ---" in call[0][0] for call in mock_stderr.write.call_args_list))
+                self.assertTrue(
+                    any(
+                        "--- LLM REQUEST ---" in call[0][0]
+                        for call in mock_stderr.write.call_args_list
+                    )
+                )
                 self.assertTrue(Path("llm_debug.log").exists())
                 default_log_content = Path("llm_debug.log").read_text(encoding="utf-8")
                 self.assertIn("--- LLM REQUEST ---", default_log_content)
@@ -967,7 +1131,9 @@ class MemoryFabricTests(unittest.TestCase):
                 Path("llm_debug.log").unlink()  # Remove the previous one
                 call_llm("test prompt", "system instructions")
                 self.assertTrue((Path(".ai-memory") / "llm_debug.log").exists())
-                aimem_log_content = (Path(".ai-memory") / "llm_debug.log").read_text(encoding="utf-8")
+                aimem_log_content = (Path(".ai-memory") / "llm_debug.log").read_text(
+                    encoding="utf-8"
+                )
                 self.assertIn("--- LLM REQUEST ---", aimem_log_content)
 
             finally:
@@ -979,7 +1145,8 @@ class MemoryFabricTests(unittest.TestCase):
 
 class MemoryStoreTests(unittest.TestCase):
     def test_store_write_creates_nested_file_with_frontmatter(self) -> None:
-        from memory_fabric.storage import write_memory_store, read_memory_store
+        from memory_fabric.storage import write_memory_store
+
         with tempfile.TemporaryDirectory() as temp:
             initialize_memory_fabric(temp)
             result = write_memory_store(
@@ -1007,6 +1174,7 @@ class MemoryStoreTests(unittest.TestCase):
 
     def test_store_write_redacts_secrets(self) -> None:
         from memory_fabric.storage import write_memory_store
+
         with tempfile.TemporaryDirectory() as temp:
             initialize_memory_fabric(temp)
             result = write_memory_store(
@@ -1023,6 +1191,7 @@ class MemoryStoreTests(unittest.TestCase):
 
     def test_store_read_returns_content_and_metadata(self) -> None:
         from memory_fabric.storage import write_memory_store, read_memory_store
+
         with tempfile.TemporaryDirectory() as temp:
             initialize_memory_fabric(temp)
             write_memory_store(
@@ -1041,6 +1210,7 @@ class MemoryStoreTests(unittest.TestCase):
 
     def test_store_read_truncates_large_files(self) -> None:
         from memory_fabric.storage import write_memory_store, read_memory_store
+
         with tempfile.TemporaryDirectory() as temp:
             initialize_memory_fabric(temp)
             write_memory_store(
@@ -1056,6 +1226,7 @@ class MemoryStoreTests(unittest.TestCase):
 
     def test_store_list_returns_entries(self) -> None:
         from memory_fabric.storage import write_memory_store, list_memory_store
+
         with tempfile.TemporaryDirectory() as temp:
             initialize_memory_fabric(temp)
             write_memory_store(temp, store_path="bugs/fix-a", content="Fix A")
@@ -1073,6 +1244,7 @@ class MemoryStoreTests(unittest.TestCase):
 
     def test_store_list_filters_by_prefix(self) -> None:
         from memory_fabric.storage import write_memory_store, list_memory_store
+
         with tempfile.TemporaryDirectory() as temp:
             initialize_memory_fabric(temp)
             write_memory_store(temp, store_path="bugs/fix-a", content="Fix A")
@@ -1084,6 +1256,7 @@ class MemoryStoreTests(unittest.TestCase):
 
     def test_store_list_filters_by_tags(self) -> None:
         from memory_fabric.storage import write_memory_store, list_memory_store
+
         with tempfile.TemporaryDirectory() as temp:
             initialize_memory_fabric(temp)
             write_memory_store(temp, store_path="bugs/fix-a", content="Fix A", tags=["auth"])
@@ -1095,9 +1268,12 @@ class MemoryStoreTests(unittest.TestCase):
 
     def test_store_delete_removes_file_and_empty_dirs(self) -> None:
         from memory_fabric.storage import write_memory_store, delete_memory_store
+
         with tempfile.TemporaryDirectory() as temp:
             initialize_memory_fabric(temp)
-            write_result = write_memory_store(temp, store_path="deep/nested/file", content="Content")
+            write_result = write_memory_store(
+                temp, store_path="deep/nested/file", content="Content"
+            )
             file_path = Path(write_result["path"])
             self.assertTrue(file_path.exists())
 
@@ -1109,6 +1285,7 @@ class MemoryStoreTests(unittest.TestCase):
 
     def test_store_path_validation_rejects_traversal(self) -> None:
         from memory_fabric.storage import _validate_store_path
+
         with self.assertRaises(ValueError):
             _validate_store_path("../etc/passwd")
         with self.assertRaises(ValueError):
@@ -1123,6 +1300,7 @@ class MemoryStoreTests(unittest.TestCase):
 
     def test_store_search_included_in_keyword_search(self) -> None:
         from memory_fabric.storage import write_memory_store
+
         with tempfile.TemporaryDirectory() as temp:
             initialize_memory_fabric(temp)
             write_memory_store(
@@ -1141,6 +1319,7 @@ class MemoryStoreTests(unittest.TestCase):
 
     def test_store_files_appear_in_combined_context(self) -> None:
         from memory_fabric.storage import write_memory_store
+
         with tempfile.TemporaryDirectory() as temp:
             initialize_memory_fabric(temp)
             write_memory_store(
@@ -1157,13 +1336,14 @@ class MemoryStoreTests(unittest.TestCase):
 
     def test_init_creates_memory_store_dir(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            result = initialize_memory_fabric(temp)
+            _ = initialize_memory_fabric(temp)
             store_dir = Path(temp) / ".ai-memory" / "memory-store"
             self.assertTrue(store_dir.exists())
             self.assertTrue((store_dir / ".gitkeep").exists())
 
     def test_store_index_generated_by_dreaming(self) -> None:
         from memory_fabric.storage import write_memory_store
+
         with tempfile.TemporaryDirectory() as temp:
             initialize_memory_fabric(temp)
             write_memory_store(
@@ -1189,22 +1369,21 @@ class MemoryStoreTests(unittest.TestCase):
             self.assertIn("api, rest", store_index_text)
 
     def test_call_llm_with_mcp_sampling(self) -> None:
-        
         # Ensure direct LLM providers are disabled
         os.environ.pop("MEMORY_FABRIC_LLM_PROVIDER", None)
-        
+
         # Mock Context, session and create_message
         mock_context = mock.MagicMock()
         mock_result = mock.MagicMock()
         mock_result.content = mock.MagicMock()
         mock_result.content.text = "mcp sampling response"
-        
+
         mock_context.session.client_params.capabilities.sampling = mock.MagicMock()
         mock_context.session.create_message = mock.AsyncMock(return_value=mock_result)
-        
+
         res = call_llm("test prompt", "system instructions", context=mock_context)
         self.assertEqual(res, "mcp sampling response")
-        
+
         # Verify it was called with the correct parameters
         mock_context.session.create_message.assert_called_once()
         args, kwargs = mock_context.session.create_message.call_args
@@ -1222,13 +1401,14 @@ class MemoryStoreTests(unittest.TestCase):
                 "TEST_ENV_VAR_2='value2 with spaces'\n"
                 'TEST_ENV_VAR_3="value3"\n'
                 "TEST_ENV_VAR_4=\n",
-                encoding="utf-8"
+                encoding="utf-8",
             )
 
             # Pre-set TEST_ENV_VAR_1 to ensure it is not overwritten
             os.environ["TEST_ENV_VAR_1"] = "pre-set-value"
 
             from memory_fabric.llm import load_env_from_cwd
+
             load_env_from_cwd(temp)
 
             self.assertEqual(os.environ.get("TEST_ENV_VAR_1"), "pre-set-value")
@@ -1242,22 +1422,22 @@ class MemoryStoreTests(unittest.TestCase):
 
     def test_call_llm_with_mcp_sampling_timeout(self) -> None:
         from memory_fabric.llm import LLMError
-        
+
         # Ensure direct LLM providers are disabled
         os.environ.pop("MEMORY_FABRIC_LLM_PROVIDER", None)
-        
+
         # Mock Context, session and create_message that raises TimeoutError
         mock_context = mock.MagicMock()
         mock_context.session.client_params.capabilities.sampling = mock.MagicMock()
-        
+
         async def mock_timeout(*args, **kwargs):
             raise asyncio.TimeoutError()
-            
+
         mock_context.session.create_message = mock_timeout
-        
+
         with self.assertRaises(LLMError) as ctx:
             call_llm("test prompt", "system instructions", context=mock_context)
-            
+
         self.assertIn("timed out after 45 seconds", str(ctx.exception))
         self.assertIn("JSON-RPC", str(ctx.exception))
         self.assertIn("deadlock", str(ctx.exception))
@@ -1265,16 +1445,19 @@ class MemoryStoreTests(unittest.TestCase):
     def test_split_dream_flow(self) -> None:
         from memory_fabric.storage import prepare_dream_payload, apply_dream_results
         import json
+
         with tempfile.TemporaryDirectory() as temp:
             initialize_memory_fabric(temp)
-            
+
             # Let's delete other sections so we have a clean test with just one section
             for p in (Path(temp) / ".ai-memory").glob("*.md"):
                 if p.name not in {"architecture.md"}:
                     p.unlink()
 
             # Write some content
-            write_local_memory(temp, "architecture", "# Architecture\n\nOriginal content.", mode="replace")
+            write_local_memory(
+                temp, "architecture", "# Architecture\n\nOriginal content.", mode="replace"
+            )
 
             # 1. Prepare payload
             payload = prepare_dream_payload(temp, mode="light")
@@ -1284,29 +1467,33 @@ class MemoryStoreTests(unittest.TestCase):
             self.assertIn("local/architecture", payload["sections_data"])
 
             # 2. Simulate client LLM consolidation response
-            llm_response = json.dumps({
-                "consolidated_files": {
-                    "architecture": "# Architecture\n\nConsolidated by client."
-                },
-                "summaries": {
-                    "architecture": "Client generated architecture summary."
-                },
-                "contradictions": ["Simulated contradiction"],
-                "warnings": ["Simulated warning"]
-            })
+            llm_response = json.dumps(
+                {
+                    "consolidated_files": {
+                        "architecture": "# Architecture\n\nConsolidated by client."
+                    },
+                    "summaries": {"architecture": "Client generated architecture summary."},
+                    "contradictions": ["Simulated contradiction"],
+                    "warnings": ["Simulated warning"],
+                }
+            )
 
             # 3. Apply results
-            res = asyncio.run(apply_dream_results(
-                temp,
-                candidate_store=payload["candidate_store"],
-                llm_response=llm_response,
-                mode="light",
-                apply=True
-            ))
+            res = asyncio.run(
+                apply_dream_results(
+                    temp,
+                    candidate_store=payload["candidate_store"],
+                    llm_response=llm_response,
+                    mode="light",
+                    apply=True,
+                )
+            )
 
             self.assertTrue(res["changed"])
             self.assertFalse(res["apply_required"])
-            self.assertTrue(any("Contradiction detected: Simulated contradiction" in w for w in res["warnings"]))
+            self.assertTrue(
+                any("Contradiction detected: Simulated contradiction" in w for w in res["warnings"])
+            )
 
             # Verify file content is updated
             arch_path = Path(temp) / ".ai-memory" / "architecture.md"
@@ -1316,6 +1503,7 @@ class MemoryStoreTests(unittest.TestCase):
 
             # 4. Prepare payload again (no change) -> skip_required should be True
             import time
+
             time.sleep(1.1)
             payload2 = prepare_dream_payload(temp, mode="light")
             self.assertTrue(payload2["skip_required"])

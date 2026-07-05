@@ -13,11 +13,27 @@ LOCAL_MEMORY_DIR = ".ai-memory"
 
 # Directories that should never be used as a project root — writing memory
 # files here could corrupt the OS or expose sensitive files.
-_DANGEROUS_ROOTS: frozenset[str] = frozenset({
-    "/", "/etc", "/bin", "/sbin", "/usr", "/var", "/sys", "/proc", "/boot",
-    "/root", "/lib", "/lib64", "/dev", "/run",
-    "C:\\", "C:\\Windows", "C:\\Windows\\System32",
-})
+_DANGEROUS_ROOTS: frozenset[str] = frozenset(
+    {
+        "/",
+        "/etc",
+        "/bin",
+        "/sbin",
+        "/usr",
+        "/var",
+        "/sys",
+        "/proc",
+        "/boot",
+        "/root",
+        "/lib",
+        "/lib64",
+        "/dev",
+        "/run",
+        "C:\\",
+        "C:\\Windows",
+        "C:\\Windows\\System32",
+    }
+)
 
 
 def get_global_root(
@@ -112,4 +128,3 @@ def global_memory_dir(
     home: Path | str | None = None,
 ) -> Path:
     return get_global_root(platform_name=platform_name, env=env, home=home) / "global"
-

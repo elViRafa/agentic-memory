@@ -60,6 +60,7 @@ class PatchPreview(TypedDict):
 
 class EpisodicJournalResult(TypedDict):
     """Result returned by write_session_journal_tool."""
+
     changed: bool
     store_path: str
     path: str
@@ -116,7 +117,6 @@ class StatusResult(TypedDict):
     local_files: list[str]
     memory_sizes: dict[str, dict[str, int]]
     version: str
-
 
 
 class DreamResult(TypedDict):

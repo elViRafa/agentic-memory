@@ -146,8 +146,7 @@ def build_agents_md() -> str:
         "# Agent Instructions — Memory Fabric\n\n"
         "This file is read automatically by Claude Code, Gemini CLI, Codex, Antigravity, and other MCP-aware AI agents.\n"
         "GitHub Copilot reads `.github/copilot-instructions.md` instead.\n\n"
-        "---\n\n"
-        + MEMORY_INSTRUCTIONS
+        "---\n\n" + MEMORY_INSTRUCTIONS
     )
 
 
@@ -167,10 +166,7 @@ def build_cursor_rule() -> str:
         "---\n"
         "description: Memory Fabric — project memory management via MCP tools\n"
         "alwaysApply: true\n"
-        "---\n\n"
-        + MEMORY_INSTRUCTIONS
-        + "\n"
-        + DREAMING_INSTRUCTIONS
+        "---\n\n" + MEMORY_INSTRUCTIONS + "\n" + DREAMING_INSTRUCTIONS
     )
 
 

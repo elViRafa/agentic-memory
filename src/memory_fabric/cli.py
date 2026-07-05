@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from memory_fabric.version import __version__
+from memory_fabric.contracts import DreamEvalResult, EvalResult
 from memory_fabric.eval import evaluate_dream_quality, evaluate_memory_fabric
 from memory_fabric.paths import local_memory_dir
 from memory_fabric.storage import (
@@ -34,31 +35,33 @@ def main(argv: list[str] | None = None) -> int:
 
     if getattr(args, "debug_llm", False):
         import os
+
         os.environ["MEMORY_FABRIC_LLM_DEBUG"] = "1"
 
     cwd = str(Path(args.cwd).expanduser().resolve())
 
     from memory_fabric.llm import load_env_from_cwd
+
     load_env_from_cwd(cwd)
 
     try:
         if args.command == "init":
-            result = initialize_memory_fabric(
+            init_result = initialize_memory_fabric(
                 cwd,
                 install_hooks=args.install_hooks,
                 memory_prompt=args.memory_prompt,
             )
-            _print_result(result, args.json)
+            _print_result(init_result, args.json)
             return 0
         if args.command == "status":
             _print_result(status(cwd), args.json)
             return 0
         if args.command == "doctor":
-            result = doctor(cwd)
-            _print_result(result, args.json)
-            return 0 if result["ok"] else 1
+            doctor_result = doctor(cwd)
+            _print_result(doctor_result, args.json)
+            return 0 if doctor_result["ok"] else 1
         if args.command == "dream":
-            result = asyncio.run(
+            dream_result = asyncio.run(
                 dream(
                     cwd,
                     mode=args.mode,
@@ -68,21 +71,24 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
             if args.eval and args.apply:
-                result["evaluation"] = asyncio.run(
+                dream_result["evaluation"] = asyncio.run(
                     evaluate_dream_quality(
                         cwd,
-                        snapshot=result["snapshot"] or "latest",
+                        snapshot=dream_result["snapshot"] or "latest",
                         save_report=True,
                         llm_review=args.llm_review,
                     )
                 )
             elif args.eval and not args.apply:
-                result["warnings"].append("Dream evaluation requires --apply because candidate mode does not mutate live memory.")
-            _print_result(result, args.json)
+                dream_result["warnings"].append(
+                    "Dream evaluation requires --apply because candidate mode does not mutate live memory."
+                )
+            _print_result(dream_result, args.json)
             return 0
         if args.command == "eval":
+            eval_result: EvalResult | DreamEvalResult
             if args.dream_snapshot:
-                result = asyncio.run(
+                eval_result = asyncio.run(
                     evaluate_dream_quality(
                         cwd,
                         snapshot=args.dream_snapshot,
@@ -91,82 +97,108 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 )
             else:
-                result = asyncio.run(
+                eval_result = asyncio.run(
                     evaluate_memory_fabric(
                         cwd,
                         save_report=not args.no_save,
                         llm_review=args.llm_review,
                     )
                 )
-            _print_result(result, args.json)
-            return 0 if result["status"] != "fail" else 1
+            _print_result(eval_result, args.json)
+            return 0 if eval_result["status"] != "fail" else 1
         if args.command == "query":
-            result = keyword_search(cwd, args.query, max_results=args.max_results)
-            _print_result(result, args.json)
+            query_result = keyword_search(cwd, args.query, max_results=args.max_results)
+            _print_result(query_result, args.json)
             return 0
         if args.command == "sync-agents":
-            result = sync_agent_rules(cwd)
-            _print_result(result, args.json)
-            return 0 if result.get("success") else 1
+            sync_result = sync_agent_rules(cwd)
+            _print_result(sync_result, args.json)
+            return 0 if sync_result.get("success") else 1
         if args.command == "sync-global":
             memory_dir = local_memory_dir(cwd)
             if not args.json and sys.stdin.isatty() and memory_dir.exists():
                 from memory_fabric.paths import global_memory_dir
-                from memory_fabric.storage import _iter_markdown_files, _is_ignored_local_memory_path
+                from memory_fabric.storage import (
+                    _iter_markdown_files,
+                    _is_ignored_local_memory_path,
+                )
                 from memory_fabric.locking import locked_file
                 import shutil
-                
+
                 promoted_count = 0
                 local_files = [
                     path
                     for path in _iter_markdown_files(memory_dir)
-                    if path.name != "index.md" and not _is_ignored_local_memory_path(memory_dir, path)
+                    if path.name != "index.md"
+                    and not _is_ignored_local_memory_path(memory_dir, path)
                 ]
-                
+
                 if not local_files:
                     print("No local memory files found to promote.")
                     return 0
-                    
+
                 print("Interactive Global Memory Sync:")
                 print("===============================")
                 for path in local_files:
                     rel_name = path.name
-                    choice = input(f"Promote local/{rel_name} to global/{rel_name}? [y/N]: ").strip().lower()
+                    choice = (
+                        input(f"Promote local/{rel_name} to global/{rel_name}? [y/N]: ")
+                        .strip()
+                        .lower()
+                    )
                     if choice in {"y", "yes"}:
                         target_dir = global_memory_dir()
                         target_dir.mkdir(parents=True, exist_ok=True)
                         target_path = target_dir / rel_name
-                        
+
                         action = "copy"
                         if target_path.exists():
-                            overwrite = input(f"  global/{rel_name} already exists. Overwrite? [y/N]: ").strip().lower()
+                            overwrite = (
+                                input(f"  global/{rel_name} already exists. Overwrite? [y/N]: ")
+                                .strip()
+                                .lower()
+                            )
                             if overwrite in {"y", "yes"}:
                                 action = "copy"
                             else:
-                                append = input(f"  Append content to global/{rel_name} instead? [y/N]: ").strip().lower()
+                                append = (
+                                    input(f"  Append content to global/{rel_name} instead? [y/N]: ")
+                                    .strip()
+                                    .lower()
+                                )
                                 if append in {"y", "yes"}:
                                     action = "append"
                                 else:
                                     action = "skip"
-                                    
+
                         if action == "copy":
                             with locked_file(target_path):
                                 shutil.copy2(path, target_path)
                             print(f"  -> Promoted to {target_path}")
                             promoted_count += 1
                         elif action == "append":
-                            from memory_fabric.frontmatter import parse_frontmatter, dump_frontmatter
+                            from memory_fabric.frontmatter import (
+                                parse_frontmatter,
+                                dump_frontmatter,
+                            )
+
                             with locked_file(target_path):
-                                local_meta, local_body = parse_frontmatter(path.read_text(encoding="utf-8"))
-                                global_meta, global_body = parse_frontmatter(target_path.read_text(encoding="utf-8"))
+                                local_meta, local_body = parse_frontmatter(
+                                    path.read_text(encoding="utf-8")
+                                )
+                                global_meta, global_body = parse_frontmatter(
+                                    target_path.read_text(encoding="utf-8")
+                                )
                                 new_body = global_body.rstrip() + "\n\n" + local_body.lstrip()
                                 global_meta["last_updated"] = local_meta.get("last_updated", "")
-                                target_path.write_text(dump_frontmatter(global_meta, new_body), encoding="utf-8")
+                                target_path.write_text(
+                                    dump_frontmatter(global_meta, new_body), encoding="utf-8"
+                                )
                             print(f"  -> Appended to {target_path}")
                             promoted_count += 1
                         else:
                             print(f"  -> Skipped global/{rel_name}")
-                
+
                 print(f"\nSync complete. Promoted {promoted_count} section(s) to global memory.")
                 return 0
             else:
@@ -183,14 +215,16 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 return 0
         if args.command == "rollback":
-            result = rollback(cwd, args.to)
-            _print_result(result, args.json)
+            rollback_result = rollback(cwd, args.to)
+            _print_result(rollback_result, args.json)
             return 0
         if args.command == "store":
             store_action = getattr(args, "store_action", None)
             if store_action == "write":
-                tag_list = [t.strip() for t in args.tags.split(",") if t.strip()] if args.tags else None
-                result = write_memory_store(
+                tag_list = (
+                    [t.strip() for t in args.tags.split(",") if t.strip()] if args.tags else None
+                )
+                store_write_result = write_memory_store(
                     cwd,
                     store_path=args.store_path,
                     content=args.content,
@@ -199,25 +233,27 @@ def main(argv: list[str] | None = None) -> int:
                     priority=args.priority,
                     mode=args.mode,
                 )
-                _print_result(result, args.json)
+                _print_result(store_write_result, args.json)
                 return 0
             elif store_action == "read":
-                result = read_memory_store(cwd, store_path=args.store_path)
-                _print_result(result, args.json)
+                store_read_result = read_memory_store(cwd, store_path=args.store_path)
+                _print_result(store_read_result, args.json)
                 return 0
             elif store_action == "list":
-                tag_list = [t.strip() for t in args.tags.split(",") if t.strip()] if args.tags else None
-                result = list_memory_store(
+                tag_list = (
+                    [t.strip() for t in args.tags.split(",") if t.strip()] if args.tags else None
+                )
+                store_list_result = list_memory_store(
                     cwd,
                     prefix=args.prefix,
                     tags=tag_list,
                     max_results=args.max_results,
                 )
-                _print_result(result, args.json)
+                _print_result(store_list_result, args.json)
                 return 0
             elif store_action == "delete":
-                result = delete_memory_store(cwd, store_path=args.store_path)
-                _print_result(result, args.json)
+                store_delete_result = delete_memory_store(cwd, store_path=args.store_path)
+                _print_result(store_delete_result, args.json)
                 return 0
             else:
                 parser.parse_args(["store", "--help"])
@@ -235,37 +271,60 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument("--cwd", default=".", help="Project working directory")
     parser.add_argument("--json", action="store_true", help="Print JSON output")
-    parser.add_argument("--debug-llm", action="store_true", help="Enable LLM prompt and response logging")
+    parser.add_argument(
+        "--debug-llm", action="store_true", help="Enable LLM prompt and response logging"
+    )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
     init_parser = subparsers.add_parser("init", help="Create .ai-memory scaffolding")
-    init_parser.add_argument("--install-hooks", action="store_true", help="Install opt-in git hooks")
-    init_parser.add_argument("--memory-prompt", default=None, help="Steering instructions for agent memory capture")
+    init_parser.add_argument(
+        "--install-hooks", action="store_true", help="Install opt-in git hooks"
+    )
+    init_parser.add_argument(
+        "--memory-prompt", default=None, help="Steering instructions for agent memory capture"
+    )
     subparsers.add_parser("status", help="Show memory status")
     subparsers.add_parser("doctor", help="Validate memory files and environment")
 
     dream_parser = subparsers.add_parser("dream", help="Run local memory maintenance")
     dream_parser.add_argument("--mode", choices=["light", "deep"], default="light")
-    dream_parser.add_argument("--apply", action="store_true", help="Apply candidate changes to live .ai-memory files")
+    dream_parser.add_argument(
+        "--apply", action="store_true", help="Apply candidate changes to live .ai-memory files"
+    )
     dream_parser.add_argument(
         "--llm-rewrite",
         action="store_true",
         help="Generate agent-assisted rewrite tasks from Dreaming output",
     )
     dream_parser.add_argument("--max-rewrite-tasks", type=int, default=5)
-    dream_parser.add_argument("--eval", action="store_true", help="Evaluate quality before and after Dreaming")
-    dream_parser.add_argument("--llm-review", action="store_true", help="Add optional qualitative LLM review notes")
+    dream_parser.add_argument(
+        "--eval", action="store_true", help="Evaluate quality before and after Dreaming"
+    )
+    dream_parser.add_argument(
+        "--llm-review", action="store_true", help="Add optional qualitative LLM review notes"
+    )
 
     eval_parser = subparsers.add_parser("eval", help="Evaluate memory and Dreaming quality")
-    eval_parser.add_argument("--llm-review", action="store_true", help="Add optional qualitative LLM review notes")
-    eval_parser.add_argument("--dream", dest="dream_snapshot", help="Evaluate a Dreaming run against a snapshot name or latest")
-    eval_parser.add_argument("--no-save", action="store_true", help="Do not save eval reports under .ai-memory/evals")
+    eval_parser.add_argument(
+        "--llm-review", action="store_true", help="Add optional qualitative LLM review notes"
+    )
+    eval_parser.add_argument(
+        "--dream",
+        dest="dream_snapshot",
+        help="Evaluate a Dreaming run against a snapshot name or latest",
+    )
+    eval_parser.add_argument(
+        "--no-save", action="store_true", help="Do not save eval reports under .ai-memory/evals"
+    )
 
     query_parser = subparsers.add_parser("query", help="Search memory")
     query_parser.add_argument("query")
     query_parser.add_argument("--max-results", type=int, default=10)
 
-    subparsers.add_parser("sync-agents", help="Synchronize agent instruction files using AGENTS.md as the source of truth")
+    subparsers.add_parser(
+        "sync-agents",
+        help="Synchronize agent instruction files using AGENTS.md as the source of truth",
+    )
     subparsers.add_parser("sync-global", help="Preview local-to-global promotion")
 
     rollback_parser = subparsers.add_parser("rollback", help="Restore local memory from a snapshot")
@@ -275,7 +334,9 @@ def build_parser() -> argparse.ArgumentParser:
     store_subs = store_parser.add_subparsers(dest="store_action")
 
     store_write = store_subs.add_parser("write", help="Write a store file")
-    store_write.add_argument("store_path", help="Semantic path (e.g. architecture/decisions/auth-service)")
+    store_write.add_argument(
+        "store_path", help="Semantic path (e.g. architecture/decisions/auth-service)"
+    )
     store_write.add_argument("--content", required=True, help="Content to write")
     store_write.add_argument("--title", default="", help="Title for the memory")
     store_write.add_argument("--tags", default="", help="Comma-separated tags")

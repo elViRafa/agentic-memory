@@ -1,0 +1,425 @@
+"""Project lifecycle: bootstrap, agent-rule sync, status, and health checks."""
+
+from __future__ import annotations
+
+import os
+import re
+import shutil
+from pathlib import Path
+from typing import Any
+
+from memory_fabric.contracts import DoctorResult, InitResult, StatusResult
+from memory_fabric.frontmatter import FrontmatterError, parse_frontmatter
+from memory_fabric.paths import global_memory_dir, local_memory_dir, memory_store_dir, project_root
+from memory_fabric.storage._shared import (
+    _is_ignored_local_memory_path,
+    _is_store_path,
+    _iter_markdown_files,
+    _path_to_store_path,
+    estimate_tokens,
+)
+from memory_fabric.templates import (
+    LOCAL_GITIGNORE,
+    SECTION_TEMPLATES,
+    build_memory_file,
+    build_agents_md,
+    build_agents_rule_memory,
+    build_agents_rule_dreaming,
+    build_cursor_rule,
+    build_windsurf_rule,
+    build_claude_md,
+    build_copilot_md,
+)
+from memory_fabric.version import __version__
+
+
+def initialize_memory_fabric(
+    cwd: str,
+    install_hooks: bool = False,
+    memory_prompt: str | None = None,
+) -> InitResult:
+    root = project_root(cwd)
+    memory_dir = local_memory_dir(root)
+    memory_dir.mkdir(parents=True, exist_ok=True)
+
+    files_created: list[str] = []
+    warnings: list[str] = []
+    for section in SECTION_TEMPLATES:
+        path = memory_dir / f"{section}.md"
+        if not path.exists():
+            path.write_text(build_memory_file(section), encoding="utf-8")
+            files_created.append(str(path))
+
+    gitignore = memory_dir / ".gitignore"
+    if not gitignore.exists():
+        gitignore.write_text(LOCAL_GITIGNORE, encoding="utf-8")
+        files_created.append(str(gitignore))
+
+    # Create memory-store directory with .gitkeep
+    store_dir = memory_store_dir(root)
+    store_dir.mkdir(parents=True, exist_ok=True)
+    gitkeep = store_dir / ".gitkeep"
+    if not gitkeep.exists():
+        gitkeep.write_text("", encoding="utf-8")
+        files_created.append(str(gitkeep))
+
+    if memory_prompt is not None:
+        prompt_path = memory_dir / "memory_prompt.txt"
+        if memory_prompt.strip():
+            prompt_path.write_text(memory_prompt.strip() + "\n", encoding="utf-8")
+            files_created.append(str(prompt_path))
+        elif prompt_path.exists():
+            prompt_path.unlink()
+
+    # Deploy Agent Instructions and Rules to all supported platforms
+    def _deploy_file(path: Path, content: str, append_if_exists: bool = False) -> None:
+        """Write a file if it doesn't exist, or append Memory Fabric block if requested."""
+        if not path.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+            files_created.append(str(path))
+        elif append_if_exists:
+            existing = path.read_text(encoding="utf-8")
+            if "Memory Fabric" not in existing:
+                separator = "\n" if existing.endswith("\n") else "\n\n"
+                path.write_text(existing + separator + content, encoding="utf-8")
+                files_created.append(str(path) + " (appended)")
+
+    # Universal fallback (Gemini CLI, Codex, Antigravity)
+    _deploy_file(root / "AGENTS.md", build_agents_md())
+
+    # Generic IDE rules (.agents/rules/) — Cline, generic agents
+    agents_rules_dir = root / ".agents" / "rules"
+    agents_rules_dir.mkdir(parents=True, exist_ok=True)
+    _deploy_file(agents_rules_dir / "memory-store.md", build_agents_rule_memory())
+    _deploy_file(agents_rules_dir / "dreaming.md", build_agents_rule_dreaming())
+
+    # Cursor IDE (.cursor/rules/*.mdc)
+    cursor_rules_dir = root / ".cursor" / "rules"
+    cursor_rules_dir.mkdir(parents=True, exist_ok=True)
+    _deploy_file(cursor_rules_dir / "memory-fabric.mdc", build_cursor_rule())
+
+    # Windsurf IDE (.windsurf/rules/*.md)
+    windsurf_rules_dir = root / ".windsurf" / "rules"
+    windsurf_rules_dir.mkdir(parents=True, exist_ok=True)
+    _deploy_file(windsurf_rules_dir / "memory-fabric.md", build_windsurf_rule())
+
+    # Claude Code (CLAUDE.md) — create or append
+    _deploy_file(root / "CLAUDE.md", build_claude_md(), append_if_exists=True)
+
+    # GitHub Copilot (.github/copilot-instructions.md) — create or append
+    github_dir = root / ".github"
+    github_dir.mkdir(parents=True, exist_ok=True)
+    _deploy_file(github_dir / "copilot-instructions.md", build_copilot_md(), append_if_exists=True)
+
+    if install_hooks:
+        git_dir = root / ".git"
+        if git_dir.exists() and git_dir.is_dir():
+            hooks_dir = git_dir / "hooks"
+            hooks_dir.mkdir(parents=True, exist_ok=True)
+
+            # Post-commit hook (Dreaming)
+            post_commit = hooks_dir / "post-commit"
+            hook_cmd = "ai-memory dream --mode light --apply || true"
+            if post_commit.exists():
+                existing_content = post_commit.read_text(encoding="utf-8")
+                if hook_cmd not in existing_content:
+                    separator = "\n" if existing_content.endswith("\n") else "\n\n"
+                    new_content = (
+                        existing_content
+                        + separator
+                        + f"# Added by Memory Fabric installer\n{hook_cmd}\n"
+                    )
+                    post_commit.write_text(new_content, encoding="utf-8")
+                    files_created.append(str(post_commit))
+            else:
+                hook_content = (
+                    "#!/bin/sh\n"
+                    "# Memory Fabric post-commit hook\n"
+                    'echo "Running Memory Fabric Dreaming..."\n'
+                    f"{hook_cmd}\n"
+                )
+                post_commit.write_text(hook_content, encoding="utf-8")
+                files_created.append(str(post_commit))
+
+            # Pre-commit hook (Agent Rules Sync)
+            pre_commit = hooks_dir / "pre-commit"
+            sync_cmd = "ai-memory sync-agents || true"
+            add_cmd = "git add .agents/rules/ .cursor/rules/memory-fabric.mdc .windsurf/rules/memory-fabric.md CLAUDE.md .github/copilot-instructions.md 2>/dev/null || true"
+            if pre_commit.exists():
+                existing_content = pre_commit.read_text(encoding="utf-8")
+                if sync_cmd not in existing_content:
+                    separator = "\n" if existing_content.endswith("\n") else "\n\n"
+                    new_content = (
+                        existing_content
+                        + separator
+                        + f"# Added by Memory Fabric installer\n{sync_cmd}\n{add_cmd}\n"
+                    )
+                    pre_commit.write_text(new_content, encoding="utf-8")
+                    files_created.append(str(pre_commit))
+            else:
+                hook_content = (
+                    "#!/bin/sh\n"
+                    "# Memory Fabric pre-commit hook\n"
+                    'echo "Syncing Memory Fabric Agent Rules..."\n'
+                    f"{sync_cmd}\n"
+                    f"{add_cmd}\n"
+                )
+                pre_commit.write_text(hook_content, encoding="utf-8")
+                files_created.append(str(pre_commit))
+
+            if os.name != "nt":
+                try:
+                    for hook_file in [post_commit, pre_commit]:
+                        mode = hook_file.stat().st_mode
+                        hook_file.chmod(mode | 0o111)
+                except Exception as exc:
+                    warnings.append(f"Failed to set executable permissions on git hooks: {exc}")
+        else:
+            warnings.append("Git repository not found; hooks were not installed.")
+
+    return {
+        "created": bool(files_created),
+        "memory_dir": str(memory_dir),
+        "files_created": files_created,
+        "warnings": warnings,
+    }
+
+
+def sync_agent_rules(cwd: str) -> dict[str, Any]:
+    """Regenerate all agent instruction files from canonical templates.
+
+    This does NOT read from AGENTS.md. Instead, it regenerates all platform-specific
+    files directly from the canonical templates in templates.py, guaranteeing
+    consistency. AGENTS.md itself is left untouched so users can add project-specific
+    context to it without fear of it leaking into IDE rule files.
+    """
+    root = project_root(cwd)
+    synced_files: list[str] = []
+
+    def _write_if_different(path: Path, content: str) -> None:
+        if path.exists():
+            existing = path.read_text(encoding="utf-8")
+            if existing == content:
+                return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        synced_files.append(str(path))
+
+    # Generic IDE rules
+    _write_if_different(root / ".agents" / "rules" / "memory-store.md", build_agents_rule_memory())
+    _write_if_different(root / ".agents" / "rules" / "dreaming.md", build_agents_rule_dreaming())
+
+    # Cursor
+    _write_if_different(root / ".cursor" / "rules" / "memory-fabric.mdc", build_cursor_rule())
+
+    # Windsurf
+    _write_if_different(root / ".windsurf" / "rules" / "memory-fabric.md", build_windsurf_rule())
+
+    # Claude Code — only update if Memory Fabric content already exists (don't create)
+    claude_md = root / "CLAUDE.md"
+    if claude_md.exists():
+        existing = claude_md.read_text(encoding="utf-8")
+        if "Memory Fabric" in existing:
+            new_content = re.sub(
+                r"(?:# Agent Instructions — Memory Fabric|## Memory Fabric — Semantic Store Agent Instructions).*$",
+                build_claude_md().strip(),
+                existing,
+                flags=re.DOTALL,
+            )
+            if new_content != existing:
+                claude_md.write_text(new_content, encoding="utf-8")
+                synced_files.append(str(claude_md))
+
+    # GitHub Copilot — only update if Memory Fabric content already exists
+    copilot_md = root / ".github" / "copilot-instructions.md"
+    if copilot_md.exists():
+        existing = copilot_md.read_text(encoding="utf-8")
+        if "Memory Fabric" in existing:
+            new_content = re.sub(
+                r"(?:# Agent Instructions — Memory Fabric|## Memory Fabric — Semantic Store Agent Instructions).*$",
+                build_copilot_md().strip(),
+                existing,
+                flags=re.DOTALL,
+            )
+            if new_content != existing:
+                copilot_md.write_text(new_content, encoding="utf-8")
+                synced_files.append(str(copilot_md))
+
+    return {
+        "success": True,
+        "message": f"Synchronized {len(synced_files)} file(s).",
+        "synced_files": synced_files,
+    }
+
+
+def status(cwd: str) -> StatusResult:
+    memory_dir = local_memory_dir(cwd)
+    local_files = (
+        [str(path) for path in _iter_markdown_files(memory_dir)] if memory_dir.exists() else []
+    )
+
+    sizes: dict[str, dict[str, int]] = {}
+    if memory_dir.exists():
+        for path in _iter_markdown_files(memory_dir):
+            if _is_ignored_local_memory_path(memory_dir, path):
+                continue
+            try:
+                content = path.read_text(encoding="utf-8")
+                sizes[path.name] = {
+                    "bytes": len(content.encode("utf-8")),
+                    "tokens": estimate_tokens(content),
+                }
+            except Exception:
+                pass
+
+    return {
+        "cwd": str(project_root(cwd)),
+        "memory_dir": str(memory_dir),
+        "memory_exists": memory_dir.exists(),
+        "global_dir": str(global_memory_dir()),
+        "provider_configured": bool(os.environ.get("MEMORY_FABRIC_LLM_PROVIDER")),
+        "local_files": local_files,
+        "memory_sizes": sizes,
+        "version": __version__,
+    }
+
+
+def doctor(cwd: str) -> DoctorResult:
+    memory_dir = local_memory_dir(cwd)
+    errors: list[str] = []
+    warnings: list[str] = []
+    checked_files: list[str] = []
+
+    if not memory_dir.exists():
+        errors.append(f"Local memory directory does not exist: {memory_dir}")
+        return {"ok": False, "errors": errors, "warnings": warnings, "checked_files": checked_files}
+
+    # Check directory permissions
+    if not os.access(memory_dir, os.R_OK):
+        errors.append(f"Memory directory is not readable: {memory_dir}")
+    if not os.access(memory_dir, os.W_OK):
+        errors.append(f"Memory directory is not writable: {memory_dir}")
+
+    # Validate MCP availability
+    try:
+        from mcp.server.fastmcp import FastMCP  # noqa: F401
+    except ImportError:
+        warnings.append(
+            "Optional package `mcp` is not installed; MCP server tools will be unavailable."
+        )
+
+    for path in _iter_markdown_files(memory_dir):
+        if _is_ignored_local_memory_path(memory_dir, path):
+            continue
+        checked_files.append(str(path))
+        # Check permissions
+        if not os.access(path, os.R_OK):
+            errors.append(f"File is not readable: {path}")
+        if not os.access(path, os.W_OK):
+            errors.append(f"File is not writable: {path}")
+
+        try:
+            metadata, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, FrontmatterError) as exc:
+            errors.append(f"{path}: {exc}")
+            continue
+
+        is_store = _is_store_path(memory_dir, path)
+        name_field = "store_path" if is_store else "section"
+        for field in [name_field, "summary", "priority", "tags", "schema_version", "last_updated"]:
+            if field not in metadata:
+                errors.append(f"{path}: missing required field `{field}`")
+        if metadata.get("priority") not in {"high", "medium", "low"}:
+            errors.append(f"{path}: priority must be high, medium, or low")
+        if not isinstance(metadata.get("tags"), list):
+            errors.append(f"{path}: tags must be an inline list")
+
+    index_path = memory_dir / "index.md"
+    if not index_path.exists():
+        warnings.append("index.md is missing")
+    else:
+        try:
+            index_metadata, index_body = parse_frontmatter(index_path.read_text(encoding="utf-8"))
+            listed_sections = set()
+            for line in index_body.splitlines():
+                if line.strip().startswith("|") and not line.strip().startswith("| ---"):
+                    parts = [p.strip() for p in line.split("|") if p.strip()]
+                    if parts:
+                        sec_raw = parts[0]
+                        if sec_raw.startswith("`") and sec_raw.endswith("`"):
+                            listed_sections.add(sec_raw.strip("`"))
+
+            existing_local_sections = {
+                path.stem
+                for path in _iter_markdown_files(memory_dir)
+                if path.name != "index.md"
+                and not _is_ignored_local_memory_path(memory_dir, path)
+                and not _is_store_path(memory_dir, path)
+            }
+
+            missing_in_index = existing_local_sections - listed_sections
+            extra_in_index = {
+                sec for sec in listed_sections - existing_local_sections if "/" not in sec
+            }
+
+            for sec in missing_in_index:
+                warnings.append(
+                    f"Section `{sec}` exists in local memory but is missing from index.md"
+                )
+            for sec in extra_in_index:
+                warnings.append(
+                    f"Section `{sec}` is listed in index.md but the corresponding file does not exist"
+                )
+        except Exception as exc:
+            errors.append(f"Failed to check index consistency: {exc}")
+
+    # Verify consistency of memory-store sub-index
+    store_root = memory_dir / "memory-store"
+    if store_root.exists():
+        store_index_path = store_root / "index.md"
+        if not store_index_path.exists():
+            warnings.append("memory-store/index.md is missing")
+        else:
+            try:
+                store_meta, store_body = parse_frontmatter(
+                    store_index_path.read_text(encoding="utf-8")
+                )
+                listed_store_paths = set()
+                for line in store_body.splitlines():
+                    if line.strip().startswith("|") and not line.strip().startswith("| ---"):
+                        parts = [p.strip() for p in line.split("|") if p.strip()]
+                        if parts:
+                            sec_raw = parts[0]
+                            if sec_raw.startswith("`") and sec_raw.endswith("`"):
+                                listed_store_paths.add(sec_raw.strip("`"))
+
+                existing_store_paths = {
+                    _path_to_store_path(store_root, path)
+                    for path in _iter_markdown_files(store_root)
+                    if path.name != "index.md"
+                }
+
+                missing_in_store_index = existing_store_paths - listed_store_paths
+                extra_in_store_index = listed_store_paths - existing_store_paths
+
+                for sp in missing_in_store_index:
+                    warnings.append(
+                        f"Store file `{sp}` exists but is missing from memory-store/index.md"
+                    )
+                for sp in extra_in_store_index:
+                    warnings.append(
+                        f"Store file `{sp}` is listed in memory-store/index.md but the file does not exist"
+                    )
+            except Exception as exc:
+                errors.append(f"Failed to check memory-store index consistency: {exc}")
+
+    if not shutil.which("rg"):
+        warnings.append("rg not found; keyword search will use Python fallback")
+
+    return {
+        "ok": not errors,
+        "errors": errors,
+        "warnings": warnings,
+        "checked_files": checked_files,
+    }

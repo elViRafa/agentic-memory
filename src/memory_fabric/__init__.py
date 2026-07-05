@@ -22,6 +22,7 @@ from memory_fabric.eval import (
 )
 
 __all__ = [
+    "__version__",
     "doctor",
     "dream",
     "evaluate_dream_quality",
@@ -38,4 +39,3 @@ __all__ = [
     "prepare_dream_payload",
     "apply_dream_results",
 ]
-

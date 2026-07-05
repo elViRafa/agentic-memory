@@ -1,5 +1,7 @@
 # Memory Fabric
 
+[![CI](https://github.com/elViRafa/agentic-memory/actions/workflows/ci.yml/badge.svg)](https://github.com/elViRafa/agentic-memory/actions/workflows/ci.yml)
+
 **File-first, local-first memory layer for MCP-compatible AI coding assistants.**
 
 Memory Fabric gives AI tools like Claude Code, Cursor, and GitHub Copilot a consistent, project-aware context layer without locking you into one model, editor, cloud provider, or operating system.
@@ -23,7 +25,7 @@ Memory is stored as human-readable Markdown with YAML frontmatter. No vector dat
 
 ## Status
 
-**v0.1.0 — functional, not yet published to PyPI.**
+**v0.3.0 — functional, not yet published to PyPI.**
 Install directly from GitHub (see below). Core CLI and MCP tools work end-to-end.
 
 ---

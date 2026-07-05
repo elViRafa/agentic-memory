@@ -4,16 +4,15 @@ from __future__ import annotations
 
 import json
 import os
-from collections import Counter
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from memory_fabric.contracts import DreamEvalResult, EvalCategory, EvalCheck, EvalResult
 from memory_fabric.frontmatter import FrontmatterError, parse_frontmatter
 from memory_fabric.paths import local_memory_dir, project_root
 from memory_fabric.security import redact_secrets
-from memory_fabric.storage import estimate_tokens, read_combined_context
+from memory_fabric.storage import read_combined_context
 from memory_fabric.templates import LOCAL_GITIGNORE, SECTION_TEMPLATES, now_iso
 
 
@@ -45,7 +44,9 @@ DREAM_WEIGHTS = {
 SECRETS_MARKER = "[REDACTED_SECRET]"
 
 
-async def evaluate_memory_fabric(cwd: str, save_report: bool = True, llm_review: bool = False, context: Any = None) -> EvalResult:
+async def evaluate_memory_fabric(
+    cwd: str, save_report: bool = True, llm_review: bool = False, context: Any = None
+) -> EvalResult:
     root = project_root(cwd)
     memory_dir = local_memory_dir(root)
     generated_at = now_iso()
@@ -217,7 +218,9 @@ async def evaluate_dream_quality(
         raise FileNotFoundError(f"Snapshot not found: {snapshot}")
 
     before_category = evaluate_memory_quality(cwd, root=snapshot_dir)
-    after_eval = await evaluate_memory_fabric(cwd, save_report=False, llm_review=False, context=context)
+    after_eval = await evaluate_memory_fabric(
+        cwd, save_report=False, llm_review=False, context=context
+    )
     before_eval = _memory_eval_for_root(cwd, snapshot_dir)
 
     changed_files = _changed_files(snapshot_dir, memory_dir)
@@ -247,11 +250,15 @@ async def evaluate_dream_quality(
 
     new_secret_files = _files_with_new_secret_markers(before_sections, after_sections)
     if new_secret_files:
-        regressions.append("Dreaming introduced redacted secret markers in: " + ", ".join(new_secret_files))
+        regressions.append(
+            "Dreaming introduced redacted secret markers in: " + ", ".join(new_secret_files)
+        )
 
     churn_ratio = _churn_ratio(snapshot_dir, memory_dir)
     if churn_ratio > 0.75 and len(changed_files) > 2:
-        regressions.append("Dreaming changed a large portion of memory; review for excessive churn.")
+        regressions.append(
+            "Dreaming changed a large portion of memory; review for excessive churn."
+        )
     else:
         improvements.append("Dreaming made a bounded set of memory changes.")
 
@@ -338,7 +345,9 @@ def _memory_eval_for_root(cwd: str, root: Path) -> EvalResult:
     )
 
 
-def _evaluate_section_coverage(memory_dir: Path, sections: dict[str, dict[str, Any]]) -> EvalCategory:
+def _evaluate_section_coverage(
+    memory_dir: Path, sections: dict[str, dict[str, Any]]
+) -> EvalCategory:
     checks: list[EvalCheck] = []
     for section in REQUIRED_SECTIONS:
         if section in sections:
@@ -410,7 +419,10 @@ def _evaluate_retrieval_readiness(cwd: str) -> EvalCategory:
 
     try:
         small_context = read_combined_context(cwd, max_tokens=80)
-        if small_context["omitted_sections"] and "omitted because it exceeded" in small_context["text"]:
+        if (
+            small_context["omitted_sections"]
+            and "omitted because it exceeded" in small_context["text"]
+        ):
             checks.append(
                 _check(
                     "small_budget_summaries",
@@ -535,7 +547,9 @@ def _evaluate_safety_privacy(memory_dir: Path, sections: dict[str, dict[str, Any
                     "pass" if pattern in ignored else "warn",
                     "info" if pattern in ignored else "medium",
                     f".ai-memory/.gitignore {'includes' if pattern in ignored else 'is missing'} `{pattern}`.",
-                    f"Add `{pattern}` to .ai-memory/.gitignore." if pattern not in ignored else "No action needed.",
+                    f"Add `{pattern}` to .ai-memory/.gitignore."
+                    if pattern not in ignored
+                    else "No action needed.",
                 )
             )
     else:
@@ -592,7 +606,13 @@ def _category(name: str, weight: int, checks: list[EvalCheck]) -> EvalCategory:
         score = 100
     else:
         score = round(sum(_check_score(check) for check in checks) / len(checks))
-    return {"name": name, "score": score, "status": _score_status(score), "weight": weight, "checks": checks}
+    return {
+        "name": name,
+        "score": score,
+        "status": _score_status(score),
+        "weight": weight,
+        "checks": checks,
+    }
 
 
 def _memory_result(
@@ -633,7 +653,7 @@ def _weighted_score(categories: list[EvalCategory], weights: dict[str, int]) -> 
     return max(0, min(100, round(total / total_weight)))
 
 
-def _score_status(score: int) -> str:
+def _score_status(score: int) -> Literal["pass", "warn", "fail"]:
     if score >= 85:
         return "pass"
     if score >= 60:
@@ -680,9 +700,21 @@ def _load_sections(memory_dir: Path) -> dict[str, dict[str, Any]]:
             raw = path.read_text(encoding="utf-8")
             metadata, body = parse_frontmatter(raw)
             section = str(metadata.get("section") or path.stem)
-            sections[section] = {"path": path, "raw": raw, "metadata": metadata, "body": body, "error": None}
+            sections[section] = {
+                "path": path,
+                "raw": raw,
+                "metadata": metadata,
+                "body": body,
+                "error": None,
+            }
         except (OSError, UnicodeDecodeError, FrontmatterError) as exc:
-            sections[path.stem] = {"path": path, "raw": "", "metadata": {}, "body": "", "error": str(exc)}
+            sections[path.stem] = {
+                "path": path,
+                "raw": "",
+                "metadata": {},
+                "body": "",
+                "error": str(exc),
+            }
     return sections
 
 
@@ -771,7 +803,9 @@ def _save_dream_report(memory_dir: Path, result: DreamEvalResult) -> list[str]:
     return _save_report(memory_dir, result, "dream", _dream_report_markdown(result))
 
 
-def _save_report(memory_dir: Path, result: dict[str, Any], report_kind: str, markdown: str) -> list[str]:
+def _save_report(
+    memory_dir: Path, result: EvalResult | DreamEvalResult, report_kind: str, markdown: str
+) -> list[str]:
     _ensure_evals_ignored(memory_dir)
     reports_dir = memory_dir / "evals"
     reports_dir.mkdir(parents=True, exist_ok=True)
@@ -809,12 +843,7 @@ def _ensure_evals_ignored(memory_dir: Path) -> None:
 
 
 def _report_timestamp(generated_at: str) -> str:
-    return (
-        generated_at.replace(":", "")
-        .replace("+", "_")
-        .replace("-", "")
-        .replace(".", "")
-    )
+    return generated_at.replace(":", "").replace("+", "_").replace("-", "").replace(".", "")
 
 
 def _report_markdown(result: EvalResult) -> str:
@@ -853,7 +882,9 @@ def _dream_report_markdown(result: DreamEvalResult) -> str:
     ]
     lines.extend(f"- `{path}`" for path in result["changed_files"] or ["No changed files detected"])
     lines.extend(["", "## Improvements", ""])
-    lines.extend(f"- {item}" for item in result["improvements"] or ["No clear improvements detected"])
+    lines.extend(
+        f"- {item}" for item in result["improvements"] or ["No clear improvements detected"]
+    )
     lines.extend(["", "## Regressions", ""])
     lines.extend(f"- {item}" for item in result["regressions"] or ["No clear regressions detected"])
     lines.extend(["", "## Categories", ""])
@@ -887,7 +918,7 @@ async def _llm_notes(llm_review: bool, report_text: str, context: Any = None) ->
     notes = []
     if redactions:
         notes.append(f"Sanitized {redactions} possible secret(s) before optional LLM review.")
-        
+
     provider = os.environ.get("MEMORY_FABRIC_LLM_PROVIDER")
     sampling_available = False
     if context is not None:
@@ -900,7 +931,9 @@ async def _llm_notes(llm_review: bool, report_text: str, context: Any = None) ->
             sampling_available = True
 
     if not provider and not sampling_available:
-        notes.append("LLM review requested, but neither MEMORY_FABRIC_LLM_PROVIDER nor MCP Sampling is available.")
+        notes.append(
+            "LLM review requested, but neither MEMORY_FABRIC_LLM_PROVIDER nor MCP Sampling is available."
+        )
         return notes
 
     if not sanitized.strip():
@@ -908,6 +941,7 @@ async def _llm_notes(llm_review: bool, report_text: str, context: Any = None) ->
 
     try:
         from memory_fabric.llm import call_llm
+
         prompt = (
             "Review the following quality evaluation report for a software development memory system.\n"
             "Identify areas of improvement, structural weaknesses, or documentation gaps in the memory.\n"
@@ -919,6 +953,7 @@ async def _llm_notes(llm_review: bool, report_text: str, context: Any = None) ->
         response = await call_llm(prompt, system_instruction, context)
 
         import re
+
         for line in response.splitlines():
             line = line.strip()
             if not line:
@@ -926,7 +961,7 @@ async def _llm_notes(llm_review: bool, report_text: str, context: Any = None) ->
             # Strip bullet/list prefix if any
             if line.startswith("-") or line.startswith("*") or line.startswith("•"):
                 line = line[1:].strip()
-            line = re.sub(r'^\d+\.\s*', '', line)
+            line = re.sub(r"^\d+\.\s*", "", line)
 
             if line:
                 notes.append(line)
@@ -956,7 +991,9 @@ def _changed_files(before_root: Path, after_root: Path) -> list[str]:
         if not before.exists() or not after.exists():
             changed.append(str(relative))
             continue
-        if before.read_text(encoding="utf-8", errors="replace") != after.read_text(encoding="utf-8", errors="replace"):
+        if before.read_text(encoding="utf-8", errors="replace") != after.read_text(
+            encoding="utf-8", errors="replace"
+        ):
             changed.append(str(relative))
     return changed
 
@@ -995,17 +1032,49 @@ def _churn_ratio(before_root: Path, after_root: Path) -> float:
 
 def _dream_score_delta_category(delta: int) -> EvalCategory:
     if delta > 0:
-        checks = [_check("dream_score_delta_positive", "pass", "info", f"Memory score improved by {delta}.", "Keep the Dreaming changes.")]
+        checks = [
+            _check(
+                "dream_score_delta_positive",
+                "pass",
+                "info",
+                f"Memory score improved by {delta}.",
+                "Keep the Dreaming changes.",
+            )
+        ]
     elif delta == 0:
-        checks = [_check("dream_score_delta_neutral", "warn", "low", "Memory score did not change.", "Review whether Dreaming produced useful maintenance.")]
+        checks = [
+            _check(
+                "dream_score_delta_neutral",
+                "warn",
+                "low",
+                "Memory score did not change.",
+                "Review whether Dreaming produced useful maintenance.",
+            )
+        ]
     else:
-        checks = [_check("dream_score_delta_negative", "fail", "high", f"Memory score decreased by {abs(delta)}.", "Review changes and consider rollback.")]
+        checks = [
+            _check(
+                "dream_score_delta_negative",
+                "fail",
+                "high",
+                f"Memory score decreased by {abs(delta)}.",
+                "Review changes and consider rollback.",
+            )
+        ]
     return _category("score_delta", DREAM_WEIGHTS["score_delta"], checks)
 
 
 def _dream_regression_category(regressions: list[str]) -> EvalCategory:
     if not regressions:
-        checks = [_check("dream_no_regressions", "pass", "info", "No clear Dreaming regressions detected.", "No action needed.")]
+        checks = [
+            _check(
+                "dream_no_regressions",
+                "pass",
+                "info",
+                "No clear Dreaming regressions detected.",
+                "No action needed.",
+            )
+        ]
     else:
         checks = [
             _check(
@@ -1069,14 +1138,18 @@ def _dream_change_safety_category(
             "pass" if changed_files else "warn",
             "info" if changed_files else "low",
             f"Dreaming changed {len(changed_files)} file(s).",
-            "No action needed." if changed_files else "Run Dreaming only when maintenance is needed.",
+            "No action needed."
+            if changed_files
+            else "Run Dreaming only when maintenance is needed.",
         ),
         _check(
             "dream_churn",
             "warn" if churn_ratio > 0.75 and len(changed_files) > 2 else "pass",
             "medium" if churn_ratio > 0.75 and len(changed_files) > 2 else "info",
             f"Dreaming churn ratio is {churn_ratio:.0%}.",
-            "Review large Dreaming changes before trusting them." if churn_ratio > 0.75 else "No action needed.",
+            "Review large Dreaming changes before trusting them."
+            if churn_ratio > 0.75
+            else "No action needed.",
         ),
     ]
     if new_secret_files:

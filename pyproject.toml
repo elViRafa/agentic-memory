@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "memory-fabric"
-version = "0.3.0"
+dynamic = ["version"]
 description = "File-first MCP memory fabric for AI coding assistants"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -20,8 +20,25 @@ test = ["pytest>=8"]
 ai-memory = "memory_fabric.cli:main"
 memory-fabric-mcp = "memory_fabric.server:main"
 
+[tool.setuptools.dynamic]
+version = { attr = "memory_fabric.version.__version__" }
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
 memory_fabric = ["py.typed"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["scratch", "build"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+[tool.mypy]
+python_version = "3.11"
+disallow_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true

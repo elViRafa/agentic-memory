@@ -3,7 +3,23 @@
 from __future__ import annotations
 
 import urllib.parse
+from typing import Any
 
+from memory_fabric.contracts import (
+    ContextBundle,
+    DreamEvalResult,
+    DreamResult,
+    EpisodicJournalResult,
+    EvalResult,
+    InitResult,
+    MemorySection,
+    PatchPreview,
+    SearchResult,
+    StoreListResult,
+    StoreReadResult,
+    StoreWriteResult,
+    WriteResult,
+)
 from memory_fabric.eval import evaluate_dream_quality, evaluate_memory_fabric
 from memory_fabric.paths import local_memory_dir, validate_cwd
 from memory_fabric.storage import (
@@ -25,9 +41,11 @@ from memory_fabric.storage import (
 
 try:
     from mcp.server.fastmcp import FastMCP, Context
+    from mcp.server.transport_security import TransportSecuritySettings
 except ImportError:  # pragma: no cover - exercised only when optional mcp is absent.
-    FastMCP = None  # type: ignore[assignment]
-    Context = None
+    FastMCP = None  # type: ignore[assignment, misc]
+    Context = None  # type: ignore[assignment, misc]
+    TransportSecuritySettings = None  # type: ignore[assignment, misc]
 
 
 if FastMCP is not None:
@@ -46,7 +64,7 @@ if FastMCP is not None:
         return str(safe)
 
     @mcp.tool()
-    def initialize_memory_fabric_tool(cwd: str, memory_prompt: str | None = None):
+    def initialize_memory_fabric_tool(cwd: str, memory_prompt: str | None = None) -> InitResult:
         """Bootstrap Memory Fabric in the project at *cwd*.
 
         Creates the local `.ai-memory/` directory with starter section files
@@ -76,7 +94,9 @@ if FastMCP is not None:
         return result
 
     @mcp.tool()
-    def read_combined_context_tool(cwd: str, max_tokens: int | None = None, query: str | None = None):
+    def read_combined_context_tool(
+        cwd: str, max_tokens: int | None = None, query: str | None = None
+    ) -> ContextBundle:
         """Load and assemble the full memory context for the project.
 
         Reads all local memory section files and memory-store entries, assembles
@@ -97,7 +117,7 @@ if FastMCP is not None:
         return read_combined_context(safe, max_tokens=max_tokens, query=query)
 
     @mcp.tool()
-    def read_section_tool(cwd: str, section: str, max_tokens: int = 8000):
+    def read_section_tool(cwd: str, section: str, max_tokens: int = 8000) -> MemorySection:
         """Read a single flat memory section file by name.
 
         Flat sections live directly inside `.ai-memory/` (e.g. `architecture`,
@@ -115,7 +135,7 @@ if FastMCP is not None:
         return read_section(safe, section=section, max_tokens=max_tokens)
 
     @mcp.tool()
-    def keyword_search_tool(cwd: str, query: str, max_results: int = 10):
+    def keyword_search_tool(cwd: str, query: str, max_results: int = 10) -> list[SearchResult]:
         """Search all memory files by keyword and return ranked results.
 
         Uses ripgrep when available, falling back to a pure-Python search.
@@ -132,7 +152,9 @@ if FastMCP is not None:
         return keyword_search(safe, query=query, max_results=max_results)
 
     @mcp.tool()
-    def write_local_memory_tool(cwd: str, section: str, content: str, mode: str = "append"):
+    def write_local_memory_tool(
+        cwd: str, section: str, content: str, mode: str = "append"
+    ) -> WriteResult:
         """Write or append content to a flat memory section file.
 
         Flat sections live directly inside `.ai-memory/` (e.g. `architecture`,
@@ -152,7 +174,7 @@ if FastMCP is not None:
         return write_local_memory(safe, section=section, content=content, mode=mode)  # type: ignore[arg-type]
 
     @mcp.tool()
-    def propose_memory_patch_tool(cwd: str, instructions: str):
+    def propose_memory_patch_tool(cwd: str, instructions: str) -> PatchPreview:
         """Preview a proposed memory update as a unified diff without writing to disk.
 
         Parses ``instructions`` to determine the target section or store path,
@@ -183,8 +205,8 @@ if FastMCP is not None:
         with_eval: bool = False,
         save_report: bool = False,
         llm_review: bool = False,
-        context: Context = None,
-    ):
+        context: Context | None = None,
+    ) -> DreamResult:
         """Run the Dreaming consolidation pass over memory files.
 
         ⚠️  Do NOT use this tool as a substitute for saving new knowledge.
@@ -235,12 +257,13 @@ if FastMCP is not None:
                 context=context,
             )
         elif with_eval and not apply:
-            result["warnings"].append("Dream evaluation requires apply=true because candidate mode does not mutate live memory.")
+            result["warnings"].append(
+                "Dream evaluation requires apply=true because candidate mode does not mutate live memory."
+            )
         return result
 
-
     @mcp.tool()
-    def prepare_dream_payload_tool(cwd: str, mode: str = "light"):
+    def prepare_dream_payload_tool(cwd: str, mode: str = "light") -> dict[str, Any]:
         """Prepare prompt and payload for client-agent to perform consolidation."""
         safe = _safe_cwd(cwd)
         return prepare_dream_payload(safe, mode=mode)
@@ -254,8 +277,8 @@ if FastMCP is not None:
         apply: bool = True,
         llm_rewrite: bool = False,
         max_rewrite_tasks: int = 5,
-        context: Context = None,
-    ):
+        context: Context | None = None,
+    ) -> DreamResult:
         """Apply consolidation results generated by the client-agent's LLM run."""
         safe = _safe_cwd(cwd)
         return await apply_dream_results(
@@ -270,7 +293,12 @@ if FastMCP is not None:
         )
 
     @mcp.tool()
-    async def evaluate_memory_fabric_tool(cwd: str, save_report: bool = False, llm_review: bool = False, context: Context = None):
+    async def evaluate_memory_fabric_tool(
+        cwd: str,
+        save_report: bool = False,
+        llm_review: bool = False,
+        context: Context | None = None,
+    ) -> EvalResult:
         """Evaluate the overall quality of the Memory Fabric for this project.
 
         Scores multiple quality dimensions — section coverage, metadata
@@ -286,7 +314,9 @@ if FastMCP is not None:
                          ``True`` (requires an LLM to be configured).
         """
         safe = _safe_cwd(cwd)
-        return await evaluate_memory_fabric(safe, save_report=save_report, llm_review=llm_review, context=context)
+        return await evaluate_memory_fabric(
+            safe, save_report=save_report, llm_review=llm_review, context=context
+        )
 
     @mcp.tool()
     async def evaluate_dream_quality_tool(
@@ -294,8 +324,8 @@ if FastMCP is not None:
         snapshot: str,
         save_report: bool = False,
         llm_review: bool = False,
-        context: Context = None,
-    ):
+        context: Context | None = None,
+    ) -> DreamEvalResult:
         """Score the quality improvement produced by a Dream run.
 
         Compares memory state captured in ``snapshot`` against the current live
@@ -312,7 +342,9 @@ if FastMCP is not None:
                          (requires an LLM to be configured).
         """
         safe = _safe_cwd(cwd)
-        return await evaluate_dream_quality(safe, snapshot=snapshot, save_report=save_report, llm_review=llm_review, context=context)
+        return await evaluate_dream_quality(
+            safe, snapshot=snapshot, save_report=save_report, llm_review=llm_review, context=context
+        )
 
     @mcp.tool()
     def write_memory_store_tool(
@@ -323,13 +355,18 @@ if FastMCP is not None:
         tags: str = "",
         priority: str = "medium",
         mode: str = "replace",
-    ):
+    ) -> StoreWriteResult:
         """Write a memory file to a semantic store path (e.g. 'architecture/decisions/auth-service')."""
         safe = _safe_cwd(cwd)
         tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else None
         return write_memory_store(
-            safe, store_path=store_path, content=content,
-            title=title, tags=tag_list, priority=priority, mode=mode,  # type: ignore[arg-type]
+            safe,
+            store_path=store_path,
+            content=content,
+            title=title,
+            tags=tag_list,
+            priority=priority,
+            mode=mode,  # type: ignore[arg-type]
         )
 
     @mcp.tool()
@@ -337,7 +374,7 @@ if FastMCP is not None:
         cwd: str,
         store_path: str,
         max_tokens: int = 8000,
-    ):
+    ) -> StoreReadResult:
         """Read a single memory-store file by its semantic path."""
         safe = _safe_cwd(cwd)
         return read_memory_store(safe, store_path=store_path, max_tokens=max_tokens)
@@ -348,7 +385,7 @@ if FastMCP is not None:
         prefix: str = "",
         tags: str = "",
         max_results: int = 50,
-    ):
+    ) -> StoreListResult:
         """List files in the memory store, optionally filtered by prefix and/or tags."""
         safe = _safe_cwd(cwd)
         tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else None
@@ -358,7 +395,7 @@ if FastMCP is not None:
     def delete_memory_store_tool(
         cwd: str,
         store_path: str,
-    ):
+    ) -> WriteResult:
         """Remove a memory-store file by its semantic path."""
         safe = _safe_cwd(cwd)
         return delete_memory_store(safe, store_path=store_path)
@@ -370,7 +407,7 @@ if FastMCP is not None:
         key_decisions: list[str] | None = None,
         files_changed: list[str] | None = None,
         session_label: str | None = None,
-    ):
+    ) -> EpisodicJournalResult:
         """Append a timestamped session journal to the episodic memory store.
 
         Creates or appends to an `episodic/YYYY-MM-DD` store entry that records
@@ -474,21 +511,41 @@ else:
 
 def main(argv: list[str] | None = None) -> int:
     if mcp is None:
-        raise SystemExit("The optional `mcp` package is not installed. Install with: pipx inject memory-fabric mcp")
-        
+        raise SystemExit(
+            "The optional `mcp` package is not installed. Install with: pipx inject memory-fabric mcp"
+        )
+
     import argparse
-    parser = argparse.ArgumentParser(prog="memory-fabric-mcp", description="Memory Fabric MCP Server")
-    parser.add_argument("--transport", choices=["stdio", "sse"], default="stdio", help="Transport protocol to use (default: stdio)")
-    parser.add_argument("--host", default="127.0.0.1", help="Host address for SSE transport (default: 127.0.0.1)")
-    parser.add_argument("--port", type=int, default=8000, help="Port for SSE transport (default: 8000)")
-    parser.add_argument("--allow-all-origins", action="store_true", help="Allow all origins and disable DNS rebinding protection (useful for Open WebUI)")
-    
+
+    parser = argparse.ArgumentParser(
+        prog="memory-fabric-mcp", description="Memory Fabric MCP Server"
+    )
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "sse"],
+        default="stdio",
+        help="Transport protocol to use (default: stdio)",
+    )
+    parser.add_argument(
+        "--host", default="127.0.0.1", help="Host address for SSE transport (default: 127.0.0.1)"
+    )
+    parser.add_argument(
+        "--port", type=int, default=8000, help="Port for SSE transport (default: 8000)"
+    )
+    parser.add_argument(
+        "--allow-all-origins",
+        action="store_true",
+        help="Allow all origins and disable DNS rebinding protection (useful for Open WebUI)",
+    )
+
     args = parser.parse_args(argv)
-    
+
     if args.transport == "sse":
         mcp.settings.host = args.host
         mcp.settings.port = args.port
         if args.allow_all_origins:
+            if mcp.settings.transport_security is None:
+                mcp.settings.transport_security = TransportSecuritySettings()
             mcp.settings.transport_security.enable_dns_rebinding_protection = False
             mcp.settings.transport_security.allowed_hosts = ["*"]
             mcp.settings.transport_security.allowed_origins = ["*"]
