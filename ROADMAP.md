@@ -4,7 +4,7 @@
 > one command in VS Code, Claude (Code + Desktop), Codex, Antigravity, Cursor, Windsurf,
 > Gemini CLI, Cline, and anything MCP-compatible.
 
-Last updated: 2026-07-04 · Current version: 0.3.0 (not yet on PyPI) · Tests: 83 passing
+Last updated: 2026-07-06 · Current version: 0.5.0 ([live on PyPI](https://pypi.org/project/memory-fabric/)) · Tests: 140 passing
 
 ---
 
@@ -37,13 +37,14 @@ Every phase below either widens distribution, deepens quality, or proves the cla
 
 Before asking thousands of people to install it, make failure impossible to hide.
 
-- [ ] **Split the god module.** `src/memory_fabric/storage/_core.py` is ~108 KB. Split into
-      `context.py` (assembly/budgeting), `store.py` (semantic store CRUD), `dream.py`
-      (consolidation), `journal.py` (episodic), `search.py`, `snapshots.py`. Keep the
-      public API re-exported from `memory_fabric.storage` so nothing breaks.
-- [ ] **CI matrix.** GitHub Actions: {windows, macos, ubuntu} × {3.11, 3.12, 3.13, 3.14},
+- [x] **Split the god module.** Done 2026-07-04 (Milestone B): `storage/_core.py` split into
+      12 modules (`context.py`, `store.py`, `dream.py`, `journal.py`, `search.py`,
+      `snapshots.py`, `sections.py`, `lifecycle.py`, `consolidation.py`, `finalize.py`,
+      `patch.py`, `_shared.py`), all <25 KB, public API re-exported from
+      `memory_fabric.storage`. (`eval.py` at ~41 KB still exceeds the 25 KB bar.)
+- [x] **CI matrix.** GitHub Actions: {windows, macos, ubuntu} × {3.11, 3.12, 3.13, 3.14},
       `pytest`, `ruff check`, `ruff format --check`, `mypy` (the package ships `py.typed`
-      — enforce it). Badge in README.
+      — enforce it). Badge in README. Confirmed green on GitHub 2026-07-05.
 - [ ] **Coverage gate** (start at current %, ratchet up; target ≥85%).
 - [ ] **Docs truth pass.** README still says "v0.1.0" while `pyproject.toml` says 0.3.0;
       single-source the version and audit every README claim against behavior.
@@ -58,9 +59,9 @@ This phase is the direct answer to "usable in VS Code, Claude, Codex, Antigravit
 
 ### 3.1 Publish to PyPI (unlocks everything else)
 
-- [ ] Reserve names `memory-fabric` on PyPI (and consider `agentic-memory` as alias).
-- [ ] GitHub Actions **trusted publishing** (OIDC, no API tokens) on tag push.
-- [ ] After this, the universal zero-install invocation becomes:
+- [x] Reserve names `memory-fabric` on PyPI (published 2026-07-06; `agentic-memory` alias not taken).
+- [x] GitHub Actions **trusted publishing** (OIDC, no API tokens) on tag push.
+- [x] After this, the universal zero-install invocation becomes:
       `uvx --from "memory-fabric[mcp]" memory-fabric-mcp`
       (works on any machine with `uv`; document `pipx` fallback).
 
@@ -98,10 +99,10 @@ exact diff; `--uninstall` flag for clean removal.
 
 ### 3.4 One-click installs
 
-- [ ] **VS Code / Cursor install badges** in README (deeplink `vscode:mcp/install` /
-      `cursor://` URLs with the server config embedded).
-- [ ] **MCPB bundle** (`.mcpb`) built in CI for drag-and-drop install into Claude Desktop.
-      Python servers can be bundled with dependencies; test on Windows + macOS.
+- [x] **VS Code / Cursor install badges** in README (deeplink `vscode:mcp/install` /
+      `cursor://` URLs with the server config embedded). Done 2026-07-05 (Milestone D).
+- [x] **MCPB bundle** (`.mcpb`) built in CI for drag-and-drop install into Claude Desktop.
+      Done 2026-07-05 (Milestone D); live-tested on Windows — macOS test still pending.
 
 ### 3.5 README install matrix
 

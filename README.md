@@ -27,7 +27,7 @@ Memory is stored as human-readable Markdown with YAML frontmatter. No vector dat
 
 ## Status
 
-**v0.4.1 — not yet published to PyPI** (PyPI trusted-publisher registration still pending); install from GitHub in the meantime.
+**v0.5.0 — [live on PyPI](https://pypi.org/project/memory-fabric/).**
 Core CLI and MCP tools work end-to-end.
 
 ---
@@ -75,15 +75,18 @@ pip install "memory-fabric[mcp] @ git+https://github.com/elViRafa/agentic-memory
 
 ### Upgrading
 
-Because Memory Fabric is in active development, we recommend upgrading regularly. To pull the latest updates (including the new asynchronous engine and native MCP Sampling support):
+Because Memory Fabric is in active development, we recommend upgrading regularly:
 
-1. **Reinstall/Upgrade the Package**:
+1. **Upgrade the Package**:
    ```sh
    # If installed via pipx:
-   pipx install --force "memory-fabric[mcp] @ git+https://github.com/elViRafa/agentic-memory.git"
+   pipx upgrade memory-fabric
 
    # If installed in a virtual environment via pip:
-   pip install --upgrade --force-reinstall "memory-fabric[mcp] @ git+https://github.com/elViRafa/agentic-memory.git"
+   pip install --upgrade "memory-fabric[mcp]"
+
+   # If installed from GitHub (pre-release):
+   pipx install --force "memory-fabric[mcp] @ git+https://github.com/elViRafa/agentic-memory.git"
    ```
 
 2. **Restart MCP Clients**:
@@ -180,8 +183,7 @@ overwrites it, and backs up the original file if it can't be parsed.
 
 These call `uvx --from "memory-fabric[mcp]" memory-fabric-mcp` under the hood — same
 canonical invocation as `ai-memory install`, just without the CLI step. Requires
-[`uv`](https://docs.astral.sh/uv/) and won't fully resolve until `memory-fabric` is
-live on PyPI (see [Status](#status) above).
+[`uv`](https://docs.astral.sh/uv/).
 
 | Client | Command |
 |---|---|
