@@ -22,10 +22,12 @@ from memory_fabric.storage import (
     initialize_memory_fabric,
     keyword_search,
     read_combined_context,
+    read_memory_store,
     read_section,
     rollback,
     status,
     write_local_memory,
+    write_memory_store,
 )
 from memory_fabric.llm import call_llm as _async_call_llm
 
@@ -204,7 +206,11 @@ class MemoryFabricTests(unittest.TestCase):
                 check["id"] for category in result["categories"] for check in category["checks"]
             ]
 
-            self.assertIn("architecture_placeholder", check_ids)
+            # Store-first model: starter maps are generated (not placeholder-checked);
+            # the empty store and the steering starter templates are what eval flags.
+            self.assertIn("memory_store_empty", check_ids)
+            self.assertIn("framework-rules_placeholder", check_ids)
+            self.assertIn("architecture_generated", check_ids)
             self.assertTrue(
                 any("MEMORY_FABRIC_LLM_PROVIDER" in note for note in result["llm_notes"])
             )
@@ -341,13 +347,15 @@ class MemoryFabricTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             initialize_memory_fabric(temp)
 
-            arch_path = Path(temp) / ".ai-memory" / "architecture.md"
-            arch_text = arch_path.read_text(encoding="utf-8")
-            metadata, body = parse_frontmatter(arch_text)
+            # Generated maps are exempt from staleness (they regenerate on every
+            # Dream); steering sections are hand-curated and still age.
+            rules_path = Path(temp) / ".ai-memory" / "framework-rules.md"
+            rules_text = rules_path.read_text(encoding="utf-8")
+            metadata, body = parse_frontmatter(rules_text)
             metadata["last_updated"] = "2020-01-01T12:00:00-04:00"
             from memory_fabric.frontmatter import dump_frontmatter
 
-            arch_path.write_text(dump_frontmatter(metadata, body), encoding="utf-8")
+            rules_path.write_text(dump_frontmatter(metadata, body), encoding="utf-8")
 
             private_dir = Path(temp) / ".ai-memory" / "private"
             private_dir.mkdir(exist_ok=True)
@@ -361,8 +369,8 @@ class MemoryFabricTests(unittest.TestCase):
             self.assertTrue(any("redacted" in w for w in result["warnings"]))
             self.assertGreater(result["redactions"], 0)
 
-            new_arch_text = arch_path.read_text(encoding="utf-8")
-            new_metadata, _ = parse_frontmatter(new_arch_text)
+            new_rules_text = rules_path.read_text(encoding="utf-8")
+            new_metadata, _ = parse_frontmatter(new_rules_text)
             self.assertEqual(new_metadata.get("review_status"), "stale")
 
     @mock.patch("sys.stdin.isatty", return_value=True)
@@ -581,13 +589,22 @@ class MemoryFabricTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             initialize_memory_fabric(temp)
 
+            # Store-first model: facts live in the store; the LLM consolidates
+            # store files and the root map is regenerated from them.
+            write_memory_store(
+                temp,
+                "architecture/core-design",
+                "# Core Design\n\nDraft architecture notes.",
+                title="Core Design",
+            )
+
             os.environ["MEMORY_FABRIC_LLM_PROVIDER"] = "gemini"
             os.environ["GEMINI_API_KEY"] = "gemini-key"
 
             consolidation_response = json.dumps(
                 {
                     "consolidated_files": {
-                        "architecture": "# Architecture\n\nConsolidated LLM content."
+                        "store/architecture/core-design": "# Core Design\n\nConsolidated LLM content."
                     },
                     "contradictions": ["Mismatched settings"],
                     "warnings": ["Warning about schema"],
@@ -610,9 +627,14 @@ class MemoryFabricTests(unittest.TestCase):
                 any("Consolidation warning: Warning about schema" in w for w in result["warnings"])
             )
 
-            # Verify architecture is updated
-            arch_text = read_section(temp, "architecture")["text"]
-            self.assertIn("Consolidated LLM content", arch_text)
+            # Verify the store file is updated
+            store_text = read_memory_store(temp, "architecture/core-design")["text"]
+            self.assertIn("Consolidated LLM content", store_text)
+
+            # And the root map is a generated view listing the store entry
+            arch = read_section(temp, "architecture")
+            self.assertTrue(arch["metadata"].get("generated"))
+            self.assertIn("architecture/core-design", arch["text"])
 
             # Clean up env
             os.environ.pop("MEMORY_FABRIC_LLM_PROVIDER", None)
@@ -741,10 +763,17 @@ class MemoryFabricTests(unittest.TestCase):
         ):
             initialize_memory_fabric(temp)
 
-            # Let's delete other sections so we have a clean test with just one section
+            # Store-first model: delete the starter root sections and keep a
+            # single store fact — flat maps are generated and never summarized.
             for p in (Path(temp) / ".ai-memory").glob("*.md"):
-                if p.name not in {"architecture.md"}:
-                    p.unlink()
+                p.unlink()
+            write_memory_store(
+                temp,
+                "architecture/core",
+                "# Core\n\nArchitecture details worth summarizing.",
+                title="Core",
+            )
+            store_file = Path(temp) / ".ai-memory" / "memory-store" / "architecture" / "core.md"
 
             os.environ["MEMORY_FABRIC_LLM_PROVIDER"] = "gemini"
             os.environ["GEMINI_API_KEY"] = "gemini-key"
@@ -773,8 +802,7 @@ class MemoryFabricTests(unittest.TestCase):
                 )  # 1 consolidation call + 1 summary call
 
                 # Check that summary_hash exists in metadata
-                arch_path = Path(temp) / ".ai-memory" / "architecture.md"
-                metadata, body = parse_frontmatter(arch_path.read_text(encoding="utf-8"))
+                metadata, body = parse_frontmatter(store_file.read_text(encoding="utf-8"))
                 self.assertEqual(metadata.get("summary"), "Custom architecture summary.")
                 expected_hash = hashlib.md5(body.strip().encode("utf-8")).hexdigest()
                 self.assertEqual(metadata.get("summary_hash"), expected_hash)
@@ -788,8 +816,8 @@ class MemoryFabricTests(unittest.TestCase):
 
                 # 3. Modify body: hash mismatch -> calls LLM
                 metadata["last_updated"] = "2026-06-02T13:00:00-04:00"
-                body = "# Architecture\n\nNew modified content here."
-                arch_path.write_text(dump_frontmatter(metadata, body), encoding="utf-8")
+                body = "# Core\n\nNew modified content here."
+                store_file.write_text(dump_frontmatter(metadata, body), encoding="utf-8")
 
                 mock_call_llm.reset_mock()
                 mock_call_llm.return_value = "New custom architecture summary."
@@ -798,7 +826,7 @@ class MemoryFabricTests(unittest.TestCase):
                     mock_call_llm.call_count, 2
                 )  # 1 consolidation call + 1 summary call
 
-                metadata2, body2 = parse_frontmatter(arch_path.read_text(encoding="utf-8"))
+                metadata2, body2 = parse_frontmatter(store_file.read_text(encoding="utf-8"))
                 self.assertEqual(metadata2.get("summary"), "New custom architecture summary.")
 
             finally:
@@ -822,10 +850,17 @@ class MemoryFabricTests(unittest.TestCase):
         ):
             initialize_memory_fabric(temp)
 
-            # Let's delete other sections so we have a clean test with just one section
+            # Store-first model: a single store fact is the consolidation target;
+            # root maps are generated views excluded from the hash and the LLM.
             for p in (Path(temp) / ".ai-memory").glob("*.md"):
-                if p.name not in {"architecture.md"}:
-                    p.unlink()
+                p.unlink()
+            write_memory_store(
+                temp,
+                "architecture/core",
+                "# Core\n\nDraft architecture notes.",
+                title="Core",
+            )
+            store_file = Path(temp) / ".ai-memory" / "memory-store" / "architecture" / "core.md"
 
             os.environ["MEMORY_FABRIC_LLM_PROVIDER"] = "gemini"
             os.environ["GEMINI_API_KEY"] = "gemini-key"
@@ -847,7 +882,7 @@ class MemoryFabricTests(unittest.TestCase):
                     json.dumps(
                         {
                             "consolidated_files": {
-                                "architecture": "# Architecture\n\nConsolidated."
+                                "store/architecture/core": "# Core\n\nConsolidated."
                             },
                             "contradictions": [],
                             "warnings": [],
@@ -863,13 +898,16 @@ class MemoryFabricTests(unittest.TestCase):
                 mock_call_llm.reset_mock()
                 res2 = dream(temp, mode="deep", apply=True)
                 self.assertEqual(mock_call_llm.call_count, 0)  # exactly 0 calls!
-                self.assertEqual(res2["affected_files"], ["index.md"])
+                # Only the regenerated indexes churn (their timestamp line changes).
+                self.assertEqual(
+                    sorted(res2["affected_files"]),
+                    sorted(["index.md", str(Path("memory-store") / "index.md")]),
+                )
 
                 # 3. Third run: let's modify the file content so hash mismatches
-                arch_path = Path(temp) / ".ai-memory" / "architecture.md"
-                arch_meta, arch_body = parse_frontmatter(arch_path.read_text(encoding="utf-8"))
-                arch_path.write_text(
-                    dump_frontmatter(arch_meta, arch_body + "\nNew change.\n"), encoding="utf-8"
+                store_meta, store_body = parse_frontmatter(store_file.read_text(encoding="utf-8"))
+                store_file.write_text(
+                    dump_frontmatter(store_meta, store_body + "\nNew change.\n"), encoding="utf-8"
                 )
 
                 mock_call_llm.reset_mock()
@@ -877,7 +915,7 @@ class MemoryFabricTests(unittest.TestCase):
                     json.dumps(
                         {
                             "consolidated_files": {
-                                "architecture": "# Architecture\n\nConsolidated again."
+                                "store/architecture/core": "# Core\n\nConsolidated again."
                             },
                             "contradictions": [],
                             "warnings": [],
@@ -896,10 +934,11 @@ class MemoryFabricTests(unittest.TestCase):
     def test_index_includes_key_topics(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             initialize_memory_fabric(temp)
-            # Write a section with H2 headings
-            write_local_memory(
+            # Store-first model: facts live in the store; the store index table
+            # extracts their key topics. Write one file with H2 headings…
+            write_memory_store(
                 temp,
-                "decisions",
+                "decisions/local-model",
                 (
                     "# Decisions\n\n"
                     "## Decision 1: Use local model\n"
@@ -907,41 +946,50 @@ class MemoryFabricTests(unittest.TestCase):
                     "## Decision 2: Run with CUDA\n"
                     "We decided to run with CUDA acceleration.\n"
                 ),
-                mode="replace",
+                title="Local Model Decisions",
             )
-            # Write another section with only lists (no H2)
-            write_local_memory(
+            # …and another with only lists (no H2)
+            write_memory_store(
                 temp,
-                "debt",
+                "debt/cleanup",
                 (
                     "# Technical Debt\n\n"
                     "- Fix the imports\n"
                     "- Clean the workspace files\n"
                     "- Add more logs\n"
                 ),
-                mode="replace",
+                title="Cleanup Targets",
             )
 
-            # Trigger Dreaming (light mode is enough to regenerate index)
+            # Trigger Dreaming (light mode is enough to regenerate indexes)
             dream(temp, mode="light", apply=True)
 
             index_path = Path(temp) / ".ai-memory" / "index.md"
             self.assertTrue(index_path.exists())
             index_text = index_path.read_text(encoding="utf-8")
 
-            # Verify the headers are updated in index table
+            # Verify the headers are updated in the root index table
             self.assertIn("| Section | Priority | Summary | Key Topics |", index_text)
             self.assertIn("| --- | --- | --- | --- |", index_text)
 
-            # Verify the extracted H2 topics are correct in the table
+            store_index_path = Path(temp) / ".ai-memory" / "memory-store" / "index.md"
+            self.assertTrue(store_index_path.exists())
+            store_index_text = store_index_path.read_text(encoding="utf-8")
+
+            # Verify the extracted H2 topics are correct in the store index table
             self.assertIn(
-                "• Decision 1: Use local model<br>• Decision 2: Run with CUDA", index_text
+                "• Decision 1: Use local model<br>• Decision 2: Run with CUDA", store_index_text
             )
 
             # Verify fallback bullet list topics are correct
             self.assertIn(
-                "• Fix the imports<br>• Clean the workspace files<br>• Add more logs", index_text
+                "• Fix the imports<br>• Clean the workspace files<br>• Add more logs",
+                store_index_text,
             )
+
+            # Root maps were regenerated from the store and listed in the root index
+            self.assertIn("| `decisions` |", index_text)
+            self.assertIn("| `debt` |", index_text)
 
             # Run doctor to ensure index consistency validation is happy
             res_doctor = doctor(temp)
@@ -1452,14 +1500,12 @@ class MemoryStoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             initialize_memory_fabric(temp)
 
-            # Let's delete other sections so we have a clean test with just one section
+            # Store-first model: delete the starter root sections and keep a
+            # single store fact as the consolidation target.
             for p in (Path(temp) / ".ai-memory").glob("*.md"):
-                if p.name not in {"architecture.md"}:
-                    p.unlink()
-
-            # Write some content
-            write_local_memory(
-                temp, "architecture", "# Architecture\n\nOriginal content.", mode="replace"
+                p.unlink()
+            write_memory_store(
+                temp, "architecture/notes", "# Notes\n\nOriginal content.", title="Notes"
             )
 
             # 1. Prepare payload
@@ -1467,15 +1513,17 @@ class MemoryStoreTests(unittest.TestCase):
             self.assertFalse(payload["skip_required"])
             self.assertTrue(payload["snapshot"])
             self.assertIn("Original content.", payload["consolidation_prompt"])
-            self.assertIn("local/architecture", payload["sections_data"])
+            self.assertIn("store/architecture/notes", payload["sections_data"])
 
             # 2. Simulate client LLM consolidation response
             llm_response = json.dumps(
                 {
                     "consolidated_files": {
-                        "architecture": "# Architecture\n\nConsolidated by client."
+                        "store/architecture/notes": "# Notes\n\nConsolidated by client."
                     },
-                    "summaries": {"architecture": "Client generated architecture summary."},
+                    "summaries": {
+                        "store/architecture/notes": "Client generated architecture summary."
+                    },
                     "contradictions": ["Simulated contradiction"],
                     "warnings": ["Simulated warning"],
                 }
@@ -1498,11 +1546,17 @@ class MemoryStoreTests(unittest.TestCase):
                 any("Contradiction detected: Simulated contradiction" in w for w in res["warnings"])
             )
 
-            # Verify file content is updated
-            arch_path = Path(temp) / ".ai-memory" / "architecture.md"
-            metadata, body = parse_frontmatter(arch_path.read_text(encoding="utf-8"))
+            # Verify the store file content is updated
+            notes_path = Path(temp) / ".ai-memory" / "memory-store" / "architecture" / "notes.md"
+            metadata, body = parse_frontmatter(notes_path.read_text(encoding="utf-8"))
             self.assertIn("Consolidated by client.", body)
             self.assertEqual(metadata.get("summary"), "Client generated architecture summary.")
+
+            # The root map was regenerated as a view over the store category
+            arch_path = Path(temp) / ".ai-memory" / "architecture.md"
+            map_meta, map_body = parse_frontmatter(arch_path.read_text(encoding="utf-8"))
+            self.assertTrue(map_meta.get("generated"))
+            self.assertIn("architecture/notes", map_body)
 
             # 4. Prepare payload again (no change) -> skip_required should be True
             import time

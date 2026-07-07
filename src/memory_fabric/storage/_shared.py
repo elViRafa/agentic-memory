@@ -19,6 +19,12 @@ SECTION_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 STORE_PATH_SEGMENT = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 PRIORITY_ORDER = {"high": 0, "medium": 1, "low": 2}  # contiguous 0-2 mapping
 
+# Steering sections are hand-curated directives, not budget-competing memory:
+# context assembly always loads them in full. Sections can opt in/out with a
+# `role: steering` frontmatter field; these two canonical names are steering by
+# default so stores created before the marker existed keep working.
+STEERING_SECTIONS = frozenset({"framework-rules", "ubiquitous-language"})
+
 # Current schema version for all Memory Fabric markdown files.
 CURRENT_SCHEMA_VERSION = "1.3"
 
@@ -175,6 +181,36 @@ def _is_store_path(memory_dir: Path, path: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _is_generated_file(path: Path) -> bool:
+    """True for files whose frontmatter marks them `generated: true`.
+
+    Generated files are derived views (root maps, discovery indexes): Dreaming
+    rebuilds them from the store, so they are excluded from consolidation
+    payloads, LLM summarization, staleness marking, and rewrite tasks.
+    """
+    try:
+        metadata, _body = parse_frontmatter(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, FrontmatterError):
+        return False
+    return bool(metadata.get("generated"))
+
+
+def _is_steering_file(path: Path) -> bool:
+    """Check whether a section file is a steering directive (always loaded).
+
+    An explicit `role:` frontmatter field wins; without one, the canonical
+    STEERING_SECTIONS names are steering by default.
+    """
+    try:
+        metadata, _body = parse_frontmatter(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, FrontmatterError):
+        return path.stem in STEERING_SECTIONS
+    role = str(metadata.get("role") or "").strip().lower()
+    if role:
+        return role == "steering"
+    return path.stem in STEERING_SECTIONS
 
 
 def estimate_tokens(text: str) -> int:

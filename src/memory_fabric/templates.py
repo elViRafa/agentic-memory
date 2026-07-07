@@ -15,43 +15,50 @@ SECTION_TEMPLATES: dict[str, dict[str, Any]] = {
         "priority": "high",
         "summary": "Map of available project memory sections.",
         "tags": ["index", "memory"],
-        "body": "# Project Memory Index\n\nThis file summarizes the root memory sections available for this project. Granular files are indexed in `memory-store/index.md`.\n",
+        "frontmatter": {"generated": True},
+        "body": "# Project Memory Index\n\nGenerated discovery index — rebuilt by Dreaming. Root maps are generated views over `memory-store/`; granular files are indexed in `memory-store/index.md`.\n",
     },
     "architecture": {
         "priority": "high",
-        "summary": "Executive summary map of project architecture and system boundaries.",
+        "summary": "Generated map of memory-store/architecture/ (empty until first Dream).",
         "tags": ["architecture"],
-        "body": "# Architecture\n\nThis is an executive map. Record granular architecture context in `memory-store/architecture/`.\n",
+        "frontmatter": {"generated": True, "generated_from": "memory-store/architecture"},
+        "body": "# Architecture Map\n\nGenerated view over `memory-store/architecture/` — rebuilt by Dreaming; do not edit by hand. Write granular architecture facts with `write_memory_store_tool`.\n",
     },
     "schemas": {
         "priority": "high",
-        "summary": "Executive summary map of important data models and contracts.",
+        "summary": "Generated map of memory-store/schemas/ (empty until first Dream).",
         "tags": ["schemas", "contracts"],
-        "body": "# Schemas\n\nThis is an executive map. Record granular data contracts in `memory-store/schemas/`.\n",
+        "frontmatter": {"generated": True, "generated_from": "memory-store/schemas"},
+        "body": "# Schemas Map\n\nGenerated view over `memory-store/schemas/` — rebuilt by Dreaming; do not edit by hand. Write granular data contracts with `write_memory_store_tool`.\n",
     },
     "decisions": {
         "priority": "high",
-        "summary": "Executive summary map of architectural decisions and rationale.",
+        "summary": "Generated map of memory-store/decisions/ (empty until first Dream).",
         "tags": ["decisions", "adr"],
-        "body": "# Decisions\n\nThis is an executive map. Record granular decisions and ADRs in `memory-store/decisions/`.\n",
+        "frontmatter": {"generated": True, "generated_from": "memory-store/decisions"},
+        "body": "# Decisions Map\n\nGenerated view over `memory-store/decisions/` — rebuilt by Dreaming; do not edit by hand. Write granular decisions and ADRs with `write_memory_store_tool`.\n",
     },
     "debt": {
         "priority": "low",
-        "summary": "Executive summary map of known technical debt and cleanup targets.",
+        "summary": "Generated map of memory-store/debt/ (empty until first Dream).",
         "tags": ["debt", "risk"],
-        "body": "# Technical Debt\n\nThis is an executive map. Record granular technical debt items in `memory-store/debt/`.\n",
+        "frontmatter": {"generated": True, "generated_from": "memory-store/debt"},
+        "body": "# Technical Debt Map\n\nGenerated view over `memory-store/debt/` — rebuilt by Dreaming; do not edit by hand. Write granular debt items with `write_memory_store_tool`.\n",
     },
     "ubiquitous-language": {
         "priority": "medium",
-        "summary": "Executive summary map of project-specific vocabulary and domain terms.",
-        "tags": ["domain", "language"],
-        "body": "# Ubiquitous Language\n\nThis is an executive map. Record granular domain terms in `memory-store/ubiquitous-language/`.\n",
+        "summary": "Always-loaded steering: project-specific vocabulary and domain terms.",
+        "tags": ["domain", "language", "steering"],
+        "frontmatter": {"role": "steering"},
+        "body": "# Ubiquitous Language\n\nHand-curated steering section, always loaded into context (never evicted by the token budget). Keep entries short: `term — meaning`. Granular term histories belong in `memory-store/ubiquitous-language/`.\n",
     },
     "framework-rules": {
         "priority": "medium",
-        "summary": "Executive summary map of framework-specific conventions and constraints.",
-        "tags": ["framework", "rules"],
-        "body": "# Framework Rules\n\nThis is an executive map. Record granular rules in `memory-store/rules/`.\n",
+        "summary": "Always-loaded steering: framework conventions and constraints.",
+        "tags": ["framework", "rules", "steering"],
+        "frontmatter": {"role": "steering"},
+        "body": "# Framework Rules\n\nHand-curated steering section, always loaded into context (never evicted by the token budget). Keep this file short and universally applicable. Granular rule records belong in `memory-store/rules/`.\n",
     },
 }
 
@@ -92,8 +99,9 @@ Use `write_memory_store_tool` to register standalone memories.
 - **`store_path` Rules:** Must be lowercase, alphanumeric segments separated by slashes. No spaces, capitals, or `.md` extension (e.g., `architecture/decisions/jwt-auth`). Max 5 levels of nesting.
 - **Parameters:** `cwd`, `store_path`, `content`, `title` (optional), `tags` (optional), `priority` (`high`/`medium`/`low`), `mode` (`replace`/`append`).
 
-### 3. Executive Map Updates
-For updating root map files (e.g., `debt`, `architecture`), call `write_local_memory_tool(cwd, section, content, mode="replace")`.
+### 3. Root Maps Are Generated — Never Write Them
+Root map files (`index`, `architecture`, `decisions`, `debt`, `schemas`) are **generated views** over `memory-store/`, rebuilt by Dreaming; hand edits get folded back into the store as `map-notes-pending-review` entries. Do NOT update them with `write_local_memory_tool` — that path is deprecated for facts and will be removed in v1.0. Write granular facts with `write_memory_store_tool`, then run `dream_tool` to refresh the maps.
+**Exception:** the steering sections `framework-rules` and `ubiquitous-language` are hand-curated and always loaded into context; update those with `write_local_memory_tool(cwd, section, content)`.
 
 ### 4. Security & Maintenance
 - **Security:** Do NOT store credentials, tokens, or passwords.
@@ -205,6 +213,8 @@ def build_memory_file(section: str) -> str:
         "schema_version": SCHEMA_VERSION,
         "last_updated": now_iso(),
     }
+    # Extra frontmatter carried by the template (e.g. `generated`/`role` markers).
+    metadata.update(template.get("frontmatter", {}))
     return dump_frontmatter(metadata, template["body"])
 
 

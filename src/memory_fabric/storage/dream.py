@@ -15,6 +15,7 @@ from memory_fabric.frontmatter import parse_frontmatter
 from memory_fabric.paths import local_memory_dir
 from memory_fabric.storage._shared import (
     _get_section_key,
+    _is_generated_file,
     _is_ignored_local_memory_path,
     _iter_markdown_files,
 )
@@ -29,6 +30,7 @@ from memory_fabric.storage.finalize import (
     _process_and_finalize_candidate,
 )
 from memory_fabric.storage.lifecycle import initialize_memory_fabric
+from memory_fabric.storage.maps import regenerate_maps
 from memory_fabric.storage.snapshots import create_snapshot
 from memory_fabric.llm import call_llm
 
@@ -53,6 +55,14 @@ async def dream(
     snapshot = create_snapshot(cwd)
     candidate_root = _create_candidate_store(memory_dir, snapshot)
 
+    warnings: list[str] = []
+
+    # Store-first model: fold hand edits on generated maps into the store and
+    # rebuild the maps BEFORE assembling the payload, so folded content is
+    # consolidated in this very Dream instead of one cycle later.
+    early_maps = regenerate_maps(candidate_root)
+    warnings.extend(early_maps["warnings"])
+
     # Ingest external inputs
     git_diff_text = _get_git_diff(cwd)
     session_text = ""
@@ -72,7 +82,6 @@ async def dream(
         except Exception:
             pass
 
-    warnings: list[str] = []
     llm_active = _is_llm_ready(context)
 
     fallback_duplicates = 0
@@ -85,10 +94,13 @@ async def dream(
 
     if llm_active:
         try:
-            # 1. Read files into payload
+            # 1. Read files into payload (generated maps are derived views — the
+            # LLM must not rewrite them, and they must not perturb the hash)
             sections_data = {}
             for path in _iter_markdown_files(candidate_root):
                 if path.name == "index.md" or _is_ignored_local_memory_path(candidate_root, path):
+                    continue
+                if _is_generated_file(path):
                     continue
                 metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
                 key = _get_section_key(candidate_root, path)
@@ -226,6 +238,11 @@ def prepare_dream_payload(cwd: str, mode: str = "light") -> dict[str, Any]:
     snapshot = create_snapshot(cwd)
     candidate_root = _create_candidate_store(memory_dir, snapshot)
 
+    # Store-first model: fold hand edits on generated maps into the store and
+    # rebuild the maps before assembling the payload, so folded content is
+    # consolidated in this very Dream instead of one cycle later.
+    early_maps = regenerate_maps(candidate_root)
+
     # Ingest external inputs
     git_diff_text = _get_git_diff(cwd)
     session_text = ""
@@ -245,10 +262,13 @@ def prepare_dream_payload(cwd: str, mode: str = "light") -> dict[str, Any]:
         except Exception:
             pass
 
-    # Read files into payload
+    # Read files into payload (generated maps are derived views — the LLM must
+    # not rewrite them, and they must not perturb the consolidation hash)
     sections_data = {}
     for path in _iter_markdown_files(candidate_root):
         if path.name == "index.md" or _is_ignored_local_memory_path(candidate_root, path):
+            continue
+        if _is_generated_file(path):
             continue
         metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
         key = _get_section_key(candidate_root, path)
@@ -287,7 +307,7 @@ def prepare_dream_payload(cwd: str, mode: str = "light") -> dict[str, Any]:
             "snapshot": snapshot,
             "current_consolidation_hash": current_consolidation_hash,
             "contradictions": previous_contradictions,
-            "warnings": previous_warnings,
+            "warnings": list(previous_warnings) + early_maps["warnings"],
         }
 
     # Build consolidation prompt
@@ -332,6 +352,7 @@ def prepare_dream_payload(cwd: str, mode: str = "light") -> dict[str, Any]:
         "current_consolidation_hash": current_consolidation_hash,
         "consolidation_prompt": prompt,
         "sections_data": sections_data,
+        "warnings": early_maps["warnings"],
     }
 
 

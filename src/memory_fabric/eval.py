@@ -13,6 +13,8 @@ from memory_fabric.frontmatter import FrontmatterError, parse_frontmatter
 from memory_fabric.paths import local_memory_dir, project_root
 from memory_fabric.security import redact_secrets
 from memory_fabric.storage import read_combined_context
+from memory_fabric.storage._shared import STEERING_SECTIONS
+from memory_fabric.storage.maps import category_fingerprint
 from memory_fabric.templates import LOCAL_GITIGNORE, SECTION_TEMPLATES, now_iso
 
 
@@ -133,6 +135,19 @@ def evaluate_memory_quality(cwd: str, root: Path | None = None) -> EvalCategory:
 
         body = str(info["body"]).strip()
         metadata = info["metadata"]
+        if metadata.get("generated"):
+            # Generated maps are views: their content quality follows the store,
+            # and freshness is scored by the section_coverage category instead.
+            checks.append(
+                _check(
+                    f"{required}_generated",
+                    "pass",
+                    "info",
+                    f"{required}.md is a generated map over memory-store/{required}/.",
+                    "Write facts with write_memory_store_tool and run Dreaming to refresh it.",
+                )
+            )
+            continue
         template_body = str(SECTION_TEMPLATES.get(required, {}).get("body", "")).strip()
         if _is_placeholder_body(required, body, template_body):
             checks.append(
@@ -348,26 +363,145 @@ def _memory_eval_for_root(cwd: str, root: Path) -> EvalResult:
 def _evaluate_section_coverage(
     memory_dir: Path, sections: dict[str, dict[str, Any]]
 ) -> EvalCategory:
+    """Store-first coverage: granular memories exist, root maps are generated and fresh.
+
+    Replaces the legacy flat-file presence scoring: `memory-store/` is the source
+    of truth, root maps are generated views over it, and a stale generated map is
+    a failing check (the fingerprint no longer matches the store category).
+    """
     checks: list[EvalCheck] = []
-    for section in REQUIRED_SECTIONS:
-        if section in sections:
+    store_root = memory_dir / "memory-store"
+    store_entries = (
+        [p for p in store_root.rglob("*.md") if p.is_file() and p.name != "index.md"]
+        if store_root.exists()
+        else []
+    )
+
+    if not store_entries:
+        checks.append(
+            _check(
+                "memory_store_empty",
+                "fail",
+                "high",
+                "memory-store/ holds no granular memories.",
+                "Write facts with write_memory_store_tool — the store is the "
+                "source of truth in the store-first model.",
+            )
+        )
+    else:
+        checks.append(
+            _check(
+                "memory_store_present",
+                "pass",
+                "info",
+                f"memory-store/ holds {len(store_entries)} granular memories.",
+                "Keep writing one fact per file with write_memory_store_tool.",
+            )
+        )
+        loose = [p for p in store_entries if p.parent == store_root]
+        if loose:
             checks.append(
                 _check(
-                    f"{section}_present",
+                    "store_uncategorized",
+                    "warn",
+                    "low",
+                    f"{len(loose)} store file(s) sit at the store root instead of a category subdirectory.",
+                    "Use categorized store paths like `architecture/<topic>` so maps can be generated per category.",
+                )
+            )
+
+        categories = sorted(
+            {
+                p.relative_to(store_root).parts[0]
+                for p in store_entries
+                if len(p.relative_to(store_root).parts) > 1
+            }
+        )
+        for category in categories:
+            if category in STEERING_SECTIONS:
+                continue
+            map_path = memory_dir / f"{category}.md"
+            if not map_path.exists():
+                checks.append(
+                    _check(
+                        f"{category}_map_missing",
+                        "warn",
+                        "medium",
+                        f"No generated map for memory-store/{category}/.",
+                        "Run Dreaming to generate root maps from the store.",
+                        "ai-memory dream --apply",
+                    )
+                )
+                continue
+            try:
+                metadata, _body = parse_frontmatter(map_path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, FrontmatterError) as exc:
+                checks.append(
+                    _check(
+                        f"{category}_map_unreadable",
+                        "fail",
+                        "high",
+                        f"{category}.md cannot be parsed: {exc}",
+                        "Fix the file so it is valid UTF-8 Markdown with frontmatter.",
+                    )
+                )
+                continue
+            if not metadata.get("generated"):
+                checks.append(
+                    _check(
+                        f"{category}_map_handwritten",
+                        "warn",
+                        "medium",
+                        f"{category}.md is a legacy hand-written map; the store-first model expects generated maps.",
+                        "Run Dreaming: hand-written content is folded into the store for review and the map is regenerated.",
+                        "ai-memory dream --apply",
+                    )
+                )
+                continue
+            if str(metadata.get("store_fingerprint") or "") != category_fingerprint(
+                store_root, category
+            ):
+                checks.append(
+                    _check(
+                        f"{category}_map_stale",
+                        "fail",
+                        "medium",
+                        f"Generated map {category}.md is stale: memory-store/{category}/ changed after it was generated.",
+                        "Run Dreaming to regenerate the map from the store.",
+                        "ai-memory dream --apply",
+                    )
+                )
+            else:
+                checks.append(
+                    _check(
+                        f"{category}_map_fresh",
+                        "pass",
+                        "info",
+                        f"{category}.md is a fresh generated view of memory-store/{category}/.",
+                        "Nothing to do.",
+                    )
+                )
+
+    for steering in sorted(STEERING_SECTIONS):
+        if (memory_dir / f"{steering}.md").exists():
+            checks.append(
+                _check(
+                    f"{steering}_present",
                     "pass",
                     "info",
-                    f"{section}.md exists.",
-                    "Keep this section current.",
+                    f"Steering section {steering}.md exists (always loaded into context).",
+                    "Keep it short and universally applicable.",
                 )
             )
         else:
             checks.append(
                 _check(
-                    f"{section}_missing",
-                    "fail",
-                    "high",
-                    f"{section}.md is missing.",
-                    f"Create {memory_dir / (section + '.md')} or run ai-memory init.",
+                    f"{steering}_missing",
+                    "warn",
+                    "low",
+                    f"Steering section {steering}.md is missing.",
+                    "Create it with ai-memory init, or with write_local_memory_tool "
+                    f"if the project needs {steering} directives.",
                 )
             )
     return _category("section_coverage", MEMORY_WEIGHTS["section_coverage"], checks)

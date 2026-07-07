@@ -172,6 +172,14 @@ class DreamConsolidation(TypedDict):
     files_touched: list[str]
 
 
+class MapsRegenResult(TypedDict):
+    """Result of regenerating root map sections from the memory-store tree."""
+
+    maps_written: list[str]
+    legacy_folded: list[str]
+    warnings: list[str]
+
+
 class DreamRewriteTask(TypedDict):
     section: str
     reason: str

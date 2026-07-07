@@ -14,18 +14,25 @@ import X` without knowing which submodule actually implements it:
 - `patch`: dry-run patch preview
 - `consolidation`: Dreaming's candidate-store mechanics
 - `dream`: Dreaming's public entry points and orchestration
+- `maps`: generated root maps rebuilt from memory-store/ subtrees (store-first)
 """
 
 from memory_fabric.llm import call_llm as call_llm
 from memory_fabric.storage._shared import (
+    STEERING_SECTIONS as STEERING_SECTIONS,
     _get_section_key as _get_section_key,
     _is_ignored_local_memory_path as _is_ignored_local_memory_path,
+    _is_steering_file as _is_steering_file,
     _is_store_path as _is_store_path,
     _iter_markdown_files as _iter_markdown_files,
     _path_to_store_path as _path_to_store_path,
     _read_memory_path as _read_memory_path,
     _validate_store_path as _validate_store_path,
     estimate_tokens as estimate_tokens,
+)
+from memory_fabric.storage.maps import (
+    category_fingerprint as category_fingerprint,
+    regenerate_maps as regenerate_maps,
 )
 from memory_fabric.storage.lifecycle import (
     doctor as doctor,

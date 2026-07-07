@@ -15,6 +15,7 @@ from memory_fabric.paths import global_memory_dir, local_memory_dir
 from memory_fabric.storage._shared import (
     PRIORITY_ORDER,
     _is_ignored_local_memory_path,
+    _is_steering_file,
     _is_store_path,
     _iter_markdown_files,
     _path_to_store_path,
@@ -162,6 +163,20 @@ def read_combined_context(
         except Exception as exc:
             warnings.append(f"Failed to read memory_prompt.txt: {exc}")
 
+    # Steering sections (framework-rules, ubiquitous-language, or any section
+    # marked `role: steering`) are always-loaded directives: they steer the agent
+    # in every session, so they never compete with memories for the token budget.
+    for path in _steering_section_files(memory_dir):
+        section_name, metadata, body, read_warning = _read_memory_path(path)
+        if read_warning:
+            warnings.append(read_warning)
+            continue
+        full_text = dump_frontmatter(metadata, body)
+        key = f"local/{section_name}"
+        fragments.append(_format_fragment(key, full_text))
+        included.append(key)
+        remaining -= estimate_tokens(full_text)
+
     # Read all sections first so we can score and sort them if there's a query
     sections_data: list[dict[str, Any]] = []
     for path in _ordered_context_files(cwd):
@@ -223,18 +238,35 @@ def read_combined_context(
     }
 
 
+def _steering_section_files(memory_dir: Path) -> list[Path]:
+    """Root section files marked as steering directives (always loaded in full)."""
+    if not memory_dir.exists():
+        return []
+    return [
+        path
+        for path in sorted(memory_dir.glob("*.md"))
+        if not _is_ignored_local_memory_path(memory_dir, path) and _is_steering_file(path)
+    ]
+
+
 def _ordered_context_files(cwd: str) -> list[Path]:
+    """Budget-competing memory files, ordered strictly by priority.
+
+    Store-first model: local map files and memory-store files are interleaved in
+    one priority-sorted sequence — no flat-before-store bias. Steering sections
+    are excluded here because `read_combined_context` always loads them in full.
+    """
     memory_dir = local_memory_dir(cwd)
     local_files = [
         path
         for path in _iter_markdown_files(memory_dir)
         if not _is_ignored_local_memory_path(memory_dir, path)
         and not _is_store_path(memory_dir, path)
+        and not _is_steering_file(path)
     ]
     global_files = [
         path for path in _iter_markdown_files(global_memory_dir()) if path.name != "directives.md"
     ]
-    # Include memory-store files
     store_root = memory_dir / "memory-store"
     store_files = (
         [p for p in _iter_markdown_files(store_root) if p.name != "index.md"]
@@ -242,29 +274,19 @@ def _ordered_context_files(cwd: str) -> list[Path]:
         else []
     )
 
-    def local_sort_key(path: Path) -> tuple[int, int, str]:
+    def sort_key(path: Path) -> tuple[int, int, str, str]:
         metadata, _body, _warning = _safe_parse_for_sort(path)
         priority = str(metadata.get("priority") or "medium")
-        index_rank = 0 if path.name == "index.md" else 1
-        return (PRIORITY_ORDER.get(priority, 1), index_rank, path.name)
+        index_rank = 0 if path == memory_dir / "index.md" else 1
+        return (PRIORITY_ORDER.get(priority, 1), index_rank, path.name, str(path))
 
-    def store_sort_key(path: Path) -> tuple[int, str]:
-        metadata, _body, _warning = _safe_parse_for_sort(path)
-        priority = str(metadata.get("priority") or "medium")
-        return (PRIORITY_ORDER.get(priority, 1), str(path))
+    # `low` is rank 2 in PRIORITY_ORDER; the previous `>= 3` comparison silently
+    # dropped low-priority files from the context entirely.
+    budgeted = local_files + store_files
+    high_and_medium = [p for p in budgeted if sort_key(p)[0] in {0, 1}]
+    low = [p for p in budgeted if sort_key(p)[0] >= 2]
 
-    high_and_medium = [path for path in local_files if local_sort_key(path)[0] in {0, 1}]
-    low = [path for path in local_files if local_sort_key(path)[0] >= 3]
-    store_high_medium = [p for p in store_files if store_sort_key(p)[0] in {0, 1}]
-    store_low = [p for p in store_files if store_sort_key(p)[0] >= 3]
-
-    return (
-        sorted(high_and_medium, key=local_sort_key)
-        + sorted(store_high_medium, key=store_sort_key)
-        + sorted(global_files)
-        + sorted(low, key=local_sort_key)
-        + sorted(store_low, key=store_sort_key)
-    )
+    return sorted(high_and_medium, key=sort_key) + sorted(global_files) + sorted(low, key=sort_key)
 
 
 def _section_key(path: Path, section: str) -> str:

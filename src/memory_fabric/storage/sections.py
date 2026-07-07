@@ -9,9 +9,20 @@ from memory_fabric.frontmatter import dump_frontmatter, parse_frontmatter
 from memory_fabric.locking import locked_file
 from memory_fabric.paths import local_memory_dir
 from memory_fabric.security import redact_secrets
-from memory_fabric.storage._shared import _jaccard_similar, _section_path, estimate_tokens
+from memory_fabric.storage._shared import (
+    STEERING_SECTIONS,
+    _jaccard_similar,
+    _section_path,
+    estimate_tokens,
+)
 from memory_fabric.storage.lifecycle import initialize_memory_fabric
 from memory_fabric.templates import build_empty_section, now_iso
+
+_STORE_FIRST_DEPRECATION = (
+    "DEPRECATED (store-first model): root map sections are generated from memory-store/ "
+    "and hand-written flat sections are being phased out. Write facts with "
+    "write_memory_store_tool instead; write_local_memory will be removed in v1.0."
+)
 
 
 def read_section(cwd: str, section: str, max_tokens: int = 8000) -> MemorySection:
@@ -134,6 +145,18 @@ def write_local_memory(
 
         if changed:
             path.write_text(dump_frontmatter(metadata, new_body), encoding="utf-8")
+
+    # Steering sections stay hand-curated; every other flat write is deprecated
+    # in favor of the semantic store (maps are generated views over it).
+    role = str(metadata.get("role") or "").strip().lower()
+    is_steering = role == "steering" or (not role and section in STEERING_SECTIONS)
+    if not is_steering:
+        warnings.append(_STORE_FIRST_DEPRECATION)
+    if metadata.get("generated"):
+        warnings.append(
+            f"`{section}.md` is a generated map: the next Dreaming run folds this hand edit "
+            f"into memory-store/{section}/map-notes-pending-review.md and rebuilds the map."
+        )
 
     return {
         "changed": changed,

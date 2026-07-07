@@ -18,6 +18,7 @@ from memory_fabric.security import redact_secrets
 from memory_fabric.storage._shared import (
     SECTION_PATTERN,
     _get_section_key,
+    _is_generated_file,
     _is_ignored_local_memory_path,
     _iter_markdown_files,
     _validate_store_path,
@@ -28,6 +29,7 @@ from memory_fabric.storage.consolidation import (
     _diff_memory_roots,
     _regenerate_index_root,
 )
+from memory_fabric.storage.maps import regenerate_maps
 from memory_fabric.templates import build_empty_section, now_iso
 from memory_fabric.llm import call_llm
 
@@ -237,10 +239,13 @@ async def _process_and_finalize_candidate(
     for w in dream_warnings:
         warnings.append(f"Consolidation warning: {w}")
 
-    # Recalculate hash of consolidated candidates
+    # Recalculate hash of consolidated candidates (generated maps excluded — they
+    # are derived from the store, which is already part of the hash input)
     final_sections_data = {}
     for path in _iter_markdown_files(candidate_root):
         if path.name == "index.md" or _is_ignored_local_memory_path(candidate_root, path):
+            continue
+        if _is_generated_file(path):
             continue
         metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
         key = _get_section_key(candidate_root, path)
@@ -266,6 +271,8 @@ async def _process_and_finalize_candidate(
         for path in _iter_markdown_files(candidate_root):
             if path.name == "index.md" or _is_ignored_local_memory_path(candidate_root, path):
                 continue
+            if _is_generated_file(path):
+                continue  # maps set their own summary at generation time
             try:
                 metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
                 key = _get_section_key(candidate_root, path)
@@ -310,10 +317,13 @@ async def _process_and_finalize_candidate(
             except Exception as exc:
                 warnings.append(f"Failed to generate summary for `{path.name}`: {exc}")
 
-    # Stale section detection in candidate files
+    # Stale section detection in candidate files (generated maps regenerate on
+    # every Dream, so a staleness marker would be meaningless on them)
     now_dt = datetime.now(timezone.utc)
     for path in _iter_markdown_files(candidate_root):
         if path.name == "index.md" or _is_ignored_local_memory_path(candidate_root, path):
+            continue
+        if _is_generated_file(path):
             continue
         try:
             metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
@@ -332,6 +342,12 @@ async def _process_and_finalize_candidate(
                         )
         except Exception:
             pass
+
+    # Store-first model: rebuild root maps as generated views over memory-store/.
+    # Runs in the candidate root (changes flow through the normal diff/apply) and
+    # before secret scanning so folded hand-written content is scanned too.
+    maps_result = regenerate_maps(candidate_root)
+    warnings.extend(maps_result["warnings"])
 
     # Secret scanning on inputs and candidate files
     redactions = 0

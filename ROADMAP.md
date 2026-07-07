@@ -112,7 +112,88 @@ exact diff; `--uninstall` flag for clean removal.
 Exit criteria: a stranger on any OS gets from "found the repo" to "agent reads/writes
 memory in their tool" in under 2 minutes, for all clients above.
 
-## 4. Phase 2 — Retrieval quality (be the best, not just the most compatible)
+## 4. Phase 2 — Store-first memory model (maps become views, not sources)
+
+Decided 2026-07-06: hand-written long-form memory in flat root files does not survive
+contact with real sessions. `memory-store/` becomes the only hand-written source of
+truth for project facts; the flat root sections become **generated executive maps** —
+compiled by Dreaming from their `memory-store/<category>/` subtree, a table of contents
+with summaries rather than a place agents dump prose.
+
+| File | Today | After |
+|---|---|---|
+| `architecture.md`, `decisions.md`, `debt.md`, `schemas.md` | writable long-form sections | generated maps (`generated: true`), rebuilt by Dreaming |
+| `framework-rules.md`, `ubiquitous-language.md` | budget-competing sections | always-loaded local directives (steering, not memory) |
+| `index.md` | hand-maintained | generated discovery index (kept) |
+| `memory-store/**` | secondary granular store | the single write target for facts |
+
+Why — all four problems observed in this repo's own dogfood `.ai-memory/`:
+
+- **Rot.** Our `architecture.md` still described `storage.py` as a single module a month
+  after the Milestone B split, and its layout diagram predates `memory-store/`. Views
+  generated from the store cannot drift.
+- **Budget starvation.** The seven flat sections total ~16 KB ≈ ~4k tokens (chars/4) —
+  the entire default context budget — and context assembly orders local flat files ahead
+  of store files at equal priority, so stale maps crowd out relevant granular memories.
+- **All-or-nothing packing.** Assembly never slices a file mid-document; a long flat file
+  either consumes a huge slice of the budget or collapses to a one-line summary. Small
+  store files pack tightly under BM25 + priority ranking.
+- **Phase 3 needs granularity.** Temporal facts, link graph, lifecycle, and contradiction
+  detection are all per-fact frontmatter designs; long multi-topic files fight them.
+
+The agent rules already steer fact writes to `write_memory_store_tool`, and the starter
+templates already call the flat sections "executive maps" — this phase finishes that
+thought and removes the write path that lets maps rot.
+
+### 4.1 v0.6 — store-first by default (non-breaking)
+
+**Implemented 2026-07-06** (`storage/maps.py` + hooks; 151 tests green). Hand edits are
+folded into `memory-store/<category>/map-notes-pending-review.md` — a real store entry,
+reviewable and git-tracked — at the start of every Dream, so folded content is
+consolidated in that same run. Bonus fix: low-priority files were silently dropped from
+context assembly (`>= 3` filter against the 0–2 priority scale).
+
+- [x] Dreaming regenerates each root map from its `memory-store/<category>/` subtree;
+      maps gain `generated: true` frontmatter. Regeneration never silently destroys
+      hand edits — they are folded into the store as pending-review entries.
+- [x] Deprecation warning on `write_local_memory_tool`; docs + agent rule files direct
+      all fact writes to `write_memory_store_tool`.
+- [x] Steering sections (`framework-rules`, `ubiquitous-language`, or any section with
+      `role: steering`) are always-loaded local directives, never evicted by the budget.
+- [x] Context assembly interleaves store and flat files strictly by priority (drop the
+      flat-before-store bias in `_ordered_context_files`); generated maps get a compact
+      token cap (`MEMORY_FABRIC_MAP_TOKEN_CAP`, default 600).
+- [x] `ai-memory eval`: `section_coverage` rescored to store-structure coverage +
+      generated-map freshness via `store_fingerprint` (a stale generated map fails).
+
+### 4.2 v0.7 — migration tooling
+
+- [ ] `ai-memory migrate`: split legacy hand-written sections into store entries
+      (LLM-assisted when configured; heading-based heuristic fallback). Snapshot first,
+      `--dry-run` prints the full plan, rollback restores the snapshot.
+- [ ] `ai-memory init` scaffolds store categories + generated maps, not writable sections.
+- [ ] README "Project Memory Layout" + starter templates rewritten; migration guide in
+      CHANGELOG.
+- [ ] Run the migration on this repo's own `.ai-memory/` and record before/after eval
+      scores as the reference case.
+
+### 4.3 v1.0 — flat write path removed
+
+- [ ] `write_local_memory_tool` removed from the MCP surface (or narrowed to the
+      directive tier only); `read_section_tool` stays — maps are still readable files.
+- [ ] `ai-memory doctor` flags legacy hand-written root sections and points to `migrate`.
+- [ ] `.ai-memory/` root contains only generated files (maps, `index.md`,
+      `consolidated_memory.md` cache), directives, and the store/journal/snapshot dirs.
+
+Invariants: never delete user content (migration copies + snapshots before rewriting);
+generated maps must produce stable, PR-reviewable diffs; maps remain the human entry
+point — generation is what keeps them trustworthy, not what demotes them.
+
+Exit criteria: on a fresh `init` and on this repo's migrated store, every fact lives in
+`memory-store/`, every root map carries `generated: true`, and `ai-memory eval` scores
+at or above the pre-migration baseline.
+
+## 5. Phase 3 — Retrieval quality (be the best, not just the most compatible)
 
 Keep the zero-dependency, no-vector-DB default. Add optional layers that degrade gracefully
 — the same pattern already used for `rg` and LLM providers.
@@ -132,7 +213,7 @@ Keep the zero-dependency, no-vector-DB default. Add optional layers that degrade
 - [ ] **Latency budget.** `read_combined_context` p95 under 150 ms on a 500-file store;
       add a perf test to CI.
 
-## 5. Phase 3 — Prove it (benchmarks nobody can argue with)
+## 6. Phase 4 — Prove it (benchmarks nobody can argue with)
 
 Claims without numbers don't win "best in the world."
 
@@ -149,7 +230,7 @@ Claims without numbers don't win "best in the world."
 - [ ] **Ship `ai-memory bench`** so any user can run the suite against their own store.
 - [ ] Results table in README with reproduction commands.
 
-## 6. Phase 4 — Ecosystem & growth
+## 7. Phase 5 — Ecosystem & growth
 
 - [ ] **Docs site** (mkdocs-material on GitHub Pages): quickstart per client, concepts
       (Tiers, Dreaming, store), MCP tool reference, benchmark methodology.
@@ -162,7 +243,7 @@ Claims without numbers don't win "best in the world."
 - [ ] **Telemetry: none.** Make "no telemetry, no account, no cloud" a stated guarantee —
       it is a differentiator in this category.
 
-## 7. Success metrics
+## 8. Success metrics
 
 | Metric | 3 months | 12 months |
 |---|---|---|
@@ -172,11 +253,14 @@ Claims without numbers don't win "best in the world."
 | Benchmark | published LongMemEval score | top-3 on own coding-memory benchmark, cited by others |
 | Clients verified in CI | 4 | 9+ |
 
-## 8. Suggested execution order
+## 9. Suggested execution order
 
 1. **Phase 1.1 PyPI publish** — small effort, unblocks every install story. Do first.
 2. **Phase 0 CI + module split** — in parallel; must be green before launch.
 3. **Phase 1.2–1.5 install command + registry + badges + MCPB** — the "everywhere" ask.
-4. **Launch v1.0** (Phase 4 demo + announcements) on the strength of distribution.
-5. **Phase 2 retrieval quality** — iterate post-launch with real users.
-6. **Phase 3 benchmarks** — publish numbers; the coding-memory benchmark is the moat.
+4. **Phase 2 store-first memory model (v0.6–v0.7)** — the breaking model change and its
+   migration tooling must land **before** v1.0's stability promise, not after it.
+5. **Launch v1.0** (Phase 5 demo + announcements) on the strength of distribution and
+   the clean store-first model.
+6. **Phase 3 retrieval quality** — iterate post-launch with real users.
+7. **Phase 4 benchmarks** — publish numbers; the coding-memory benchmark is the moat.

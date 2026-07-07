@@ -211,7 +211,7 @@ entry, leaving everything else in the file untouched.
 | `read_combined_context_tool` | Load Tier 0 directives + prioritized memory within token budget |
 | `read_section_tool` | Read a single memory section by name |
 | `keyword_search_tool` | Search memory with ripgrep or Python fallback |
-| `write_local_memory_tool` | Append or replace a section with secret scanning |
+| `write_local_memory_tool` | Update steering sections (`framework-rules`, `ubiquitous-language`). **Deprecated for facts** — root maps are generated from `memory-store/`; use `write_memory_store_tool` |
 | `propose_memory_patch_tool` | Preview proposed memory changes without applying |
 | `dream_tool` | Run memory maintenance / consolidation (--mode light|deep) |
 | `prepare_dream_payload_tool` | Prepare candidate snapshot and return consolidation prompt for client-driven dreaming |

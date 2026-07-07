@@ -159,15 +159,21 @@ if FastMCP is not None:
     ) -> WriteResult:
         """Write or append content to a flat memory section file.
 
-        Flat sections live directly inside `.ai-memory/` (e.g. `architecture`,
-        `decisions`, `debt`).  Duplicate lines are automatically filtered out
-        when appending.  Secrets detected in ``content`` are redacted before
-        writing.  Use ``write_memory_store_tool`` to write to a semantic
-        store path instead.
+        **Deprecated for facts (store-first model):** root map sections
+        (`index`, `architecture`, `decisions`, `debt`, `schemas`) are generated
+        views over `memory-store/` and are rebuilt by Dreaming — hand edits get
+        folded back into the store for review.  Write facts with
+        ``write_memory_store_tool`` instead; this write path is planned for
+        removal in v1.0.  The tool remains the right way to update the
+        hand-curated steering sections (``framework-rules``,
+        ``ubiquitous-language``), which are always loaded into context.
+
+        Duplicate lines are automatically filtered out when appending.
+        Secrets detected in ``content`` are redacted before writing.
 
         Args:
             cwd:     Absolute path to the project root.
-            section: Target section name without `.md` (e.g. ``"decisions"``).
+            section: Target section name without `.md` (e.g. ``"framework-rules"``).
             content: Markdown content to write.
             mode:    ``"append"`` (default) adds content after existing text;
                      ``"replace"`` overwrites the section body entirely.

@@ -18,7 +18,9 @@ from memory_fabric.paths import local_memory_dir
 from memory_fabric.storage._shared import (
     PRIORITY_ORDER,
     _get_section_key,
+    _is_generated_file,
     _is_ignored_local_memory_path,
+    _is_steering_file,
     _is_store_path,
     _iter_markdown_files,
     _path_to_store_path,
@@ -87,36 +89,45 @@ def _compile_consolidated_memory(memory_dir: Path) -> str:
         if path.name != "consolidated_memory.md"
         and not _is_ignored_local_memory_path(memory_dir, path)
         and not _is_store_path(memory_dir, path)
+        and not _is_steering_file(path)
     ]
+    steering_files = [
+        path
+        for path in sorted(memory_dir.glob("*.md"))
+        if not _is_ignored_local_memory_path(memory_dir, path) and _is_steering_file(path)
+    ]
+    store_root = memory_dir / "memory-store"
+    store_files = (
+        [p for p in _iter_markdown_files(store_root) if p.name != "index.md"]
+        if store_root.exists()
+        else []
+    )
 
-    def local_sort_key(path: Path) -> tuple[int, int, str]:
+    def sort_key(path: Path) -> tuple[int, int, str, str]:
         metadata, _body, _warning = _safe_parse_for_sort(path)
         priority = str(metadata.get("priority") or "medium")
-        index_rank = 0 if path.name == "index.md" else 1
-        return (PRIORITY_ORDER.get(priority, 1), index_rank, path.name)
+        index_rank = 0 if path == memory_dir / "index.md" else 1
+        return (PRIORITY_ORDER.get(priority, 1), index_rank, path.name, str(path))
 
-    ordered_files = sorted(local_files, key=local_sort_key)
-
-    for path in ordered_files:
+    # Same order as fresh context assembly: steering first (always loaded),
+    # then local maps and store files interleaved strictly by priority.
+    for path in steering_files:
         section_name, metadata, body, read_warning = _read_memory_path(path)
         if read_warning:
             continue
         full_text = dump_frontmatter(metadata, body)
-        section_key = f"local/{section_name}"
-        fragments.append(f"<!-- memory-fabric:{section_key} -->\n{full_text.strip()}")
+        fragments.append(f"<!-- memory-fabric:local/{section_name} -->\n{full_text.strip()}")
 
-    # Include memory-store files
-    store_root = memory_dir / "memory-store"
-    if store_root.exists():
-        store_files = sorted(p for p in _iter_markdown_files(store_root) if p.name != "index.md")
-        for path in store_files:
-            section_name, metadata, body, read_warning = _read_memory_path(path)
-            if read_warning:
-                continue
-            full_text = dump_frontmatter(metadata, body)
-            sp = _path_to_store_path(store_root, path)
-            section_key = f"store/{sp}"
-            fragments.append(f"<!-- memory-fabric:{section_key} -->\n{full_text.strip()}")
+    for path in sorted(local_files + store_files, key=sort_key):
+        section_name, metadata, body, read_warning = _read_memory_path(path)
+        if read_warning:
+            continue
+        full_text = dump_frontmatter(metadata, body)
+        if _is_store_path(memory_dir, path):
+            section_key = f"store/{_path_to_store_path(store_root, path)}"
+        else:
+            section_key = f"local/{section_name}"
+        fragments.append(f"<!-- memory-fabric:{section_key} -->\n{full_text.strip()}")
 
     return "\n\n".join(fragments).strip() + "\n"
 
@@ -261,6 +272,8 @@ def _consolidate_candidate_memory(candidate_root: Path) -> DreamConsolidation:
     for path in sorted(
         path for path in _iter_markdown_files(candidate_root) if path.name != "index.md"
     ):
+        if _is_generated_file(path):
+            continue  # derived views are rebuilt from the store, not deduped
         metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
         original_lines = body.splitlines()
         deduped_lines: list[str] = []
@@ -378,6 +391,8 @@ def _build_rewrite_tasks(candidate_root: Path, max_rewrite_tasks: int) -> list[D
     ):
         if _is_ignored_local_memory_path(candidate_root, path):
             continue
+        if _is_generated_file(path):
+            continue  # maps are regenerated, never rewritten by agents
         metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
         section = _get_section_key(candidate_root, path)
         lines = [line.strip() for line in body.splitlines() if line.strip()]
