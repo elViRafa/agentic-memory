@@ -4,7 +4,7 @@
 > one command in VS Code, Claude (Code + Desktop), Codex, Antigravity, Cursor, Windsurf,
 > Gemini CLI, Cline, and anything MCP-compatible.
 
-Last updated: 2026-07-07 · Current version: 0.6.0 ([live on PyPI](https://pypi.org/project/memory-fabric/)) · Tests: 190 passing
+Last updated: 2026-07-07 · Current version: 0.7.0 ([live on PyPI](https://pypi.org/project/memory-fabric/)) · Tests: 190 passing
 
 ---
 
