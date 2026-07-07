@@ -4,7 +4,7 @@
 > one command in VS Code, Claude (Code + Desktop), Codex, Antigravity, Cursor, Windsurf,
 > Gemini CLI, Cline, and anything MCP-compatible.
 
-Last updated: 2026-07-06 · Current version: 0.5.0 ([live on PyPI](https://pypi.org/project/memory-fabric/)) · Tests: 140 passing
+Last updated: 2026-07-07 · Current version: 0.6.0 ([live on PyPI](https://pypi.org/project/memory-fabric/)) · Tests: 151 passing
 
 ---
 
@@ -138,7 +138,7 @@ Why — all four problems observed in this repo's own dogfood `.ai-memory/`:
 - **All-or-nothing packing.** Assembly never slices a file mid-document; a long flat file
   either consumes a huge slice of the budget or collapses to a one-line summary. Small
   store files pack tightly under BM25 + priority ranking.
-- **Phase 3 needs granularity.** Temporal facts, link graph, lifecycle, and contradiction
+- **Phase 4 needs granularity.** Temporal facts, link graph, lifecycle, and contradiction
   detection are all per-fact frontmatter designs; long multi-topic files fight them.
 
 The agent rules already steer fact writes to `write_memory_store_tool`, and the starter
@@ -193,7 +193,75 @@ Exit criteria: on a fresh `init` and on this repo's migrated store, every fact l
 `memory-store/`, every root map carries `generated: true`, and `ai-memory eval` scores
 at or above the pre-migration baseline.
 
-## 5. Phase 3 — Retrieval quality (be the best, not just the most compatible)
+## 5. Phase 3 — Capture reliability (memory that writes itself)
+
+Instruction-only capture fails silently. The rules files get high compliance on the
+session-start read, low compliance on mid-session writes, and medium compliance on the
+end-of-session journal; context compression erodes the rules in exactly the long
+sessions that produce the most knowledge; clients that never load rules files (Claude
+Desktop, Open WebUI) run on tool docstrings alone. Today's only automation — the
+post-commit Dream — consolidates what exists but captures nothing new: if the agent
+skipped every write, the hook consolidates emptiness. Net effect: the most valuable
+sessions are the most likely to lose their knowledge.
+
+Two complementary mechanisms close the gap. Both are opt-in, per the project's
+opt-in-automation rule (see `decisions.md` engineering philosophy).
+
+### 5.1 Passive capture via git hook (any client, zero agent cooperation)
+
+**Implemented 2026-07-07** (`storage/capture.py`, `finalize.build_consolidation_prompt`,
+diff-budget rewrite; 15 new tests). The post-commit hook now runs `ai-memory capture`
+before `dream`, so every commit is recorded with no agent cooperation.
+
+- [x] **Extraction prompt.** The consolidation prompt (now a single shared builder,
+      deduplicated from two copies) instructs the LLM to propose **new**
+      `store/<category>/<slug>` entries from the diff/transcripts, not just edit existing
+      sections.
+- [x] **Provenance rails.** Passive captures live at `memory-store/episodic/commits/<date>`
+      with `source: passive-capture` + `review_status: pending` frontmatter and the
+      commit hash in the body; idempotent per commit hash. Kept separate from
+      agent-written session journals so provenance stays clean.
+- [x] **No-LLM fallback.** `capture_commit` is pure Python — records message, files, and
+      diffstat with zero provider, giving the next LLM-assisted Dream raw material.
+- [x] **Smarter diff budget.** `_summarize_diff` truncates per file (1.5 KB each, 6 KB
+      total) and elides lock/vendored/generated files instead of one 4 KB global cut.
+
+### 5.2 Enforcement via client hooks (instructions become mechanisms)
+
+Primitives shipped 2026-07-07; the client-side settings.json writer is the remaining work.
+
+- [x] **Session marker plumbing.** `write_session_journal` touches
+      `.ai-memory/private/last_journal_at`; `ai-memory session-start` writes
+      `session_started_at`. Pure Python, no transcript parsing.
+- [x] **Stop-hook primitive.** `ai-memory guard-journal` exits 2 (blocking) with a reason
+      when no journal was written since session start, exit 0 otherwise; fails open when
+      there is no session marker. This is the command a Stop hook calls.
+- [ ] **Claude Code settings.json writer.** `ai-memory install --client claude-code
+      --with-hooks` wires SessionStart (inject context), Stop (`guard-journal`), and
+      PreCompact (journal checkpoint) into the client's settings. **Needs the live
+      Claude Code hook schema verified against current docs + a real-session smoke test
+      before shipping** — deferred rather than guessed.
+- [ ] **SessionStart context injection** and **PreCompact checkpoint** wiring (depend on
+      the settings.json writer above).
+- [ ] **Client capability survey.** Cursor hooks (beta), Codex `notify`, Gemini CLI:
+      per-client enforcement matrix in the docs.
+
+### 5.3 Prove capture actually happens
+
+- [x] Local capture stats in `ai-memory status` (`capture` block): last journal, commit
+      captures, episodic files, memories total + last-7-days. Local only — the
+      no-telemetry guarantee stands.
+- [ ] Capture-rate metric in the coding-memory benchmark (Phase 5): % of scripted
+      sessions whose knowledge survives into the next session, instructions-only vs
+      hooks-enabled.
+
+Exit criteria: with hooks enabled, a fully non-compliant agent still produces (a) an
+episodic record per commit and (b) a session journal per session, and `ai-memory status`
+shows both. **(a) + the status surface are implemented and tested on `main`; (b) lands
+with the settings.json writer (next release).** Passive capture (5.1) has no dependency
+on the v1.0 gate.
+
+## 6. Phase 4 — Retrieval quality (be the best, not just the most compatible)
 
 Keep the zero-dependency, no-vector-DB default. Add optional layers that degrade gracefully
 — the same pattern already used for `rg` and LLM providers.
@@ -213,7 +281,7 @@ Keep the zero-dependency, no-vector-DB default. Add optional layers that degrade
 - [ ] **Latency budget.** `read_combined_context` p95 under 150 ms on a 500-file store;
       add a perf test to CI.
 
-## 6. Phase 4 — Prove it (benchmarks nobody can argue with)
+## 7. Phase 5 — Prove it (benchmarks nobody can argue with)
 
 Claims without numbers don't win "best in the world."
 
@@ -230,7 +298,7 @@ Claims without numbers don't win "best in the world."
 - [ ] **Ship `ai-memory bench`** so any user can run the suite against their own store.
 - [ ] Results table in README with reproduction commands.
 
-## 7. Phase 5 — Ecosystem & growth
+## 8. Phase 6 — Ecosystem & growth
 
 - [ ] **Docs site** (mkdocs-material on GitHub Pages): quickstart per client, concepts
       (Tiers, Dreaming, store), MCP tool reference, benchmark methodology.
@@ -243,7 +311,7 @@ Claims without numbers don't win "best in the world."
 - [ ] **Telemetry: none.** Make "no telemetry, no account, no cloud" a stated guarantee —
       it is a differentiator in this category.
 
-## 8. Success metrics
+## 9. Success metrics
 
 | Metric | 3 months | 12 months |
 |---|---|---|
@@ -252,15 +320,22 @@ Claims without numbers don't win "best in the world."
 | GitHub stars | 500 | 5k |
 | Benchmark | published LongMemEval score | top-3 on own coding-memory benchmark, cited by others |
 | Clients verified in CI | 4 | 9+ |
+| Capture rate (hooks on) | episodic record per commit, no agent cooperation | 100% of benchmark sessions journaled with a non-compliant agent |
 
-## 9. Suggested execution order
+## 10. Suggested execution order
 
 1. **Phase 1.1 PyPI publish** — small effort, unblocks every install story. Do first.
 2. **Phase 0 CI + module split** — in parallel; must be green before launch.
 3. **Phase 1.2–1.5 install command + registry + badges + MCPB** — the "everywhere" ask.
 4. **Phase 2 store-first memory model (v0.6–v0.7)** — the breaking model change and its
-   migration tooling must land **before** v1.0's stability promise, not after it.
-5. **Launch v1.0** (Phase 5 demo + announcements) on the strength of distribution and
+   migration tooling must land **before** v1.0's stability promise, not after it. (v0.6
+   shipped 2026-07-07.)
+5. **Phase 3.1 passive capture** — independent of the v1.0 gate and demos brilliantly
+   ("commit, and the project brain updates itself"); strong launch material.
+6. **Launch v1.0** (Phase 6 demo + announcements) on the strength of distribution and
    the clean store-first model.
-6. **Phase 3 retrieval quality** — iterate post-launch with real users.
-7. **Phase 4 benchmarks** — publish numbers; the coding-memory benchmark is the moat.
+7. **Phase 3.2–3.3 client-hook enforcement + capture stats** — post-launch, guided by
+   which clients real users actually run.
+8. **Phase 4 retrieval quality** — you can only rank what was captured; capture first.
+9. **Phase 5 benchmarks** — publish numbers; the coding-memory benchmark is the moat,
+   and it doubles as the proof for Phase 3's capture-rate claim.

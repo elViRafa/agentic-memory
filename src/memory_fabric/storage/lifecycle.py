@@ -118,17 +118,22 @@ def initialize_memory_fabric(
             hooks_dir = git_dir / "hooks"
             hooks_dir.mkdir(parents=True, exist_ok=True)
 
-            # Post-commit hook (Dreaming)
+            # Post-commit hook: passive capture (record the commit) then Dreaming
+            # (consolidate + extract). Capture runs first so the just-made commit
+            # is on disk as episodic memory before consolidation reads it.
             post_commit = hooks_dir / "post-commit"
+            capture_cmd = "ai-memory capture || true"
             hook_cmd = "ai-memory dream --mode light --apply || true"
             if post_commit.exists():
                 existing_content = post_commit.read_text(encoding="utf-8")
-                if hook_cmd not in existing_content:
+                additions = [cmd for cmd in (capture_cmd, hook_cmd) if cmd not in existing_content]
+                if additions:
                     separator = "\n" if existing_content.endswith("\n") else "\n\n"
                     new_content = (
                         existing_content
                         + separator
-                        + f"# Added by Memory Fabric installer\n{hook_cmd}\n"
+                        + "# Added by Memory Fabric installer\n"
+                        + "".join(f"{cmd}\n" for cmd in additions)
                     )
                     post_commit.write_text(new_content, encoding="utf-8")
                     files_created.append(str(post_commit))
@@ -136,7 +141,8 @@ def initialize_memory_fabric(
                 hook_content = (
                     "#!/bin/sh\n"
                     "# Memory Fabric post-commit hook\n"
-                    'echo "Running Memory Fabric Dreaming..."\n'
+                    'echo "Running Memory Fabric capture + Dreaming..."\n'
+                    f"{capture_cmd}\n"
                     f"{hook_cmd}\n"
                 )
                 post_commit.write_text(hook_content, encoding="utf-8")
@@ -273,6 +279,8 @@ def status(cwd: str) -> StatusResult:
             except Exception:
                 pass
 
+    from memory_fabric.storage.capture import capture_stats
+
     return {
         "cwd": str(project_root(cwd)),
         "memory_dir": str(memory_dir),
@@ -282,6 +290,7 @@ def status(cwd: str) -> StatusResult:
         "local_files": local_files,
         "memory_sizes": sizes,
         "version": __version__,
+        "capture": capture_stats(cwd),
     }
 
 

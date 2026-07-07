@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 from memory_fabric.contracts import EpisodicJournalResult
 from memory_fabric.security import redact_secrets
+from memory_fabric.storage.capture import mark_journal_written
 from memory_fabric.storage.store import write_memory_store
 
 
@@ -78,6 +79,10 @@ def write_session_journal(
         priority="low",
         mode="append",
     )
+
+    # Record the journal for the Stop-hook guard, so end-of-session enforcement
+    # can tell this session was journaled.
+    mark_journal_written(cwd)
 
     return {
         "changed": result["changed"],

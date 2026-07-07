@@ -6,7 +6,6 @@ transcripts, tool calls) and a candidate store, then hand off to
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +27,7 @@ from memory_fabric.storage.finalize import (
     _is_llm_ready,
     _parse_llm_json_response,
     _process_and_finalize_candidate,
+    build_consolidation_prompt,
 )
 from memory_fabric.storage.lifecycle import initialize_memory_fabric
 from memory_fabric.storage.maps import regenerate_maps
@@ -143,39 +143,14 @@ async def dream(
                     "warnings": previous_warnings,
                 }
             else:
-                # 2. Build consolidation prompt
-                prompt = (
-                    "You are an AI memory consolidation assistant. Below is the project memory index and section bodies.\n"
-                    "Review the sections to: (1) merge redundant facts or guidelines, (2) resolve overlapping points, "
-                    "(3) check for contradiction warnings between files, and (4) incorporate recent Git logs/transcripts if provided.\n"
-                    "Specifically, extract dates, specific IDs, and missing metadata from the recent transcripts or logs "
-                    "to enrich the relevant memory sections. If a memory file is outdated or stale, clean it up or propose removing "
-                    "redundancies.\n"
-                    "Note: sections with `local/` prefix are flat top-level memory files, and sections with `store/` prefix "
-                    "are semantic memory store files located in nested directories. Preserve the exact key prefixes in your response.\n\n"
-                )
-                if git_diff_text:
-                    prompt += f"Recent Git Diff/Logs:\n{git_diff_text}\n\n"
-                if session_text:
-                    prompt += f"Recent Session Transcripts:\n{session_text}\n\n"
-                if tool_calls_text:
-                    prompt += f"Recent Tool Calls:\n{tool_calls_text}\n\n"
-
-                prompt += (
-                    "Active Project Memory Sections:\n"
-                    + json.dumps(sections_data, indent=2)
-                    + "\n\n"
-                )
-                prompt += (
-                    "Output a JSON object ONLY, with no surrounding markdown or explanation, matching this schema:\n"
-                    "{\n"
-                    '  "consolidated_files": {\n'
-                    '    "section_name": "clean markdown body text",\n'
-                    "    ...\n"
-                    "  },\n"
-                    '  "contradictions": ["description of contradiction", ...],\n'
-                    '  "warnings": ["warning note", ...]\n'
-                    "}"
+                # 2. Build consolidation prompt (shared builder — also asks the
+                # LLM to extract new store entries from the diff/transcripts)
+                prompt = build_consolidation_prompt(
+                    sections_data,
+                    git_diff_text,
+                    session_text,
+                    tool_calls_text,
+                    include_summaries=False,
                 )
 
                 response_str = await call_llm(
@@ -310,39 +285,14 @@ def prepare_dream_payload(cwd: str, mode: str = "light") -> dict[str, Any]:
             "warnings": list(previous_warnings) + early_maps["warnings"],
         }
 
-    # Build consolidation prompt
-    prompt = (
-        "You are an AI memory consolidation assistant. Below is the project memory index and section bodies.\n"
-        "Review the sections to: (1) merge redundant facts or guidelines, (2) resolve overlapping points, "
-        "(3) check for contradiction warnings between files, and (4) incorporate recent Git logs/transcripts if provided.\n"
-        "Specifically, extract dates, specific IDs, and missing metadata from the recent transcripts or logs "
-        "to enrich the relevant memory sections. If a memory file is outdated or stale, clean it up or propose removing "
-        "redundancies.\n"
-        "Note: sections with `local/` prefix are flat top-level memory files, and sections with `store/` prefix "
-        "are semantic memory store files located in nested directories. Preserve the exact key prefixes in your response.\n\n"
-    )
-    if git_diff_text:
-        prompt += f"Recent Git Diff/Logs:\n{git_diff_text}\n\n"
-    if session_text:
-        prompt += f"Recent Session Transcripts:\n{session_text}\n\n"
-    if tool_calls_text:
-        prompt += f"Recent Tool Calls:\n{tool_calls_text}\n\n"
-
-    prompt += "Active Project Memory Sections:\n" + json.dumps(sections_data, indent=2) + "\n\n"
-    prompt += (
-        "Output a JSON object ONLY, with no surrounding markdown or explanation, matching this schema:\n"
-        "{\n"
-        '  "consolidated_files": {\n'
-        '    "section_name": "clean markdown body text",\n'
-        "    ...\n"
-        "  },\n"
-        '  "summaries": {\n'
-        '    "section_name": "concise 1-sentence summary (under 150 chars) mapping the section name to summary text",\n'
-        "    ...\n"
-        "  },\n"
-        '  "contradictions": ["description of contradiction", ...],\n'
-        '  "warnings": ["warning note", ...]\n'
-        "}"
+    # Build consolidation prompt (shared builder — the split-tool variant keeps
+    # the summaries block so client-driven Dreaming refreshes summaries too)
+    prompt = build_consolidation_prompt(
+        sections_data,
+        git_diff_text,
+        session_text,
+        tool_calls_text,
+        include_summaries=True,
     )
 
     return {

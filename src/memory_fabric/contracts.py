@@ -149,6 +149,7 @@ class StatusResult(TypedDict):
     local_files: list[str]
     memory_sizes: dict[str, dict[str, int]]
     version: str
+    capture: NotRequired[dict[str, Any]]
 
 
 class DreamResult(TypedDict):

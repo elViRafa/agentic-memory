@@ -15,6 +15,7 @@ import X` without knowing which submodule actually implements it:
 - `consolidation`: Dreaming's candidate-store mechanics
 - `dream`: Dreaming's public entry points and orchestration
 - `maps`: generated root maps rebuilt from memory-store/ subtrees (store-first)
+- `capture`: passive commit capture + session/journal enforcement primitives
 """
 
 from memory_fabric.llm import call_llm as call_llm
@@ -33,6 +34,12 @@ from memory_fabric.storage._shared import (
 from memory_fabric.storage.maps import (
     category_fingerprint as category_fingerprint,
     regenerate_maps as regenerate_maps,
+)
+from memory_fabric.storage.capture import (
+    capture_commit as capture_commit,
+    capture_stats as capture_stats,
+    guard_journal as guard_journal,
+    mark_session_start as mark_session_start,
 )
 from memory_fabric.storage.lifecycle import (
     doctor as doctor,

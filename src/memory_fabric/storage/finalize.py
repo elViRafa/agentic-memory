@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 from datetime import datetime, timezone
@@ -86,6 +87,132 @@ def _parse_llm_json_response(llm_response: str) -> dict[str, Any]:
     return resp_data
 
 
+# Files whose diffs are noise, not knowledge: dependency lockfiles, vendored
+# trees, build output, minified assets. Skipped so real signal survives the budget.
+_DIFF_SKIP_BASENAMES = frozenset(
+    {
+        "package-lock.json",
+        "yarn.lock",
+        "pnpm-lock.yaml",
+        "poetry.lock",
+        "Cargo.lock",
+        "go.sum",
+        "composer.lock",
+        "Gemfile.lock",
+        "uv.lock",
+    }
+)
+_DIFF_SKIP_SUFFIXES = (".min.js", ".min.css", ".map", ".snap", ".lock")
+_DIFF_SKIP_DIRS = (
+    "node_modules/",
+    "dist/",
+    "build/",
+    "vendor/",
+    ".venv/",
+    "__pycache__/",
+)
+
+
+def _should_skip_diff_path(path: str) -> bool:
+    p = path.replace("\\", "/")
+    base = p.rsplit("/", 1)[-1]
+    if base in _DIFF_SKIP_BASENAMES:
+        return True
+    if p.endswith(_DIFF_SKIP_SUFFIXES):
+        return True
+    return any(seg in p for seg in _DIFF_SKIP_DIRS)
+
+
+def _summarize_diff(diff_text: str, per_file: int = 1500, total_cap: int = 6000) -> str:
+    """Budget a raw ``git diff`` per file instead of one global cut.
+
+    Each file's hunk is truncated to ``per_file`` chars; generated/lock/vendored
+    files are elided to a one-line marker; the whole thing is capped at
+    ``total_cap``. This keeps signal from many changed files instead of letting
+    a single large file consume the entire window.
+    """
+    parts = re.split(r"(?m)(?=^diff --git )", diff_text)
+    kept: list[str] = []
+    used = 0
+    for part in parts:
+        if not part.strip():
+            continue
+        match = re.match(r"diff --git a/(.+?) b/(.+)", part)
+        path = match.group(2).strip() if match else ""
+        if path and _should_skip_diff_path(path):
+            kept.append(
+                f"diff --git a/{path} b/{path}\n... [skipped: generated/lock/vendored] ...\n"
+            )
+            continue
+        if len(part) > per_file:
+            part = part[:per_file] + f"\n... [file diff truncated at {per_file} chars] ...\n"
+        if used + len(part) > total_cap:
+            kept.append("... [remaining diff truncated due to total size] ...\n")
+            break
+        kept.append(part)
+        used += len(part)
+    return "".join(kept)
+
+
+def build_consolidation_prompt(
+    sections_data: dict[str, str],
+    git_diff_text: str,
+    session_text: str,
+    tool_calls_text: str,
+    include_summaries: bool,
+) -> str:
+    """Single source of truth for the Dreaming consolidation prompt.
+
+    Store-first + capture-reliability: the prompt asks the LLM not only to
+    consolidate existing memory but to EXTRACT new store entries from the diff
+    and transcripts — the mechanism that turns a raw commit trail into durable,
+    categorized memories.
+    """
+    prompt = (
+        "You are an AI memory consolidation assistant. Below is the project memory index and section bodies.\n"
+        "Review the sections to: (1) merge redundant facts or guidelines, (2) resolve overlapping points, "
+        "(3) check for contradiction warnings between files, and (4) incorporate recent Git logs/transcripts if provided.\n"
+        "Specifically, extract dates, specific IDs, and missing metadata from the recent transcripts or logs "
+        "to enrich the relevant memory sections. If a memory file is outdated or stale, clean it up or propose removing "
+        "redundancies.\n"
+        "(5) EXTRACT NEW MEMORIES: when the Git diff, commits, or transcripts contain durable facts absent from memory "
+        "— decisions made and their rationale, bugs fixed, architectural choices, APIs to avoid — propose them as NEW "
+        "entries under `store/<category>/<slug>` keys in `consolidated_files` (lowercase slug, e.g. "
+        "`store/decisions/jwt-refresh`). Do not restrict yourself to editing existing sections.\n"
+        "Note: sections with `local/` prefix are flat top-level memory files, and sections with `store/` prefix "
+        "are semantic memory store files located in nested directories. Preserve the exact key prefixes in your response.\n\n"
+    )
+    if git_diff_text:
+        prompt += f"Recent Git Diff/Logs:\n{git_diff_text}\n\n"
+    if session_text:
+        prompt += f"Recent Session Transcripts:\n{session_text}\n\n"
+    if tool_calls_text:
+        prompt += f"Recent Tool Calls:\n{tool_calls_text}\n\n"
+
+    prompt += "Active Project Memory Sections:\n" + json.dumps(sections_data, indent=2) + "\n\n"
+    prompt += (
+        "Output a JSON object ONLY, with no surrounding markdown or explanation, matching this schema:\n"
+        "{\n"
+        '  "consolidated_files": {\n'
+        '    "section_name": "clean markdown body text",\n'
+        "    ...\n"
+        "  },\n"
+    )
+    if include_summaries:
+        prompt += (
+            '  "summaries": {\n'
+            '    "section_name": "concise 1-sentence summary (under 150 chars) mapping the section name to summary text",\n'
+            "    ...\n"
+            "  },\n"
+        )
+    prompt += (
+        '  "contradictions": ["description of contradiction", ...],\n'
+        '  "warnings": ["warning note", ...]\n'
+        "}"
+    )
+    return prompt
+
+
 def _get_git_diff(cwd: str) -> str:
     try:
         res = subprocess.run(
@@ -117,9 +244,7 @@ def _get_git_diff(cwd: str) -> str:
             timeout=5.0,
         )
         if res_diff.returncode == 0 and res_diff.stdout.strip():
-            diff_text = res_diff.stdout
-            if len(diff_text) > 4000:
-                diff_text = diff_text[:4000] + "\n... [Diff truncated due to size] ...\n"
+            diff_text = _summarize_diff(res_diff.stdout)
             git_info.append("=== Git Working Copy Diff ===\n" + diff_text)
 
         # Git recent log

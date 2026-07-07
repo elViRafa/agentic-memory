@@ -16,12 +16,15 @@ from memory_fabric.eval import evaluate_dream_quality, evaluate_memory_fabric
 from memory_fabric.installer import install, install_all
 from memory_fabric.paths import local_memory_dir
 from memory_fabric.storage import (
+    capture_commit,
     delete_memory_store,
     doctor,
     dream,
+    guard_journal,
     initialize_memory_fabric,
     keyword_search,
     list_memory_store,
+    mark_session_start,
     propose_memory_patch,
     read_memory_store,
     rollback,
@@ -58,6 +61,19 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "status":
             _print_result(status(cwd), args.json)
             return 0
+        if args.command == "capture":
+            capture_result = capture_commit(cwd, commit=args.commit)
+            _print_result(capture_result, args.json)
+            return 0
+        if args.command == "session-start":
+            _print_result(mark_session_start(cwd), args.json)
+            return 0
+        if args.command == "guard-journal":
+            guard_result = guard_journal(cwd)
+            _print_result(guard_result, args.json)
+            # Exit 2 (not 1) so a client Stop hook can distinguish "block the
+            # stop" from an operational error, and surface the reason.
+            return 0 if guard_result["ok"] else 2
         if args.command == "doctor":
             doctor_result = doctor(cwd)
             _print_result(doctor_result, args.json)
@@ -301,8 +317,22 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument(
         "--memory-prompt", default=None, help="Steering instructions for agent memory capture"
     )
-    subparsers.add_parser("status", help="Show memory status")
+    subparsers.add_parser("status", help="Show memory status and capture stats")
     subparsers.add_parser("doctor", help="Validate memory files and environment")
+
+    capture_parser = subparsers.add_parser(
+        "capture", help="Record a commit as episodic memory (passive capture)"
+    )
+    capture_parser.add_argument(
+        "--commit", default="HEAD", help="Commit to capture (default: HEAD)"
+    )
+    subparsers.add_parser(
+        "session-start", help="Mark session start (for client SessionStart hooks)"
+    )
+    subparsers.add_parser(
+        "guard-journal",
+        help="Exit non-zero if no session journal was written (for client Stop hooks)",
+    )
 
     install_parser = subparsers.add_parser(
         "install", help="Configure an MCP client to use memory-fabric"
