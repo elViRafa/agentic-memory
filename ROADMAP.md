@@ -4,7 +4,7 @@
 > one command in VS Code, Claude (Code + Desktop), Codex, Antigravity, Cursor, Windsurf,
 > Gemini CLI, Cline, and anything MCP-compatible.
 
-Last updated: 2026-07-07 · Current version: 0.6.0 ([live on PyPI](https://pypi.org/project/memory-fabric/)) · Tests: 151 passing
+Last updated: 2026-07-07 · Current version: 0.6.0 ([live on PyPI](https://pypi.org/project/memory-fabric/)) · Tests: 190 passing
 
 ---
 
@@ -261,7 +261,77 @@ shows both. **(a) + the status surface are implemented and tested on `main`; (b)
 with the settings.json writer (next release).** Passive capture (5.1) has no dependency
 on the v1.0 gate.
 
-## 6. Phase 4 — Retrieval quality (be the best, not just the most compatible)
+## 6. Phase 3.5 — Git-native trust (the moat only a file-first, git-native design can dig)
+
+**Implemented 2026-07-07** (`merge_driver.py`, `storage/verify.py`, `storage/failures.py`; 24
+new tests, 190 total). Every one of these depends on being files inside a git repo — a
+vector-DB competitor cannot copy any of them.
+
+### 6.1 Semantic git merge driver — memory that merges with the code
+
+Two branches that both append new facts to the same store file used to produce a textual
+conflict on the shared `last_updated` line even though the actual content additions never
+overlapped. `ai-memory init --merge-driver` registers a custom driver
+(`.gitattributes` + local `git config merge.memory-fabric.driver`) that:
+
+- [x] Merges cleanly when one side changed nothing, or both sides purely *appended* new
+      content to a shared prefix — the common case for memory writes — deduping
+      exact-duplicate lines the same way `write_memory_store`'s append mode does.
+- [x] Reconciles frontmatter independently of the body: `tags` union, more-urgent
+      `priority` wins, `last_updated` takes the later timestamp.
+- [x] Falls back to `git merge-file` (git's own textual 3-way merge, conflict markers and
+      all) for anything it doesn't understand — never worse than not having the driver.
+      A generated map (`generated: true`) left with conflict markers self-heals: the next
+      Dream fails to parse it, treats it as ungenerated, and fully regenerates it.
+- [x] Verified with a real end-to-end test: two branches each append a different fact to
+      the same store file, `git merge` resolves with zero conflict markers and both facts
+      present.
+- Known limitation, documented in the tool's own warning output: merge driver
+  *registration* is per-clone by git's own design — `.gitattributes` is committed and
+  shared, but `ai-memory init --merge-driver` must be re-run after every fresh clone.
+
+### 6.2 Self-verifying citations — memory that can prove it's still true
+
+An optional `evidence` frontmatter list (`write_memory_store_tool(..., evidence="src/auth.py:42,commit:abc123")`)
+lets a memory cite what it depends on. `ai-memory verify`:
+
+- [x] Checks each ref: file paths (existence), `path:line` (line count), `commit:<hash>`
+      (via `git cat-file -e`). Unverifiable kinds (`pr:123`, URLs) are skipped rather than
+      flagged — checking them would need a network call, which the local-first guarantee
+      forbids.
+- [x] Stamps `review_status: broken-evidence` on files whose citations no longer resolve
+      (`--no-mark` for a read-only report).
+- [x] Wired into `ai-memory eval`'s `metadata_quality` category as a read-only check
+      (eval must not mutate files as a side effect of scoring — mutation is `verify`'s
+      job, an explicit opt-in action).
+- This is the structural answer to the store-first migration's original motivating bug:
+  this repo's own `architecture.md` cited a module that had been split a month earlier,
+  and nobody noticed until a human happened to read it. A cited-file rename now fails a
+  machine check instead of waiting for a human.
+
+### 6.3 Failure memory — the highest-ROI category for a coding agent
+
+`write_failure_memory_tool(cwd, error_summary, fix_summary)`:
+
+- [x] Normalizes the error text (paths and numbers stripped) into a stable signature, so
+      the *same kind* of error seen at different call sites/line numbers collapses onto
+      one growing `memory-store/failures/<slug>` entry instead of fragmenting.
+- [x] Increments an `occurrences` counter on repeat hits and surfaces a warning
+      ("occurred N times — consider a systemic fix") once a pattern repeats.
+- [x] Immediately searchable via the existing `keyword_search_tool` — no new retrieval
+      path needed.
+- [x] A short, non-mandatory nudge was added to the canonical agent instructions
+      (`templates.py`) so agents call it right after fixing a bug.
+- Deliberately agent-invoked, not part of passive capture: there is no reliable
+  cross-language way to detect "a bug was just fixed" from a git diff alone.
+
+Exit criteria met: `ai-memory init --merge-driver` on a real repo produces a working
+`.gitattributes` + git config; two branches appending different facts merge with zero
+conflict markers; `ai-memory verify` flags a citation to a deleted file; two calls to
+`write_failure_memory_tool` with the same normalized error collapse onto one file with
+`occurrences: 2`.
+
+## 7. Phase 4 — Retrieval quality (be the best, not just the most compatible)
 
 Keep the zero-dependency, no-vector-DB default. Add optional layers that degrade gracefully
 — the same pattern already used for `rg` and LLM providers.
@@ -281,7 +351,7 @@ Keep the zero-dependency, no-vector-DB default. Add optional layers that degrade
 - [ ] **Latency budget.** `read_combined_context` p95 under 150 ms on a 500-file store;
       add a perf test to CI.
 
-## 7. Phase 5 — Prove it (benchmarks nobody can argue with)
+## 8. Phase 5 — Prove it (benchmarks nobody can argue with)
 
 Claims without numbers don't win "best in the world."
 
@@ -298,7 +368,7 @@ Claims without numbers don't win "best in the world."
 - [ ] **Ship `ai-memory bench`** so any user can run the suite against their own store.
 - [ ] Results table in README with reproduction commands.
 
-## 8. Phase 6 — Ecosystem & growth
+## 9. Phase 6 — Ecosystem & growth
 
 - [ ] **Docs site** (mkdocs-material on GitHub Pages): quickstart per client, concepts
       (Tiers, Dreaming, store), MCP tool reference, benchmark methodology.
@@ -311,7 +381,7 @@ Claims without numbers don't win "best in the world."
 - [ ] **Telemetry: none.** Make "no telemetry, no account, no cloud" a stated guarantee —
       it is a differentiator in this category.
 
-## 9. Success metrics
+## 10. Success metrics
 
 | Metric | 3 months | 12 months |
 |---|---|---|
@@ -322,7 +392,7 @@ Claims without numbers don't win "best in the world."
 | Clients verified in CI | 4 | 9+ |
 | Capture rate (hooks on) | episodic record per commit, no agent cooperation | 100% of benchmark sessions journaled with a non-compliant agent |
 
-## 10. Suggested execution order
+## 11. Suggested execution order
 
 1. **Phase 1.1 PyPI publish** — small effort, unblocks every install story. Do first.
 2. **Phase 0 CI + module split** — in parallel; must be green before launch.
@@ -330,8 +400,10 @@ Claims without numbers don't win "best in the world."
 4. **Phase 2 store-first memory model (v0.6–v0.7)** — the breaking model change and its
    migration tooling must land **before** v1.0's stability promise, not after it. (v0.6
    shipped 2026-07-07.)
-5. **Phase 3.1 passive capture** — independent of the v1.0 gate and demos brilliantly
-   ("commit, and the project brain updates itself"); strong launch material.
+5. **Phase 3.1 passive capture + Phase 3.5 git-native trust** — independent of the v1.0
+   gate and demo brilliantly ("commit, and the project brain updates itself"; "two
+   branches merge their memory as cleanly as their code"); strong launch material.
+   (Both shipped 2026-07-07.)
 6. **Launch v1.0** (Phase 6 demo + announcements) on the strength of distribution and
    the clean store-first model.
 7. **Phase 3.2–3.3 client-hook enforcement + capture stats** — post-launch, guided by

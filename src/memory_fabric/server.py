@@ -35,6 +35,7 @@ from memory_fabric.storage import (
     write_local_memory,
     write_memory_store,
     write_session_journal,
+    write_failure_memory,
     prepare_dream_payload,
     apply_dream_results,
 )
@@ -363,10 +364,21 @@ if FastMCP is not None:
         tags: str = "",
         priority: str = "medium",
         mode: str = "replace",
+        evidence: str = "",
     ) -> StoreWriteResult:
-        """Write a memory file to a semantic store path (e.g. 'architecture/decisions/auth-service')."""
+        """Write a memory file to a semantic store path (e.g. 'architecture/decisions/auth-service').
+
+        Args:
+            evidence: Optional comma-separated citation refs this memory depends
+                      on, e.g. ``"src/auth.py:42,commit:abc1234"``. When set,
+                      `ai-memory verify` (or the eval's metadata_quality check)
+                      flags this memory if the cited file/line/commit stops
+                      existing — catching rot automatically instead of relying
+                      on a human to notice a stale citation.
+        """
         safe = _safe_cwd(cwd)
         tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else None
+        evidence_list = [e.strip() for e in evidence.split(",") if e.strip()] if evidence else None
         return write_memory_store(
             safe,
             store_path=store_path,
@@ -375,6 +387,7 @@ if FastMCP is not None:
             tags=tag_list,
             priority=priority,
             mode=mode,  # type: ignore[arg-type]
+            evidence=evidence_list,
         )
 
     @mcp.tool()
@@ -436,6 +449,34 @@ if FastMCP is not None:
             key_decisions=key_decisions,
             files_changed=files_changed,
             session_label=session_label,
+        )
+
+    @mcp.tool()
+    def write_failure_memory_tool(
+        cwd: str,
+        error_summary: str,
+        fix_summary: str,
+        tags: str = "",
+    ) -> WriteResult:
+        """Record an error -> fix pair. Call this immediately after fixing a bug.
+
+        The error text is normalized (paths and line numbers stripped) into a
+        stable signature, so a repeat of the *same kind* of error accumulates
+        onto the same store entry (with a rising `occurrences` count) instead
+        of scattering into near-duplicate files. This is the single
+        highest-value memory category for a coding agent — "I hit this exact
+        error before, here's what fixed it" — searchable via
+        `keyword_search_tool` on the next occurrence.
+
+        Args:
+            error_summary: The error message or symptom observed.
+            fix_summary:   What actually fixed it.
+            tags:          Optional comma-separated extra tags.
+        """
+        safe = _safe_cwd(cwd)
+        tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else None
+        return write_failure_memory(
+            safe, error_summary=error_summary, fix_summary=fix_summary, tags=tag_list
         )
 
     # ------------------------------------------------------------------

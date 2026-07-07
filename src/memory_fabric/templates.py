@@ -106,6 +106,7 @@ Root map files (`index`, `architecture`, `decisions`, `debt`, `schemas`) are **g
 ### 4. Security & Maintenance
 - **Security:** Do NOT store credentials, tokens, or passwords.
 - **Dreaming:** Use `dream_tool` for consolidation only — after new knowledge has already been saved with `write_memory_store_tool`. Refer to `.agents/rules/dreaming.md` for guidelines.
+- **Bug fixes:** Call `write_failure_memory_tool(cwd, error_summary, fix_summary)` right after fixing a bug. Repeat occurrences of the same error accumulate onto one entry instead of scattering — this is the highest-value memory category for future debugging.
 
 ### 5. Session End — Automatic Journaling
 Before completing a session, call `write_session_journal_tool(cwd, summary, key_decisions, files_changed, session_label)` to capture what happened.

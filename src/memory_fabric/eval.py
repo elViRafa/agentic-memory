@@ -15,6 +15,7 @@ from memory_fabric.security import redact_secrets
 from memory_fabric.storage import read_combined_context
 from memory_fabric.storage._shared import STEERING_SECTIONS
 from memory_fabric.storage.maps import category_fingerprint
+from memory_fabric.storage.verify import verify_evidence
 from memory_fabric.templates import LOCAL_GITIGNORE, SECTION_TEMPLATES, now_iso
 
 
@@ -88,7 +89,7 @@ async def evaluate_memory_fabric(
         evaluate_memory_quality(cwd, root=memory_dir),
         _evaluate_section_coverage(memory_dir, sections),
         _evaluate_retrieval_readiness(cwd),
-        _evaluate_metadata_quality(sections),
+        _evaluate_metadata_quality(cwd, sections),
         _evaluate_safety_privacy(memory_dir, sections),
     ]
     warnings.extend(_section_load_warnings(sections))
@@ -346,7 +347,7 @@ def _memory_eval_for_root(cwd: str, root: Path) -> EvalResult:
                 )
             ],
         ),
-        _evaluate_metadata_quality(_load_sections(root)),
+        _evaluate_metadata_quality(cwd, _load_sections(root), memory_dir=root),
         _evaluate_safety_privacy(root, _load_sections(root)),
     ]
     return _memory_result(
@@ -590,8 +591,40 @@ def _evaluate_retrieval_readiness(cwd: str) -> EvalCategory:
     return _category("retrieval_readiness", MEMORY_WEIGHTS["retrieval_readiness"], checks)
 
 
-def _evaluate_metadata_quality(sections: dict[str, dict[str, Any]]) -> EvalCategory:
+def _evaluate_metadata_quality(
+    cwd: str, sections: dict[str, dict[str, Any]], memory_dir: Path | None = None
+) -> EvalCategory:
     checks: list[EvalCheck] = []
+
+    # Self-verifying citations: read-only here (eval must not mutate files as a
+    # side effect of scoring) — `ai-memory verify` is the explicit, opt-in
+    # action that stamps review_status: broken-evidence. `memory_dir` lets a
+    # snapshot-scoring caller check that snapshot's evidence lists instead of
+    # the live store's.
+    verify_result = verify_evidence(cwd, mark_broken=False, memory_dir=memory_dir)
+    for broken in verify_result["broken"]:
+        checks.append(
+            _check(
+                f"{broken['key']}_evidence_broken",
+                "fail",
+                "medium",
+                f"{broken['key']} cites evidence that no longer resolves: "
+                + "; ".join(broken["problems"]),
+                "Run `ai-memory verify` and update or remove the stale citation.",
+                "ai-memory verify",
+            )
+        )
+    if verify_result["checked_files"] and not verify_result["broken"]:
+        checks.append(
+            _check(
+                "evidence_all_resolved",
+                "pass",
+                "info",
+                f"All {verify_result['checked_files']} memory file(s) with evidence citations resolved.",
+                "Keep citing concrete files/commits so memory stays checkable.",
+            )
+        )
+
     for section, info in sections.items():
         if info.get("error"):
             checks.append(

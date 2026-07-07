@@ -11,6 +11,8 @@ from typing import Any
 
 from memory_fabric.version import __version__
 from memory_fabric.clients import CLIENTS
+from memory_fabric.merge_driver import install_merge_driver
+from memory_fabric.merge_driver import run as run_merge_driver
 from memory_fabric.contracts import DreamEvalResult, EvalResult
 from memory_fabric.eval import evaluate_dream_quality, evaluate_memory_fabric
 from memory_fabric.installer import install, install_all
@@ -29,6 +31,8 @@ from memory_fabric.storage import (
     read_memory_store,
     rollback,
     status,
+    verify_evidence,
+    write_failure_memory,
     write_memory_store,
     sync_agent_rules,
 )
@@ -49,6 +53,11 @@ def main(argv: list[str] | None = None) -> int:
 
     load_env_from_cwd(cwd)
 
+    if args.command == "merge-driver":
+        # Bypasses the try/except and cwd/env plumbing below: git invokes this
+        # directly with absolute temp-file paths, not a project cwd.
+        return run_merge_driver(args.ancestor, args.ours, args.theirs)
+
     try:
         if args.command == "init":
             init_result = initialize_memory_fabric(
@@ -56,6 +65,15 @@ def main(argv: list[str] | None = None) -> int:
                 install_hooks=args.install_hooks,
                 memory_prompt=args.memory_prompt,
             )
+            if args.merge_driver:
+                merge_driver_result = install_merge_driver(cwd)
+                init_result["warnings"] = list(init_result.get("warnings", [])) + [
+                    f"merge-driver: {w}" for w in merge_driver_result["warnings"]
+                ]
+                if merge_driver_result["gitattributes_changed"]:
+                    init_result["files_created"] = list(init_result.get("files_created", [])) + [
+                        str(Path(cwd) / ".gitattributes")
+                    ]
             _print_result(init_result, args.json)
             return 0
         if args.command == "status":
@@ -78,6 +96,17 @@ def main(argv: list[str] | None = None) -> int:
             doctor_result = doctor(cwd)
             _print_result(doctor_result, args.json)
             return 0 if doctor_result["ok"] else 1
+        if args.command == "verify":
+            verify_result = verify_evidence(cwd, mark_broken=not args.no_mark)
+            _print_result(verify_result, args.json)
+            return 0 if verify_result["ok"] else 1
+        if args.command == "failure":
+            tag_list = [t.strip() for t in args.tags.split(",") if t.strip()] if args.tags else None
+            failure_result = write_failure_memory(
+                cwd, error_summary=args.error, fix_summary=args.fix, tags=tag_list
+            )
+            _print_result(failure_result, args.json)
+            return 0
         if args.command == "install":
             if args.client == "all":
                 install_all_result = install_all(
@@ -315,10 +344,41 @@ def build_parser() -> argparse.ArgumentParser:
         "--install-hooks", action="store_true", help="Install opt-in git hooks"
     )
     init_parser.add_argument(
+        "--merge-driver",
+        action="store_true",
+        help="Register the semantic git merge driver for .ai-memory/**/*.md (per-clone; re-run after every fresh clone)",
+    )
+    init_parser.add_argument(
         "--memory-prompt", default=None, help="Steering instructions for agent memory capture"
     )
     subparsers.add_parser("status", help="Show memory status and capture stats")
     subparsers.add_parser("doctor", help="Validate memory files and environment")
+
+    verify_parser = subparsers.add_parser(
+        "verify", help="Check evidence citations still resolve (self-verifying memory)"
+    )
+    verify_parser.add_argument(
+        "--no-mark",
+        action="store_true",
+        help="Report broken evidence without stamping review_status: broken-evidence",
+    )
+
+    failure_parser = subparsers.add_parser(
+        "failure", help="Record an error -> fix pair (deduplicated by normalized error text)"
+    )
+    failure_parser.add_argument("--error", required=True, help="Error message/symptom")
+    failure_parser.add_argument("--fix", required=True, help="What fixed it")
+    failure_parser.add_argument("--tags", default="", help="Comma-separated extra tags")
+
+    merge_driver_parser = subparsers.add_parser(
+        "merge-driver",
+        help="Git merge driver backend (invoked by git itself, not meant for direct use)",
+    )
+    merge_driver_parser.add_argument("ancestor", help="Path to the common-ancestor version (%%O)")
+    merge_driver_parser.add_argument(
+        "ours", help="Path to our version; result is written here (%%A)"
+    )
+    merge_driver_parser.add_argument("theirs", help="Path to their version (%%B)")
 
     capture_parser = subparsers.add_parser(
         "capture", help="Record a commit as episodic memory (passive capture)"

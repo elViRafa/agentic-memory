@@ -16,6 +16,9 @@ import X` without knowing which submodule actually implements it:
 - `dream`: Dreaming's public entry points and orchestration
 - `maps`: generated root maps rebuilt from memory-store/ subtrees (store-first)
 - `capture`: passive commit capture + session/journal enforcement primitives
+- `verify`: self-verifying citations — checks `evidence` refs still resolve
+- `merge`: semantic 3-way merge for memory files (git merge driver backend)
+- `failures`: error -> fix capture with occurrence-counted deduplication
 """
 
 from memory_fabric.llm import call_llm as call_llm
@@ -41,6 +44,8 @@ from memory_fabric.storage.capture import (
     guard_journal as guard_journal,
     mark_session_start as mark_session_start,
 )
+from memory_fabric.storage.verify import verify_evidence as verify_evidence
+from memory_fabric.storage.failures import write_failure_memory as write_failure_memory
 from memory_fabric.storage.lifecycle import (
     doctor as doctor,
     initialize_memory_fabric as initialize_memory_fabric,

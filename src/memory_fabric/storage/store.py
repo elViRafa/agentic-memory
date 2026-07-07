@@ -33,8 +33,17 @@ def write_memory_store(
     tags: list[str] | None = None,
     priority: str = "medium",
     mode: WriteMode = "replace",
+    evidence: list[str] | None = None,
 ) -> StoreWriteResult:
-    """Write a memory file to a semantic store path."""
+    """Write a memory file to a semantic store path.
+
+    Args:
+        evidence: Optional list of citation refs this memory depends on, e.g.
+                  ``"src/auth.py"``, ``"src/auth.py:42"``, or ``"commit:<hash>"``.
+                  ``ai-memory verify`` checks these still resolve and flags the
+                  memory when they don't — the mechanism that lets rot be
+                  caught by a machine instead of a human noticing years later.
+    """
     if mode not in {"append", "replace"}:
         raise ValueError("mode must be 'append' or 'replace'")
     if priority not in {"high", "medium", "low"}:
@@ -84,6 +93,8 @@ def write_memory_store(
             metadata["tags"] = tags
         if priority:
             metadata["priority"] = priority
+        if evidence is not None:
+            metadata["evidence"] = evidence
 
         changed = True
         if mode == "replace":
