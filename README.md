@@ -126,6 +126,11 @@ Because Memory Fabric is in active development, we recommend upgrading regularly
    ```
    This will safely refresh starter templates and local git hook integration to the latest format without overwriting your existing memory markdown files.
 
+> **Windows terminals**: the CLI emits UTF-8 (memory content legitimately contains
+> em-dashes and bullets). Windows Terminal and PowerShell 7 render it out of the box;
+> on legacy consoles (PowerShell 5.1 with an OEM code page) set `chcp 65001` or
+> `PYTHONUTF8=1` if you see replacement characters.
+
 Or clone and install in editable mode for local development:
 
 ```sh

@@ -457,6 +457,22 @@ class MemoryFabricTests(unittest.TestCase):
                 any("post-commit" in w and "does not exist" in w for w in res["warnings"])
             )
 
+    def test_cli_reconfigures_legacy_console_to_utf8(self) -> None:
+        """P-05: em-dashes/bullets must not turn into `?` on cp1252 consoles."""
+        from memory_fabric.cli import _ensure_utf8_output
+
+        legacy = mock.MagicMock()
+        legacy.encoding = "cp1252"
+        with mock.patch("sys.stdout", legacy), mock.patch("sys.stderr", legacy):
+            _ensure_utf8_output()
+        legacy.reconfigure.assert_called_with(encoding="utf-8", errors="replace")
+
+        already_utf8 = mock.MagicMock()
+        already_utf8.encoding = "utf-8"
+        with mock.patch("sys.stdout", already_utf8), mock.patch("sys.stderr", already_utf8):
+            _ensure_utf8_output()
+        already_utf8.reconfigure.assert_not_called()
+
     def test_doctor_warns_on_path_installation_drift(self) -> None:
         """P-01: a different `ai-memory` shadowing this one on PATH is surfaced."""
         from memory_fabric.storage.lifecycle import _check_install_drift

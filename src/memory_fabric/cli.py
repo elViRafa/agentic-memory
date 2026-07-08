@@ -40,7 +40,25 @@ from memory_fabric.storage import (
 )
 
 
+def _ensure_utf8_output() -> None:
+    """Make CLI output UTF-8 regardless of the console code page (P-05).
+
+    Default Windows consoles (cp1252/cp850) corrupt the em-dashes and bullets
+    that memory templates legitimately contain into `?`/mojibake. Reconfigure
+    stdout/stderr to UTF-8 with errors="replace" so output is correct on
+    modern terminals and never crashes on legacy ones. CLI-only on purpose:
+    the MCP server's stdio transport must not be touched.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            if stream and (stream.encoding or "").lower().replace("-", "") != "utf8":
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, OSError, ValueError):
+            pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _ensure_utf8_output()
     parser = build_parser()
     args = parser.parse_args(argv)
 
