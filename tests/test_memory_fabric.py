@@ -1501,6 +1501,32 @@ class MemoryStoreTests(unittest.TestCase):
             metadata, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
             self.assertEqual(metadata.get("review_status"), "stale")
 
+    def test_propose_memory_patch_produces_parseable_unified_diff(self) -> None:
+        """P-06: header lines must not be concatenated (`--- x+++ y@@`)."""
+        from memory_fabric.storage import propose_memory_patch
+
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            write_memory_store(
+                temp, "architecture/decisions/task-due-dates", "Old decision line.",
+                title="Due Dates",
+            )
+            preview = propose_memory_patch(
+                temp,
+                instructions=(
+                    "store: architecture/decisions/task-due-dates\n"
+                    "New paragraph about validation."
+                ),
+            )
+            patch = preview["patch"]
+            self.assertTrue(patch, "expected a non-empty patch")
+            self.assertNotIn(")+++", patch)
+            self.assertNotIn(")@@", patch)
+            lines = patch.splitlines()
+            self.assertTrue(lines[0].startswith("--- "))
+            self.assertTrue(lines[1].startswith("+++ "))
+            self.assertTrue(lines[2].startswith("@@ "))
+
     def test_store_write_redacts_secrets(self) -> None:
         from memory_fabric.storage import write_memory_store
 

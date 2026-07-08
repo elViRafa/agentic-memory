@@ -72,6 +72,85 @@ class DreamStoreTests(unittest.TestCase):
             body_after = parse_frontmatter(index_path.read_text(encoding="utf-8"))[1]
             self.assertIn("decisions/new-decision", body_after)
 
+    def test_numeric_contradiction_heuristic_flags_planted_conflict(self) -> None:
+        """P-10: the planted TTL conflict from the v0.7.0 campaign (3600 vs 60).
+
+        An 8B local model returned contradictions: [] for this exact setup;
+        the deterministic net must flag it regardless of the LLM's answer.
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            write_memory_store(
+                temp,
+                "decisions/cache-policy",
+                "The cache TTL for TaskMaster task lists is 3600 seconds. "
+                "Cache TTL applies to every TaskMaster list query.",
+                title="Cache Policy",
+            )
+            write_memory_store(
+                temp,
+                "architecture/decisions/taskmaster-caching",
+                "The cache TTL for TaskMaster task lists is 60 seconds by default. "
+                "Cache TTL applies to every TaskMaster list query.",
+                title="TaskMaster Caching",
+            )
+
+            result = dream(temp, mode="light", apply=True)
+            heuristic_hits = [
+                w for w in result["warnings"] if "heuristic" in w and "3600" in w and "60" in w
+            ]
+            self.assertTrue(heuristic_hits, f"expected heuristic hit, got: {result['warnings']}")
+
+            # The flagged contradiction must not break byte-stability (P-15):
+            # a second no-op dream re-derives the same list and writes nothing.
+            result2 = dream(temp, mode="light", apply=True)
+            self.assertEqual(result2["affected_files"], [])
+            self.assertFalse(result2["changed"])
+
+    def test_unrelated_files_with_numbers_are_not_flagged(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            write_memory_store(
+                temp,
+                "decisions/http-timeouts",
+                "External HTTP calls use a 30 second timeout with retries.",
+                title="HTTP Timeouts",
+            )
+            write_memory_store(
+                temp,
+                "schemas/pagination",
+                "List endpoints paginate responses at 50 items per page maximum.",
+                title="Pagination",
+            )
+            result = dream(temp, mode="light", apply=True)
+            self.assertFalse(any("heuristic" in w for w in result["warnings"]))
+
+    @mock.patch("memory_fabric.storage.finalize._build_rewrite_tasks")
+    @mock.patch("memory_fabric.storage.dream.call_llm", new_callable=mock.AsyncMock)
+    def test_provider_warning_distinguishes_consolidation_from_rewrites(
+        self, mock_llm, mock_tasks
+    ) -> None:
+        """P-09: the warning must not deny the direct provider call that DID happen."""
+        mock_llm.return_value = json.dumps(
+            {"consolidated_files": {}, "summaries": {}, "contradictions": [], "warnings": []}
+        )
+        mock_tasks.return_value = [
+            {"section": "architecture", "reason": "too terse", "instruction": "expand"}
+        ]
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            write_memory_store(temp, "architecture/notes", "# Notes\n\nFact.", title="Notes")
+            with mock.patch.dict(
+                os.environ,
+                {"MEMORY_FABRIC_LLM_PROVIDER": "ollama", "OLLAMA_MODEL": "test-model"},
+            ):
+                result = dream(temp, mode="deep", apply=True, llm_rewrite=True)
+
+        joined = " ".join(result["warnings"])
+        self.assertNotIn("does not call provider adapters directly", joined)
+        self.assertIn("called provider `ollama` directly", joined)
+        self.assertIn("agent-assisted", joined)
+
     def test_dream_store_light_mode_regenerates_index_with_topics(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             initialize_memory_fabric(temp)

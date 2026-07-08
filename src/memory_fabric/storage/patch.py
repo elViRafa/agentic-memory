@@ -140,6 +140,11 @@ def propose_memory_patch(cwd: str, instructions: str) -> PatchPreview:
     proposed_lines = proposed_text.splitlines(keepends=True)
 
     # --- Generate unified diff -----------------------------------------------
+    # Content lines keep their own newlines (splitlines(keepends=True)), so the
+    # default lineterm="\n" must stay: lineterm="" strips the newline from the
+    # ---/+++/@@ header lines only, and joining then mangles the header into
+    # `--- ... (current)+++ ... (proposed)@@ ...` — unparseable by any standard
+    # diff tool (P-06).
     from_label = str(target_path) + " (current)"
     to_label = str(target_path) + " (proposed)"
     patch = "".join(
@@ -148,7 +153,6 @@ def propose_memory_patch(cwd: str, instructions: str) -> PatchPreview:
             proposed_lines,
             fromfile=from_label,
             tofile=to_label,
-            lineterm="",
         )
     )
 

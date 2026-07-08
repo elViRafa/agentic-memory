@@ -534,6 +534,15 @@ To use the CLI with LLMs, or to bypass MCP Sampling with a specific provider, se
 | **Anthropic** | `MEMORY_FABRIC_LLM_PROVIDER=anthropic`<br>`ANTHROPIC_API_KEY=your_key` | Defaults to `claude-3-5-haiku-20241022` |
 | **Ollama** | `MEMORY_FABRIC_LLM_PROVIDER=ollama`<br>`OLLAMA_HOST=...` *(opt)*<br>`OLLAMA_MODEL=gemma2` *(opt)* | Offline, local reasoning |
 
+> **Model quality matters for deep Dreaming.** Consolidation quality — especially
+> contradiction detection — degrades with small local models, and the failure is
+> silent (the model simply returns an empty `contradictions` list). In our testing an
+> 8B-class model (qwen3-vl:8b) missed a deliberately planted TTL conflict; prefer a
+> ~14B+ model (or a hosted provider) when you rely on `dream --mode deep` for
+> semantic conflict detection. As a safety net, Memory Fabric always runs a
+> deterministic heuristic that flags store files with overlapping wording but
+> divergent numbers, independent of the LLM's answer.
+
 ---
 
 ## LLM Debugging

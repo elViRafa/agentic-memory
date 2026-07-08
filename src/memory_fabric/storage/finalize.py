@@ -22,6 +22,8 @@ from memory_fabric.storage._shared import (
     _is_generated_file,
     _is_ignored_local_memory_path,
     _iter_markdown_files,
+    _jaccard_similar,
+    _path_to_store_path,
     _validate_store_path,
 )
 from memory_fabric.storage.consolidation import (
@@ -268,6 +270,61 @@ def _get_git_diff(cwd: str) -> str:
     return ""
 
 
+# Cap the number of store files the O(n^2) pair scan considers — the check is
+# a best-effort net, not an index; huge stores must not slow every dream down.
+_CONTRADICTION_SCAN_LIMIT = 150
+_NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
+
+
+def _detect_numeric_contradictions(memory_root: Path) -> list[str]:
+    """Deterministic contradiction heuristic over the memory store (P-10).
+
+    Flags pairs of store files whose bodies overlap in wording (Jaccard) but
+    disagree on numbers. Purely advisory; messages avoid commas/colons so the
+    list round-trips cleanly through inline-frontmatter storage.
+    """
+    store_root = memory_root / "memory-store"
+    if not store_root.is_dir():
+        return []
+    entries: list[tuple[str, str, frozenset[str]]] = []
+    for path in sorted(_iter_markdown_files(store_root)):
+        if path.name == "index.md":
+            continue
+        relative = path.relative_to(store_root)
+        # Episodic journals/commit logs and failure records are full of
+        # incidental numbers (dates, line numbers) — comparing them would be
+        # all noise.
+        if relative.parts and relative.parts[0] in {"episodic", "failures"}:
+            continue
+        try:
+            _meta, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        numbers = frozenset(_NUMBER_RE.findall(body))
+        if not numbers:
+            continue
+        entries.append((_path_to_store_path(store_root, path), body, numbers))
+        if len(entries) >= _CONTRADICTION_SCAN_LIMIT:
+            break
+
+    contradictions: list[str] = []
+    for i in range(len(entries)):
+        for j in range(i + 1, len(entries)):
+            sp_a, body_a, nums_a = entries[i]
+            sp_b, body_b, nums_b = entries[j]
+            if nums_a == nums_b:
+                continue
+            if not _jaccard_similar(body_a, body_b, threshold=0.3):
+                continue
+            only_a = " / ".join(sorted(nums_a - nums_b)[:3]) or "-"
+            only_b = " / ".join(sorted(nums_b - nums_a)[:3]) or "-"
+            contradictions.append(
+                f"`{sp_a}` and `{sp_b}` cover similar content but state different numbers "
+                f"({only_a} vs {only_b}) - review for conflict [heuristic]"
+            )
+    return contradictions
+
+
 async def _process_and_finalize_candidate(
     cwd: str,
     candidate_root: Path,
@@ -356,13 +413,23 @@ async def _process_and_finalize_candidate(
             metadata["last_updated"] = now_iso()
             sec_path.write_text(dump_frontmatter(metadata, new_body), encoding="utf-8")
 
-    dream_contradictions = resp_data.get("contradictions", [])
+    dream_contradictions = list(resp_data.get("contradictions", []) or [])
     dream_warnings = resp_data.get("warnings", [])
 
     for c in dream_contradictions:
         warnings.append(f"Contradiction detected: {c}")
     for w in dream_warnings:
         warnings.append(f"Consolidation warning: {w}")
+
+    # Deterministic contradiction net (P-10): small local models routinely
+    # return an empty `contradictions` list even for planted conflicts, and
+    # that failure is silent. Independently of what (or whether) an LLM
+    # answered, flag store-file pairs whose prose overlaps but whose numbers
+    # diverge (e.g. one memory says a cache TTL is 3600 seconds, another 60).
+    for c in _detect_numeric_contradictions(candidate_root):
+        if c not in dream_contradictions:
+            dream_contradictions.append(c)
+            warnings.append(f"Contradiction detected (heuristic): {c}")
 
     # Recalculate hash of consolidated candidates (generated maps excluded — they
     # are derived from the store, which is already part of the hash input)
@@ -517,13 +584,25 @@ async def _process_and_finalize_candidate(
         )
     if llm_rewrite:
         provider = os.environ.get("MEMORY_FABRIC_LLM_PROVIDER")
+        task_count = len(rewrite_tasks)
         if not provider:
             warnings.append(
                 "No LLM provider configured; generated local rewrite tasks for an external agent instead."
             )
-        else:
+        elif task_count:
+            # P-09: the old single-sentence warning claimed no provider adapter
+            # was called at all, even though the consolidation step above DID
+            # call the provider directly — only the rewrite tasks are
+            # agent-assisted. Say exactly which step used what.
+            consolidation_note = (
+                f"Consolidation called provider `{provider}` directly. "
+                if not is_fallback
+                else f"Provider `{provider}` is configured but consolidation used the local fallback. "
+            )
             warnings.append(
-                f"Provider `{provider}` is configured, but this build uses agent-assisted rewrite tasks and does not call provider adapters directly."
+                consolidation_note
+                + f"The {task_count} rewrite_tasks in this result are agent-assisted: returned as "
+                "instructions for the calling agent, not executed via the provider."
             )
     elif not os.environ.get("MEMORY_FABRIC_LLM_PROVIDER"):
         warnings.append("No LLM provider configured; ran local maintenance only.")
