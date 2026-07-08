@@ -306,8 +306,69 @@ class MemoryFabricTests(unittest.TestCase):
 
             self.assertTrue(post_commit_path.exists())
             self.assertTrue(any("post-commit" in f for f in result["files_created"]))
-            self.assertIn(
-                "ai-memory dream --mode light --apply", post_commit_path.read_text(encoding="utf-8")
+            content = post_commit_path.read_text(encoding="utf-8")
+            self.assertIn("dream --mode light --apply", content)
+            # P-04: hooks must pin the CLI that created them instead of relying
+            # on a bare PATH lookup, and must fail audibly instead of `|| true`.
+            self.assertIn('MEMORY_FABRIC_BIN="', content)
+            self.assertIn("memory-fabric: hook skipped (ai-memory not found)", content)
+            self.assertIn("memory-fabric: capture failed (non-fatal)", content)
+            self.assertNotIn("|| true\n", content.replace("2>/dev/null || true", ""))
+
+    def test_init_install_hooks_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            git_dir = Path(temp) / ".git"
+            git_dir.mkdir()
+            initialize_memory_fabric(temp, install_hooks=True)
+            post_commit_path = git_dir / "hooks" / "post-commit"
+            first = post_commit_path.read_text(encoding="utf-8")
+
+            second_result = initialize_memory_fabric(temp, install_hooks=True)
+            self.assertEqual(first, post_commit_path.read_text(encoding="utf-8"))
+            self.assertFalse(any("post-commit" in f for f in second_result["files_created"]))
+
+    def test_init_install_hooks_upgrades_legacy_hook_lines(self) -> None:
+        """Hooks written by pre-0.7.1 installers get rewritten in place."""
+        with tempfile.TemporaryDirectory() as temp:
+            git_dir = Path(temp) / ".git"
+            git_dir.mkdir()
+            hooks_dir = git_dir / "hooks"
+            hooks_dir.mkdir()
+            post_commit_path = hooks_dir / "post-commit"
+            post_commit_path.write_text(
+                "#!/bin/sh\n"
+                "echo 'user line'\n"
+                "# Added by Memory Fabric installer\n"
+                "ai-memory capture || true\n"
+                "ai-memory dream --mode light --apply || true\n",
+                encoding="utf-8",
+            )
+
+            initialize_memory_fabric(temp, install_hooks=True)
+            content = post_commit_path.read_text(encoding="utf-8")
+            self.assertIn("echo 'user line'", content)
+            self.assertNotIn("ai-memory capture || true", content)
+            self.assertNotIn("ai-memory dream --mode light --apply || true", content)
+            self.assertIn('MEMORY_FABRIC_BIN="', content)
+            self.assertEqual(content.count("dream --mode light --apply"), 1)
+
+    def test_doctor_warns_when_hook_binary_is_unresolvable(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            git_dir = Path(temp) / ".git"
+            git_dir.mkdir()
+            hooks_dir = git_dir / "hooks"
+            hooks_dir.mkdir()
+            (hooks_dir / "post-commit").write_text(
+                "#!/bin/sh\n# Memory Fabric post-commit hook\n"
+                'MEMORY_FABRIC_BIN="C:/nonexistent/venv/Scripts/ai-memory.exe"\n'
+                '"$MEMORY_FABRIC_BIN" capture\n',
+                encoding="utf-8",
+            )
+            initialize_memory_fabric(temp)
+            with mock.patch("memory_fabric.storage.lifecycle.shutil.which", return_value=None):
+                res = doctor(temp)
+            self.assertTrue(
+                any("post-commit" in w and "does not exist" in w for w in res["warnings"])
             )
 
     def test_init_install_hooks_without_git_emits_warning(self) -> None:
@@ -408,7 +469,8 @@ class MemoryFabricTests(unittest.TestCase):
             self.assertTrue(post_commit_path.exists())
             content = post_commit_path.read_text(encoding="utf-8")
             self.assertIn("echo 'hello'", content)
-            self.assertIn("ai-memory dream --mode light --apply", content)
+            self.assertIn("dream --mode light --apply", content)
+            self.assertIn('MEMORY_FABRIC_BIN="', content)
 
     @mock.patch("sys.stdin.isatty", return_value=True)
     def test_cli_sync_global_interactive_append(self, mock_isatty) -> None:

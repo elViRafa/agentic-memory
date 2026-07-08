@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,101 @@ from memory_fabric.templates import (
     build_copilot_md,
 )
 from memory_fabric.version import __version__
+
+# Git hooks: the block between these markers is owned by Memory Fabric and is
+# replaced wholesale on re-init, so `ai-memory init --install-hooks` upgrades
+# stale hooks (e.g. after a venv move) without duplicating lines.
+_HOOK_BLOCK_START = "# >>> memory-fabric >>>"
+_HOOK_BLOCK_END = "# <<< memory-fabric <<<"
+
+# Unmarked lines written by installers before v0.7.1; stripped on upgrade.
+_LEGACY_HOOK_LINES = {
+    "# Added by Memory Fabric installer",
+    'echo "Running Memory Fabric capture + Dreaming..."',
+    "ai-memory capture || true",
+    "ai-memory dream --mode light --apply || true",
+    'echo "Syncing Memory Fabric Agent Rules..."',
+    "ai-memory sync-agents || true",
+    "git add .agents/rules/ .cursor/rules/memory-fabric.mdc .windsurf/rules/memory-fabric.md CLAUDE.md .github/copilot-instructions.md 2>/dev/null || true",
+}
+
+
+def _resolve_cli_binary() -> tuple[str, str | None]:
+    """Resolve the ai-memory CLI the git hooks should invoke.
+
+    Hooks run in whatever shell git spawns, where the project venv is usually
+    NOT activated — a bare `ai-memory` dies silently (or runs an unrelated
+    global copy). Prefer the binary sitting next to the interpreter that is
+    executing init, i.e. the installation the user actually asked to hook up.
+    """
+    exe_name = "ai-memory.exe" if os.name == "nt" else "ai-memory"
+    sibling = Path(sys.executable).with_name(exe_name)
+    if sibling.exists():
+        return sibling.as_posix(), None
+    on_path = shutil.which("ai-memory")
+    if on_path:
+        return Path(on_path).as_posix(), None
+    return "ai-memory", (
+        "Could not resolve an absolute path for the ai-memory CLI; git hooks will rely on "
+        "PATH lookup and may be skipped in shells where memory-fabric is not available."
+    )
+
+
+def _build_hook_block(bin_path: str, inner_lines: list[str]) -> str:
+    lines = [
+        _HOOK_BLOCK_START,
+        f'MEMORY_FABRIC_BIN="{bin_path}"',
+        'if ! [ -x "$MEMORY_FABRIC_BIN" ] && ! command -v "$MEMORY_FABRIC_BIN" >/dev/null 2>&1; then',
+        '  MEMORY_FABRIC_BIN="ai-memory"',
+        "fi",
+        'if [ -x "$MEMORY_FABRIC_BIN" ] || command -v "$MEMORY_FABRIC_BIN" >/dev/null 2>&1; then',
+        *inner_lines,
+        "else",
+        '  echo "memory-fabric: hook skipped (ai-memory not found)" >&2',
+        "fi",
+        _HOOK_BLOCK_END,
+    ]
+    return "\n".join(lines)
+
+
+def _splice_hook_block(lines: list[str], block_lines: list[str]) -> tuple[list[str], bool]:
+    """Replace an existing marked block in-place; report whether one was found."""
+    out: list[str] = []
+    i = 0
+    replaced = False
+    while i < len(lines):
+        if lines[i].strip() == _HOOK_BLOCK_START and not replaced:
+            j = i + 1
+            while j < len(lines) and lines[j].strip() != _HOOK_BLOCK_END:
+                j += 1
+            out.extend(block_lines)
+            i = j + 1
+            replaced = True
+        else:
+            out.append(lines[i])
+            i += 1
+    return out, replaced
+
+
+def _install_hook_block(
+    hook_path: Path, comment: str, block: str, files_created: list[str]
+) -> None:
+    block_lines = block.splitlines()
+    if hook_path.exists():
+        original = hook_path.read_text(encoding="utf-8")
+        lines = [ln for ln in original.splitlines() if ln.strip() not in _LEGACY_HOOK_LINES]
+        lines, replaced = _splice_hook_block(lines, block_lines)
+        if not replaced:
+            if lines and lines[-1].strip():
+                lines.append("")
+            lines.extend(block_lines)
+        new_content = "\n".join(lines) + "\n"
+        if new_content != original:
+            hook_path.write_text(new_content, encoding="utf-8")
+            files_created.append(str(hook_path))
+    else:
+        hook_path.write_text(f"#!/bin/sh\n# {comment}\n{block}\n", encoding="utf-8")
+        files_created.append(str(hook_path))
 
 
 def initialize_memory_fabric(
@@ -118,61 +214,39 @@ def initialize_memory_fabric(
             hooks_dir = git_dir / "hooks"
             hooks_dir.mkdir(parents=True, exist_ok=True)
 
+            cli_bin, bin_warning = _resolve_cli_binary()
+            if bin_warning:
+                warnings.append(bin_warning)
+
             # Post-commit hook: passive capture (record the commit) then Dreaming
             # (consolidate + extract). Capture runs first so the just-made commit
             # is on disk as episodic memory before consolidation reads it.
             post_commit = hooks_dir / "post-commit"
-            capture_cmd = "ai-memory capture || true"
-            hook_cmd = "ai-memory dream --mode light --apply || true"
-            if post_commit.exists():
-                existing_content = post_commit.read_text(encoding="utf-8")
-                additions = [cmd for cmd in (capture_cmd, hook_cmd) if cmd not in existing_content]
-                if additions:
-                    separator = "\n" if existing_content.endswith("\n") else "\n\n"
-                    new_content = (
-                        existing_content
-                        + separator
-                        + "# Added by Memory Fabric installer\n"
-                        + "".join(f"{cmd}\n" for cmd in additions)
-                    )
-                    post_commit.write_text(new_content, encoding="utf-8")
-                    files_created.append(str(post_commit))
-            else:
-                hook_content = (
-                    "#!/bin/sh\n"
-                    "# Memory Fabric post-commit hook\n"
-                    'echo "Running Memory Fabric capture + Dreaming..."\n'
-                    f"{capture_cmd}\n"
-                    f"{hook_cmd}\n"
-                )
-                post_commit.write_text(hook_content, encoding="utf-8")
-                files_created.append(str(post_commit))
+            post_block = _build_hook_block(
+                cli_bin,
+                [
+                    '  echo "Running Memory Fabric capture + Dreaming..."',
+                    '  "$MEMORY_FABRIC_BIN" capture || echo "memory-fabric: capture failed (non-fatal)" >&2',
+                    '  "$MEMORY_FABRIC_BIN" dream --mode light --apply || echo "memory-fabric: dream failed (non-fatal)" >&2',
+                ],
+            )
+            _install_hook_block(
+                post_commit, "Memory Fabric post-commit hook", post_block, files_created
+            )
 
             # Pre-commit hook (Agent Rules Sync)
             pre_commit = hooks_dir / "pre-commit"
-            sync_cmd = "ai-memory sync-agents || true"
-            add_cmd = "git add .agents/rules/ .cursor/rules/memory-fabric.mdc .windsurf/rules/memory-fabric.md CLAUDE.md .github/copilot-instructions.md 2>/dev/null || true"
-            if pre_commit.exists():
-                existing_content = pre_commit.read_text(encoding="utf-8")
-                if sync_cmd not in existing_content:
-                    separator = "\n" if existing_content.endswith("\n") else "\n\n"
-                    new_content = (
-                        existing_content
-                        + separator
-                        + f"# Added by Memory Fabric installer\n{sync_cmd}\n{add_cmd}\n"
-                    )
-                    pre_commit.write_text(new_content, encoding="utf-8")
-                    files_created.append(str(pre_commit))
-            else:
-                hook_content = (
-                    "#!/bin/sh\n"
-                    "# Memory Fabric pre-commit hook\n"
-                    'echo "Syncing Memory Fabric Agent Rules..."\n'
-                    f"{sync_cmd}\n"
-                    f"{add_cmd}\n"
-                )
-                pre_commit.write_text(hook_content, encoding="utf-8")
-                files_created.append(str(pre_commit))
+            pre_block = _build_hook_block(
+                cli_bin,
+                [
+                    '  echo "Syncing Memory Fabric Agent Rules..."',
+                    '  "$MEMORY_FABRIC_BIN" sync-agents || echo "memory-fabric: sync-agents failed (non-fatal)" >&2',
+                    "  git add .agents/rules/ .cursor/rules/memory-fabric.mdc .windsurf/rules/memory-fabric.md CLAUDE.md .github/copilot-instructions.md 2>/dev/null || true",
+                ],
+            )
+            _install_hook_block(
+                pre_commit, "Memory Fabric pre-commit hook", pre_block, files_created
+            )
 
             if os.name != "nt":
                 try:
@@ -423,6 +497,8 @@ def doctor(cwd: str) -> DoctorResult:
             except Exception as exc:
                 errors.append(f"Failed to check memory-store index consistency: {exc}")
 
+    _check_hook_health(cwd, warnings)
+
     if not shutil.which("rg"):
         warnings.append("rg not found; keyword search will use Python fallback")
 
@@ -432,3 +508,40 @@ def doctor(cwd: str) -> DoctorResult:
         "warnings": warnings,
         "checked_files": checked_files,
     }
+
+
+def _check_hook_health(cwd: str, warnings: list[str]) -> None:
+    """Warn when installed Memory Fabric git hooks cannot resolve the CLI.
+
+    Resolves the binary the same way the hook script does (pinned path, then
+    PATH fallback) so a hook that would silently skip is surfaced here.
+    """
+    hooks_dir = project_root(cwd) / ".git" / "hooks"
+    if not hooks_dir.is_dir():
+        return
+    for name in ("pre-commit", "post-commit"):
+        hook = hooks_dir / name
+        if not hook.exists():
+            continue
+        try:
+            content = hook.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        if "memory-fabric" not in content and "Memory Fabric" not in content:
+            continue
+        pinned = re.search(r'^MEMORY_FABRIC_BIN="([^"]+)"', content, re.MULTILINE)
+        if pinned:
+            bin_path = pinned.group(1)
+            if Path(bin_path).exists() or shutil.which(bin_path) or shutil.which("ai-memory"):
+                continue
+            warnings.append(
+                f"Git hook `{name}` points at `{bin_path}`, which does not exist, and no "
+                "`ai-memory` fallback is on PATH — the hook is being skipped. Re-run "
+                "`ai-memory init --install-hooks` from the environment where memory-fabric is installed."
+            )
+        elif re.search(r"^\s*ai-memory ", content, re.MULTILINE) and not shutil.which("ai-memory"):
+            warnings.append(
+                f"Git hook `{name}` invokes `ai-memory` via PATH but it is not on PATH — the hook "
+                "fails silently on every commit. Re-run `ai-memory init --install-hooks` to pin "
+                "the absolute CLI path."
+            )
