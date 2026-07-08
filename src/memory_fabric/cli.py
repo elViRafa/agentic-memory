@@ -469,7 +469,12 @@ def build_parser() -> argparse.ArgumentParser:
     store_write.add_argument("--content", required=True, help="Content to write")
     store_write.add_argument("--title", default="", help="Title for the memory")
     store_write.add_argument("--tags", default="", help="Comma-separated tags")
-    store_write.add_argument("--priority", choices=["high", "medium", "low"], default="medium")
+    store_write.add_argument(
+        "--priority",
+        choices=["high", "medium", "low"],
+        default=None,
+        help="Omit to keep the existing file's priority (new files default to medium)",
+    )
     store_write.add_argument("--mode", choices=["replace", "append"], default="replace")
 
     store_read = store_subs.add_parser("read", help="Read a store file")

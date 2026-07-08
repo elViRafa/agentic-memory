@@ -393,13 +393,16 @@ if FastMCP is not None:
         content: str,
         title: str = "",
         tags: str = "",
-        priority: str = "medium",
+        priority: str = "",
         mode: str = "replace",
         evidence: str = "",
     ) -> StoreWriteResult:
         """Write a memory file to a semantic store path (e.g. 'architecture/decisions/auth-service').
 
         Args:
+            priority: ``high``/``medium``/``low``. Leave empty to keep the
+                      existing file's priority (new files default to medium) —
+                      an append that omits it no longer resets the field.
             evidence: Optional comma-separated citation refs this memory depends
                       on, e.g. ``"src/auth.py:42,commit:abc1234"``. When set,
                       `ai-memory verify` (or the eval's metadata_quality check)
@@ -416,7 +419,7 @@ if FastMCP is not None:
             content=content,
             title=title,
             tags=tag_list,
-            priority=priority,
+            priority=priority or None,
             mode=mode,  # type: ignore[arg-type]
             evidence=evidence_list,
         )

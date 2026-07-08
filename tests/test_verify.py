@@ -134,6 +134,66 @@ class VerifyEvidenceTests(unittest.TestCase):
             self.assertEqual(len(result["broken"][0]["problems"]), 1)
             self.assertIn("0000000", result["broken"][0]["problems"][0])
 
+    def test_verify_clears_marker_when_evidence_resolves_again(self) -> None:
+        """P-14: a passing verify removes review_status: broken-evidence."""
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            write_memory_store(
+                temp, "schemas/flaky", "Cites a file that appears later.",
+                title="Flaky", evidence=["late.py"],
+            )
+            first = verify_evidence(temp)
+            self.assertFalse(first["ok"])
+
+            (Path(temp) / "late.py").write_text("x = 1\n", encoding="utf-8")
+            second = verify_evidence(temp)
+            self.assertTrue(second["ok"])
+            self.assertIn("store/schemas/flaky", second["cleared"])
+
+            store_file = Path(temp) / ".ai-memory" / "memory-store" / "schemas" / "flaky.md"
+            metadata, _ = parse_frontmatter(store_file.read_text(encoding="utf-8"))
+            self.assertNotIn("review_status", metadata)
+
+    def test_replace_then_verify_full_cycle_leaves_no_marker(self) -> None:
+        """P-14 end-to-end, exactly as the real-world test campaign ran it."""
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            (Path(temp) / "models.py").write_text("class Task:\n    pass\n", encoding="utf-8")
+            write_memory_store(
+                temp, "schemas/broken-evidence-test", "Cites a ghost.",
+                title="Broken", evidence=["nonexistent_file.py:999"], mode="replace",
+            )
+            verify_evidence(temp)
+
+            store_file = (
+                Path(temp) / ".ai-memory" / "memory-store" / "schemas" / "broken-evidence-test.md"
+            )
+            metadata, _ = parse_frontmatter(store_file.read_text(encoding="utf-8"))
+            self.assertEqual(metadata.get("review_status"), "broken-evidence")
+
+            write_memory_store(
+                temp, "schemas/broken-evidence-test", "Cites the real model.",
+                title="Fixed", evidence=["models.py:1"], mode="replace",
+            )
+            result = verify_evidence(temp)
+            self.assertTrue(result["ok"])
+            metadata, _ = parse_frontmatter(store_file.read_text(encoding="utf-8"))
+            self.assertNotIn("review_status", metadata)
+
+    def test_verify_clears_marker_when_evidence_removed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            write_memory_store(
+                temp, "schemas/dropped", "x", title="Dropped", evidence=["gone.py"]
+            )
+            verify_evidence(temp)
+
+            # Rewrite without evidence at all — marker must not stick around.
+            write_memory_store(temp, "schemas/dropped", "no more citations", mode="replace")
+            store_file = Path(temp) / ".ai-memory" / "memory-store" / "schemas" / "dropped.md"
+            metadata, _ = parse_frontmatter(store_file.read_text(encoding="utf-8"))
+            self.assertNotIn("review_status", metadata)
+
     def test_eval_flags_broken_evidence_without_mutating_file(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             initialize_memory_fabric(temp)

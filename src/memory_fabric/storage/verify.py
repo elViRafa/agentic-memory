@@ -84,11 +84,13 @@ def verify_evidence(
 ) -> dict[str, Any]:
     """Check every memory file's ``evidence`` refs against the current tree.
 
-    Returns ``{"checked_files", "broken", "marked_broken", "ok", "warnings"}``.
-    ``broken`` is a list of ``{"key", "path", "problems"}``. When
-    ``mark_broken`` is True (the default for the explicit ``ai-memory verify``
-    command; eval calls this with False to stay read-only), broken files get
-    ``review_status: broken-evidence`` stamped in place.
+    Returns ``{"checked_files", "broken", "marked_broken", "cleared", "ok",
+    "warnings"}``. ``broken`` is a list of ``{"key", "path", "problems"}``.
+    When ``mark_broken`` is True (the default for the explicit ``ai-memory
+    verify`` command; eval calls this with False to stay read-only), broken
+    files get ``review_status: broken-evidence`` stamped in place — and files
+    whose evidence checks out again (or was removed) get the stale marker
+    removed, reported under ``cleared``.
 
     ``memory_dir`` defaults to the live ``.ai-memory/`` but can point at a
     snapshot copy (e.g. when scoring a Dreaming snapshot) — evidence refs are
@@ -100,6 +102,7 @@ def verify_evidence(
     checked = 0
     broken: list[dict[str, Any]] = []
     marked: list[str] = []
+    cleared: list[str] = []
     warnings: list[str] = []
 
     for path in _iter_markdown_files(memory_dir):
@@ -111,8 +114,14 @@ def verify_evidence(
             warnings.append(f"{path}: {exc}")
             continue
 
+        was_marked = metadata.get("review_status") == "broken-evidence"
         evidence = metadata.get("evidence")
         if not evidence or not isinstance(evidence, list):
+            if was_marked and mark_broken:
+                # The evidence refs are gone; the stale marker points at nothing.
+                metadata.pop("review_status", None)
+                path.write_text(dump_frontmatter(metadata, body), encoding="utf-8")
+                cleared.append(_get_section_key(memory_dir, path))
             continue
         checked += 1
 
@@ -131,15 +140,20 @@ def verify_evidence(
         if problems:
             key = _get_section_key(memory_dir, path)
             broken.append({"key": key, "path": str(path), "problems": problems})
-            if mark_broken and metadata.get("review_status") != "broken-evidence":
+            if mark_broken and not was_marked:
                 metadata["review_status"] = "broken-evidence"
                 path.write_text(dump_frontmatter(metadata, body), encoding="utf-8")
                 marked.append(key)
+        elif was_marked and mark_broken:
+            metadata.pop("review_status", None)
+            path.write_text(dump_frontmatter(metadata, body), encoding="utf-8")
+            cleared.append(_get_section_key(memory_dir, path))
 
     return {
         "checked_files": checked,
         "broken": broken,
         "marked_broken": marked,
+        "cleared": cleared,
         "ok": not broken,
         "warnings": warnings,
     }

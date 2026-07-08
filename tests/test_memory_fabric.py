@@ -1285,6 +1285,60 @@ class MemoryStoreTests(unittest.TestCase):
             self.assertEqual(metadata["priority"], "high")
             self.assertIn("Use JWT", body)
 
+    def test_store_append_without_priority_preserves_existing(self) -> None:
+        """P-08: frontmatter fields omitted on append inherit from the file."""
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            write_memory_store(
+                temp,
+                store_path="architecture/decisions/task-due-dates",
+                content="Due dates are ISO 8601 strings.",
+                priority="high",
+                tags=["schema", "taskmaster", "due-date"],
+                mode="replace",
+            )
+            write_memory_store(
+                temp,
+                store_path="architecture/decisions/task-due-dates",
+                content="Follow-up: overdue checks compare date objects.",
+                mode="append",
+            )
+
+            res = read_memory_store(temp, "architecture/decisions/task-due-dates")
+            self.assertEqual(res["metadata"].get("priority"), "high")
+            self.assertEqual(res["metadata"].get("tags"), ["schema", "taskmaster", "due-date"])
+            self.assertIn("Follow-up", res["text"])
+
+    def test_store_new_file_without_priority_defaults_to_medium(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            result = write_memory_store(temp, "debt/no-priority", "A note.")
+            metadata, _ = parse_frontmatter(Path(result["path"]).read_text(encoding="utf-8"))
+            self.assertEqual(metadata.get("priority"), "medium")
+
+    def test_store_replace_clears_derived_review_status(self) -> None:
+        """P-14 (write side): replace drops derived state like review_status."""
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            result = write_memory_store(temp, "schemas/rewrite-me", "Old content.")
+            path = Path(result["path"])
+            metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+            metadata["review_status"] = "broken-evidence"
+            from memory_fabric.frontmatter import dump_frontmatter
+
+            path.write_text(dump_frontmatter(metadata, body), encoding="utf-8")
+
+            write_memory_store(temp, "schemas/rewrite-me", "New content.", mode="replace")
+            metadata, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
+            self.assertNotIn("review_status", metadata)
+
+            # append keeps derived state untouched
+            metadata["review_status"] = "stale"
+            path.write_text(dump_frontmatter(metadata, _), encoding="utf-8")
+            write_memory_store(temp, "schemas/rewrite-me", "More.", mode="append")
+            metadata, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
+            self.assertEqual(metadata.get("review_status"), "stale")
+
     def test_store_write_redacts_secrets(self) -> None:
         from memory_fabric.storage import write_memory_store
 

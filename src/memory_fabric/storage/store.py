@@ -31,13 +31,16 @@ def write_memory_store(
     content: str,
     title: str = "",
     tags: list[str] | None = None,
-    priority: str = "medium",
+    priority: str | None = None,
     mode: WriteMode = "replace",
     evidence: list[str] | None = None,
 ) -> StoreWriteResult:
     """Write a memory file to a semantic store path.
 
     Args:
+        priority: ``high``/``medium``/``low``. When omitted, an existing file
+                  keeps its current priority (same contract as ``tags`` and
+                  ``title``); new files default to ``medium``.
         evidence: Optional list of citation refs this memory depends on, e.g.
                   ``"src/auth.py"``, ``"src/auth.py:42"``, or ``"commit:<hash>"``.
                   ``ai-memory verify`` checks these still resolve and flags the
@@ -46,7 +49,7 @@ def write_memory_store(
     """
     if mode not in {"append", "replace"}:
         raise ValueError("mode must be 'append' or 'replace'")
-    if priority not in {"high", "medium", "low"}:
+    if priority is not None and priority not in {"high", "medium", "low"}:
         raise ValueError("priority must be 'high', 'medium', or 'low'")
 
     path = _resolve_store_file(cwd, store_path)
@@ -55,13 +58,17 @@ def write_memory_store(
     with locked_file(path):
         if path.exists():
             metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+            if mode == "replace":
+                # `review_status` is derived state (stamped by verify/dream);
+                # a full rewrite starts clean unless the caller re-supplies it.
+                metadata.pop("review_status", None)
         else:
             display_title = title or store_path.split("/")[-1].replace("-", " ").title()
             metadata = {
                 "store_path": store_path,
                 "title": display_title,
                 "summary": f"Memory: {display_title}.",
-                "priority": priority,
+                "priority": priority or "medium",
                 "tags": tags or [],
                 "schema_version": "1.3",
             }
@@ -91,8 +98,9 @@ def write_memory_store(
             metadata["title"] = title
         if tags is not None:
             metadata["tags"] = tags
-        if priority:
+        if priority is not None:
             metadata["priority"] = priority
+        metadata.setdefault("priority", "medium")
         if evidence is not None:
             metadata["evidence"] = evidence
 
