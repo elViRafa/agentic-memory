@@ -17,6 +17,16 @@ Memory is stored as human-readable Markdown with YAML frontmatter. No vector dat
 - **MCP-native**: exposes memory tools through the standard Model Context Protocol
 - **File-first**: Markdown files are the source of truth, inspectable and commit-ready
 - **Local-first**: core reads and writes work offline
+- **Store-first**: facts live in `memory-store/`, one per file; root maps (`architecture.md`,
+  `decisions.md`, ...) are generated views rebuilt by Dreaming, never hand-written
+- **Captures itself**: every git commit is recorded as episodic memory automatically —
+  no agent cooperation required — via an opt-in post-commit hook
+- **Git-native merge**: an optional custom merge driver lets two branches' memory merge
+  as cleanly as their code, instead of conflicting on a shared timestamp line
+- **Self-verifying**: memories can cite the file/line/commit they depend on; `ai-memory verify`
+  flags citations that rotted
+- **Learns from failure**: `write_failure_memory_tool` deduplicates repeat occurrences of
+  the same error into one growing record instead of scattering near-duplicates
 - **Secret-safe**: API keys and credentials are redacted before writing
 - **Token-budget aware**: assembles context within limits; never slices files mid-document
 - **Quality eval**: scores memory usefulness and Dreaming before/after results locally
@@ -27,8 +37,9 @@ Memory is stored as human-readable Markdown with YAML frontmatter. No vector dat
 
 ## Status
 
-**v0.5.0 — [live on PyPI](https://pypi.org/project/memory-fabric/).**
-Core CLI and MCP tools work end-to-end.
+**v0.7.0 — [live on PyPI](https://pypi.org/project/memory-fabric/).**
+Core CLI and MCP tools work end-to-end. See [`ROADMAP.md`](ROADMAP.md) for what shipped,
+what's in progress, and what's next.
 
 ---
 
@@ -218,10 +229,12 @@ entry, leaving everything else in the file untouched.
 | `apply_dream_results_tool` | Apply LLM consolidated JSON output to candidate snapshot and save changes |
 | `evaluate_memory_fabric_tool` | Evaluate local memory quality |
 | `evaluate_dream_quality_tool` | Evaluate a Dreaming run against a snapshot |
-| `write_memory_store_tool` | Write a memory file to a semantic store path (e.g. `architecture/decisions/auth`) |
+| `write_memory_store_tool` | Write a memory file to a semantic store path (e.g. `architecture/decisions/auth`); accepts an optional `evidence` citation list |
 | `read_memory_store_tool` | Read a single memory-store file by its semantic path |
 | `list_memory_store_tool` | List files in the memory store, optionally filtered by prefix/tags |
 | `delete_memory_store_tool` | Remove a memory-store file by its semantic path |
+| `write_session_journal_tool` | Append a timestamped session journal entry (episodic memory) |
+| `write_failure_memory_tool` | Record an error → fix pair; repeat occurrences of the same error accumulate onto one entry |
 
 ---
 
@@ -275,35 +288,126 @@ You can use a single installed instance of Memory Fabric across all your coding 
 
 ## Project Memory Layout
 
+Memory Fabric is **store-first**: `memory-store/` is the only place agents write facts by
+hand, one fact per file. The root map files (`architecture.md`, `decisions.md`, `debt.md`,
+`schemas.md`, `index.md`) are **generated views** rebuilt by Dreaming from their matching
+`memory-store/<category>/` subtree — never edit them directly, they carry `generated: true`
+frontmatter and a hand edit gets folded back into the store for review on the next Dream.
+Two sections are the exception: `framework-rules.md` and `ubiquitous-language.md` are
+hand-curated **steering** directives (`role: steering`), always loaded into context in
+full, never generated and never evicted by the token budget.
+
 ```text
 .ai-memory/
-|-- index.md
-|-- architecture.md
-|-- schemas.md
-|-- decisions.md
-|-- debt.md
-|-- ubiquitous-language.md
-|-- framework-rules.md
+|-- index.md                  # generated discovery index
+|-- architecture.md           # generated map of memory-store/architecture/
+|-- schemas.md                # generated map of memory-store/schemas/
+|-- decisions.md              # generated map of memory-store/decisions/
+|-- debt.md                   # generated map of memory-store/debt/
+|-- ubiquitous-language.md    # hand-curated steering directive (always loaded)
+|-- framework-rules.md        # hand-curated steering directive (always loaded)
+|-- memory-store/             # the source of truth — one fact per file
+|   |-- index.md              # generated store-wide index
+|   |-- architecture/...
+|   |-- decisions/...
+|   |-- debt/...
+|   |-- schemas/...
+|   |-- failures/<slug>.md    # error -> fix pairs, deduplicated by normalized signature
+|   |-- episodic/<date>.md    # agent-written session journals
+|   `-- episodic/commits/<date>.md  # passively captured commits (source: passive-capture)
 |-- evals/       # ignored local quality reports
 |-- snapshots/   # ignored rollback baselines
-|-- private/     # ignored personal notes
+|-- private/     # ignored personal notes + session markers
 `-- .gitignore
 ```
 
-All shared memory files use YAML frontmatter:
+All memory files use YAML frontmatter:
 
 ```markdown
 ---
-section: architecture
+store_path: architecture/decisions/auth-service
 summary: "One-line fallback used when the file exceeds the token budget."
 priority: high
 tags: [api, auth]
 schema_version: "1.3"
 last_updated: 2026-06-01T12:00:00-04:00
+evidence: [src/auth.py:42, "commit:abc1234"]
 ---
 
 Your memory content here.
 ```
+
+The optional `evidence` field lets a memory cite what it depends on — a file, a
+`file:line`, or a `commit:<hash>`. Run `ai-memory verify` to check those citations still
+resolve; a memory citing a file that was renamed or deleted gets flagged instead of
+quietly rotting.
+
+---
+
+## Capture Reliability
+
+Agent instruction files get an agent to *read* memory reliably at session start, but
+writes are less consistent — a long session can compress away the instructions, and some
+clients never load a rules file at all. Two mechanisms close that gap without depending
+on any agent's cooperation:
+
+**Passive capture.** With `ai-memory init --install-hooks`, every commit is recorded as
+episodic memory automatically:
+
+```sh
+ai-memory capture              # capture HEAD (this is what the post-commit hook runs)
+ai-memory capture --commit abc1234
+```
+
+Each capture writes to `memory-store/episodic/commits/<date>.md` with
+`source: passive-capture` and `review_status: pending` frontmatter — reviewable, and
+distinct from agent-written journal entries. It's idempotent per commit hash, needs no
+LLM, and is the raw material the next `ai-memory dream` consolidates or extracts facts
+from.
+
+**Session-end enforcement.** `ai-memory session-start` marks when a session began;
+`ai-memory guard-journal` exits non-zero if `write_session_journal_tool` hasn't been
+called since — the primitive a client's Stop hook can use to actually enforce "journal
+before you finish," instead of just asking nicely in a rules file. `ai-memory status`
+reports local capture stats (last journal, commit captures, memories written in the last
+7 days) so you can see whether capture is actually happening.
+
+**Failure memory.** The highest-signal category for a coding agent — "I hit this exact
+error before, here's what fixed it":
+
+```sh
+ai-memory failure --error "KeyError: 'user_id' in handlers.py:12" --fix "Added a default value."
+```
+
+The error text is normalized (paths and line numbers stripped) into a stable signature,
+so a repeat of the *same kind* of error accumulates onto one growing
+`memory-store/failures/<slug>.md` entry — with an `occurrences` counter — instead of
+scattering into near-duplicate files.
+
+---
+
+## Git-Native Trust
+
+Two capabilities that only exist because memory lives in the same git repo as the code
+it describes — no vector-database or cloud memory product can offer either.
+
+**Semantic merge driver.** Two branches that each append new facts to the same store file
+used to conflict on the shared `last_updated` line even when the actual content additions
+never overlapped. `ai-memory init --merge-driver` registers a custom driver that merges
+pure-append changes cleanly (reconciling frontmatter: tags union, the more urgent
+priority wins, the later timestamp wins) and falls back to git's own textual merge for
+anything it can't safely resolve — never worse than not having it installed.
+
+```sh
+ai-memory init --merge-driver
+```
+
+This writes `.ai-memory/**/*.md merge=memory-fabric` to `.gitattributes` (committed and
+shared) and registers the driver command in local `git config` (per-clone by git's own
+design — re-run this after every fresh clone, or have teammates run it once).
+
+**Self-verifying citations.** See the `evidence` field above — `ai-memory verify` is the
+command that checks citations still resolve and flags the ones that don't.
 
 ---
 
@@ -327,14 +431,21 @@ Developer-level preferences that apply across all projects are stored at:
 ai-memory [--cwd <path>] [--json] [--debug-llm] <command>
 
 Commands:
-  init            Create .ai-memory/ scaffolding
-  status          Show memory status
+  init            Create .ai-memory/ scaffolding (--install-hooks, --merge-driver)
+  status          Show memory status and capture stats
   doctor          Validate memory files and environment
+  verify          Check evidence citations still resolve (--no-mark for a read-only report)
+  failure         Record an error -> fix pair (--error, --fix, --tags)
+  merge-driver    Git merge driver backend (invoked by git itself, not for direct use)
+  capture         Record a commit as episodic memory (--commit, default HEAD)
+  session-start   Mark session start (for client SessionStart hooks)
+  guard-journal   Exit non-zero if no session journal was written (for client Stop hooks)
   install         Configure an MCP client to use memory-fabric (--client <name|all>)
   eval            Score memory quality or Dreaming quality
   dream           Run memory maintenance (--mode light|deep)
   query           Search memory
   store           CRUD operations on semantic memory store
+  sync-agents     Regenerate agent instruction files from canonical templates
   sync-global     Preview local-to-global promotions
   rollback        Restore from a snapshot
 ```

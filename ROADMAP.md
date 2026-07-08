@@ -166,14 +166,26 @@ context assembly (`>= 3` filter against the 0–2 priority scale).
 - [x] `ai-memory eval`: `section_coverage` rescored to store-structure coverage +
       generated-map freshness via `store_fingerprint` (a stale generated map fails).
 
-### 4.2 v0.7 — migration tooling
+### 4.2 v0.8 — migration tooling
 
+**Relabeled 2026-07-07**: this milestone was originally called "v0.7" but the actual
+v0.7.0 release shipped Phase 3 (capture reliability) + Phase 3.5 (git-native trust)
+instead — those were higher-leverage and didn't block on this. Migration tooling moves to
+v0.8, still unbuilt.
+
+- [x] Starter templates already produce generated-map placeholders (`generated: true`,
+      `role: steering`), not writable sections — this fell out of 4.1's work in
+      `templates.py`, ahead of schedule.
+- [x] README "Project Memory Layout" rewritten to describe the store-first model
+      (`memory-store/` as source of truth, generated maps, steering sections, `evidence`
+      citations, capture reliability, git-native trust). Done 2026-07-07.
 - [ ] `ai-memory migrate`: split legacy hand-written sections into store entries
       (LLM-assisted when configured; heading-based heuristic fallback). Snapshot first,
       `--dry-run` prints the full plan, rollback restores the snapshot.
-- [ ] `ai-memory init` scaffolds store categories + generated maps, not writable sections.
-- [ ] README "Project Memory Layout" + starter templates rewritten; migration guide in
-      CHANGELOG.
+- [ ] `ai-memory init` pre-scaffolds empty store category directories (`memory-store/`
+      currently only gets a `.gitkeep`; categories are created lazily on first write).
+- [ ] Migration guide in `CHANGELOG.md` (the repo has no changelog yet — needs to exist
+      before this can point to it; see Phase 6 community-hygiene item).
 - [ ] Run the migration on this repo's own `.ai-memory/` and record before/after eval
       scores as the reference case.
 
@@ -397,17 +409,19 @@ Claims without numbers don't win "best in the world."
 1. **Phase 1.1 PyPI publish** — small effort, unblocks every install story. Do first.
 2. **Phase 0 CI + module split** — in parallel; must be green before launch.
 3. **Phase 1.2–1.5 install command + registry + badges + MCPB** — the "everywhere" ask.
-4. **Phase 2 store-first memory model (v0.6–v0.7)** — the breaking model change and its
-   migration tooling must land **before** v1.0's stability promise, not after it. (v0.6
-   shipped 2026-07-07.)
-5. **Phase 3.1 passive capture + Phase 3.5 git-native trust** — independent of the v1.0
-   gate and demo brilliantly ("commit, and the project brain updates itself"; "two
+4. **Phase 2 store-first memory model (v0.6)** — the breaking model change itself;
+   migration tooling (v0.8) must still land **before** v1.0's stability promise, not
+   after it. (v0.6 shipped 2026-07-06.)
+5. **Phase 3.1 passive capture + Phase 3.5 git-native trust (v0.7)** — independent of the
+   v1.0 gate and demo brilliantly ("commit, and the project brain updates itself"; "two
    branches merge their memory as cleanly as their code"); strong launch material.
-   (Both shipped 2026-07-07.)
-6. **Launch v1.0** (Phase 6 demo + announcements) on the strength of distribution and
+   (v0.7 shipped 2026-07-07.)
+6. **Phase 2.2 migration tooling (v0.8)** — still unbuilt; the last v1.0 blocker left
+   from Phase 2. Do this before item 7.
+7. **Launch v1.0** (Phase 6 demo + announcements) on the strength of distribution and
    the clean store-first model.
-7. **Phase 3.2–3.3 client-hook enforcement + capture stats** — post-launch, guided by
+8. **Phase 3.2–3.3 client-hook enforcement + capture stats** — post-launch, guided by
    which clients real users actually run.
-8. **Phase 4 retrieval quality** — you can only rank what was captured; capture first.
-9. **Phase 5 benchmarks** — publish numbers; the coding-memory benchmark is the moat,
-   and it doubles as the proof for Phase 3's capture-rate claim.
+9. **Phase 4 retrieval quality** — you can only rank what was captured; capture first.
+10. **Phase 5 benchmarks** — publish numbers; the coding-memory benchmark is the moat,
+    and it doubles as the proof for Phase 3's capture-rate claim.
