@@ -1546,6 +1546,17 @@ class MemoryStoreTests(unittest.TestCase):
                 any("Contradiction detected: Simulated contradiction" in w for w in res["warnings"])
             )
 
+            # P-13 regression: apply without evaluation must survive the same
+            # pydantic validation FastMCP applies to the tool result.
+            try:
+                from pydantic import TypeAdapter
+
+                from memory_fabric.contracts import DreamResult
+
+                TypeAdapter(DreamResult).validate_python(res)
+            except ImportError:
+                pass
+
             # Verify the store file content is updated
             notes_path = Path(temp) / ".ai-memory" / "memory-store" / "architecture" / "notes.md"
             metadata, body = parse_frontmatter(notes_path.read_text(encoding="utf-8"))

@@ -1,6 +1,13 @@
-"""Typed result contracts for Memory Fabric public APIs."""
+"""Typed result contracts for Memory Fabric public APIs.
 
-from __future__ import annotations
+NOTE: this module must NOT use `from __future__ import annotations`. PEP 563
+stringifies annotations, and the TypedDict metaclass cannot see `NotRequired[...]`
+inside a string annotation — every key silently lands in `__required_keys__`,
+and pydantic (via the `mcp` extra) then rejects tool results that legitimately
+omit optional keys (e.g. `DreamResult` without `evaluation`). Classes are
+ordered so no forward references are needed; `tests/test_contracts.py` guards
+the required/optional key split.
+"""
 
 import sys
 from typing import Any, Literal
@@ -152,33 +159,18 @@ class StatusResult(TypedDict):
     capture: NotRequired[dict[str, Any]]
 
 
-class DreamResult(TypedDict):
-    changed: bool
-    snapshot: str | None
-    warnings: list[str]
-    checked_files: list[str]
-    candidate_store: str
-    patch_preview: str
-    affected_files: list[str]
-    consolidation: "DreamConsolidation"
-    rewrite_tasks: list["DreamRewriteTask"]
-    apply_required: bool
-    redactions: int
-    evaluation: NotRequired["DreamEvalResult"]
-
-
-class DreamConsolidation(TypedDict):
-    duplicates_found: int
-    lines_removed: int
-    files_touched: list[str]
-
-
 class MapsRegenResult(TypedDict):
     """Result of regenerating root map sections from the memory-store tree."""
 
     maps_written: list[str]
     legacy_folded: list[str]
     warnings: list[str]
+
+
+class DreamConsolidation(TypedDict):
+    duplicates_found: int
+    lines_removed: int
+    files_touched: list[str]
 
 
 class DreamRewriteTask(TypedDict):
@@ -237,3 +229,18 @@ class DreamEvalResult(TypedDict):
     report_paths: list[str]
     warnings: list[str]
     llm_notes: list[str]
+
+
+class DreamResult(TypedDict):
+    changed: bool
+    snapshot: str | None
+    warnings: list[str]
+    checked_files: list[str]
+    candidate_store: str
+    patch_preview: str
+    affected_files: list[str]
+    consolidation: DreamConsolidation
+    rewrite_tasks: list[DreamRewriteTask]
+    apply_required: bool
+    redactions: int
+    evaluation: NotRequired[DreamEvalResult]
