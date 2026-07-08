@@ -457,6 +457,46 @@ class MemoryFabricTests(unittest.TestCase):
                 any("post-commit" in w and "does not exist" in w for w in res["warnings"])
             )
 
+    def test_doctor_warns_on_path_installation_drift(self) -> None:
+        """P-01: a different `ai-memory` shadowing this one on PATH is surfaced."""
+        from memory_fabric.storage.lifecycle import _check_install_drift
+
+        warnings: list[str] = []
+        with mock.patch(
+            "memory_fabric.storage.lifecycle.shutil.which",
+            return_value=r"C:\somewhere-else\Scripts\ai-memory.exe",
+        ):
+            _check_install_drift(warnings)
+        self.assertTrue(any("different installation" in w for w in warnings))
+
+        clean: list[str] = []
+        with mock.patch("memory_fabric.storage.lifecycle.shutil.which", return_value=None):
+            _check_install_drift(clean)
+        self.assertEqual(clean, [])
+
+    def test_pypi_drift_check_warns_and_is_silent_offline(self) -> None:
+        from memory_fabric.storage.lifecycle import _check_pypi_drift
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self):
+                return b'{"info": {"version": "99.0.0"}}'
+
+        warnings: list[str] = []
+        with mock.patch("urllib.request.urlopen", return_value=FakeResponse()):
+            _check_pypi_drift(warnings)
+        self.assertTrue(any("99.0.0" in w for w in warnings))
+
+        offline: list[str] = []
+        with mock.patch("urllib.request.urlopen", side_effect=OSError("no network")):
+            _check_pypi_drift(offline)
+        self.assertEqual(offline, [])
+
     def test_init_install_hooks_without_git_emits_warning(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             result = initialize_memory_fabric(temp, install_hooks=True)

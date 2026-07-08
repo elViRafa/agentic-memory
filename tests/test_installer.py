@@ -277,9 +277,12 @@ class TomlEngineTests(unittest.TestCase):
 
 class ClaudeCodeCliTests(unittest.TestCase):
     def test_claude_on_path_invokes_expected_argv(self) -> None:
+        from memory_fabric.version import __version__
+
         with (
             tempfile.TemporaryDirectory() as temp,
             mock.patch("memory_fabric.installer.shutil.which", return_value="/usr/bin/claude"),
+            mock.patch("memory_fabric.clients.local_server_binary", return_value=None),
             mock.patch("memory_fabric.installer.subprocess.run") as mock_run,
         ):
             mock_run.return_value = mock.Mock(returncode=0, stdout="", stderr="")
@@ -300,7 +303,7 @@ class ClaudeCodeCliTests(unittest.TestCase):
                     "--",
                     "uvx",
                     "--from",
-                    "memory-fabric[mcp]",
+                    f"memory-fabric[mcp]=={__version__}",
                     "memory-fabric-mcp",
                 ],
             )
@@ -308,6 +311,39 @@ class ClaudeCodeCliTests(unittest.TestCase):
             self.assertNotIn("shell", kwargs)
             self.assertEqual(kwargs["timeout"], 15.0)
             self.assertFalse(kwargs["check"])
+
+    def test_install_json_prefers_local_binary_and_notes_choice(self) -> None:
+        """P-02: install from a venv writes that venv's server, not uvx."""
+        import json as _json
+
+        fake = Path(tempfile.gettempdir()) / "memory-fabric-mcp.exe"
+        with (
+            tempfile.TemporaryDirectory() as temp,
+            mock.patch("memory_fabric.clients.local_server_binary", return_value=fake),
+        ):
+            result = install(temp, "cursor", project=True)
+            self.assertTrue(result["ok"])
+            config = _json.loads(
+                (Path(temp) / ".cursor" / "mcp.json").read_text(encoding="utf-8")
+            )
+            entry = config["mcpServers"]["memory-fabric"]
+            self.assertEqual(entry["command"], str(fake))
+            self.assertTrue(any("local binary" in w for w in result["warnings"]))
+
+    def test_install_server_command_flag_is_respected(self) -> None:
+        import json as _json
+
+        with tempfile.TemporaryDirectory() as temp:
+            result = install(
+                temp, "cursor", project=True, server_command="C:/custom/server.exe --debug"
+            )
+            self.assertTrue(result["ok"])
+            config = _json.loads(
+                (Path(temp) / ".cursor" / "mcp.json").read_text(encoding="utf-8")
+            )
+            entry = config["mcpServers"]["memory-fabric"]
+            self.assertEqual(entry["command"], "C:/custom/server.exe")
+            self.assertEqual(entry["args"], ["--debug"])
 
     def test_nonzero_return_code_is_not_ok_but_does_not_raise(self) -> None:
         with (

@@ -380,7 +380,7 @@ def status(cwd: str) -> StatusResult:
     }
 
 
-def doctor(cwd: str) -> DoctorResult:
+def doctor(cwd: str, check_pypi: bool = False) -> DoctorResult:
     memory_dir = local_memory_dir(cwd)
     errors: list[str] = []
     warnings: list[str] = []
@@ -510,6 +510,9 @@ def doctor(cwd: str) -> DoctorResult:
                 errors.append(f"Failed to check memory-store index consistency: {exc}")
 
     _check_hook_health(cwd, warnings)
+    _check_install_drift(warnings)
+    if check_pypi:
+        _check_pypi_drift(warnings)
 
     if not shutil.which("rg"):
         warnings.append("rg not found; keyword search will use Python fallback")
@@ -520,6 +523,54 @@ def doctor(cwd: str) -> DoctorResult:
         "warnings": warnings,
         "checked_files": checked_files,
     }
+
+
+def _check_install_drift(warnings: list[str]) -> None:
+    """Warn when a bare `ai-memory` on PATH is a different installation.
+
+    The tested machine had three coexisting copies (0.3.0 global on PATH,
+    0.5.0 in the uvx cache, 0.7.0 in the project venv) with no signal — old
+    hooks or other shells silently ran a stale version.
+    """
+    on_path = shutil.which("ai-memory")
+    if not on_path:
+        return
+    try:
+        path_dir = Path(on_path).resolve().parent
+        running_dir = Path(sys.executable).resolve().parent
+    except OSError:
+        return
+    if path_dir != running_dir:
+        warnings.append(
+            f"`ai-memory` on PATH resolves to `{on_path}`, a different installation than the one "
+            f"running this command (`{running_dir}`). Bare `ai-memory` invocations (old git hooks, "
+            "other shells) may silently use a stale version."
+        )
+
+
+def _check_pypi_drift(warnings: list[str]) -> None:
+    """Best-effort comparison of the local version against the latest on PyPI.
+
+    Network access is opt-in (`ai-memory doctor` passes check_pypi=True); any
+    failure — offline, timeout, proxy — is silent by design.
+    """
+    try:
+        import json as _json
+        import urllib.request
+
+        with urllib.request.urlopen(
+            "https://pypi.org/pypi/memory-fabric/json", timeout=2.0
+        ) as response:
+            data = _json.load(response)
+        latest = str(data.get("info", {}).get("version") or "")
+    except Exception:
+        return
+    if latest and latest != __version__:
+        warnings.append(
+            f"Installed memory-fabric is {__version__} but PyPI's latest is {latest}. If your MCP "
+            "client was configured via uvx, its cached server may be even older — re-run "
+            "`ai-memory install` after upgrading (or `uv cache clean memory-fabric`)."
+        )
 
 
 def _check_hook_health(cwd: str, warnings: list[str]) -> None:

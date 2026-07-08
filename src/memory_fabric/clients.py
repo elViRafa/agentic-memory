@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import os
 import platform
+import shlex
 import shutil
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Literal, Mapping
 
+from memory_fabric.version import __version__
 
 PACKAGE_SPEC = "memory-fabric[mcp]"
 ENTRY_POINT = "memory-fabric-mcp"
@@ -30,12 +33,63 @@ def uv_available() -> bool:
     return shutil.which("uv") is not None
 
 
-def build_entry(use_uvx: bool) -> dict[str, Any]:
-    """Canonical server entry: uvx by default, resolved-executable fallback otherwise."""
+def local_server_binary() -> Path | None:
+    """The memory-fabric-mcp executable installed next to the running interpreter.
+
+    When present it is the exact version the user just ran ``ai-memory install``
+    from (venv, pipx, or editable install) — preferring it keeps the client's
+    server in lockstep with the CLI instead of whatever the uvx cache holds.
+    """
+    exe = ENTRY_POINT + (".exe" if os.name == "nt" else "")
+    sibling = Path(sys.executable).with_name(exe)
+    return sibling if sibling.exists() else None
+
+
+def build_entry(use_uvx: bool, server_command: str | None = None) -> dict[str, Any]:
+    """Server entry for client configs, version-aligned with the running CLI.
+
+    Resolution order:
+    1. explicit ``server_command`` (the ``--server-command`` escape hatch);
+    2. the ``memory-fabric-mcp`` binary in the same prefix as the running
+       interpreter — same version as the CLI that is writing the config;
+    3. ``uvx`` pinned to this exact version: an unpinned spec is resolved once
+       and then served from the uv cache indefinitely (the v0.7.0 test
+       campaign found a client silently running 0.5.0 two releases behind);
+    4. whatever a PATH lookup of ``memory-fabric-mcp`` finds.
+    """
+    if server_command:
+        if os.name == "nt":
+            parts = [p.strip('"') for p in shlex.split(server_command, posix=False)]
+        else:
+            parts = shlex.split(server_command)
+        if parts:
+            return {"command": parts[0], "args": parts[1:]}
+    local = local_server_binary()
+    if local is not None:
+        return {"command": str(local), "args": []}
     if use_uvx:
-        return {"command": "uvx", "args": ["--from", PACKAGE_SPEC, ENTRY_POINT]}
+        return {"command": "uvx", "args": ["--from", f"{PACKAGE_SPEC}=={__version__}", ENTRY_POINT]}
     resolved = shutil.which(ENTRY_POINT)
     return {"command": resolved or ENTRY_POINT, "args": []}
+
+
+def entry_note(entry: dict[str, Any]) -> str | None:
+    """Human-readable note about which server resolution was chosen, for install output."""
+    command = str(entry.get("command", ""))
+    args = [str(a) for a in entry.get("args") or []]
+    if command == "uvx":
+        spec = ""
+        if "--from" in args:
+            index = args.index("--from")
+            if index + 1 < len(args):
+                spec = args[index + 1]
+        return (
+            f"MCP server pinned to `{spec}` via uvx. After upgrading memory-fabric, re-run "
+            "`ai-memory install` to refresh the pin (or `uv cache clean memory-fabric`)."
+        )
+    if ENTRY_POINT in Path(command).name:
+        return f"MCP server points at the local binary `{command}` (same version as this CLI)."
+    return None
 
 
 def _resolve_home(home: Path | str | None) -> Path:

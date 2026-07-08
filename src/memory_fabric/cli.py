@@ -95,7 +95,7 @@ def main(argv: list[str] | None = None) -> int:
             # stop" from an operational error, and surface the reason.
             return 0 if guard_result["ok"] else 2
         if args.command == "doctor":
-            doctor_result = doctor(cwd)
+            doctor_result = doctor(cwd, check_pypi=not getattr(args, "offline", False))
             _print_result(doctor_result, args.json)
             return 0 if doctor_result["ok"] else 1
         if args.command == "verify":
@@ -112,7 +112,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "install":
             if args.client == "all":
                 install_all_result = install_all(
-                    cwd, project=args.project, dry_run=args.dry_run, uninstall=args.uninstall
+                    cwd,
+                    project=args.project,
+                    dry_run=args.dry_run,
+                    uninstall=args.uninstall,
+                    server_command=args.server_command,
                 )
                 _print_result(install_all_result, args.json)
                 return 0 if all(r["ok"] for r in install_all_result["results"]) else 1
@@ -122,6 +126,7 @@ def main(argv: list[str] | None = None) -> int:
                 project=args.project,
                 dry_run=args.dry_run,
                 uninstall=args.uninstall,
+                server_command=args.server_command,
             )
             _print_result(install_result, args.json)
             return 0 if install_result["ok"] else 1
@@ -372,7 +377,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--memory-prompt", default=None, help="Steering instructions for agent memory capture"
     )
     subparsers.add_parser("status", help="Show memory status and capture stats")
-    subparsers.add_parser("doctor", help="Validate memory files and environment")
+    doctor_parser = subparsers.add_parser("doctor", help="Validate memory files and environment")
+    doctor_parser.add_argument(
+        "--offline",
+        action="store_true",
+        help="Skip the (best-effort, 2s timeout) PyPI version-drift check",
+    )
 
     verify_parser = subparsers.add_parser(
         "verify", help="Check evidence citations still resolve (self-verifying memory)"
@@ -433,6 +443,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     install_parser.add_argument(
         "--uninstall", action="store_true", help="Remove the memory-fabric entry only"
+    )
+    install_parser.add_argument(
+        "--server-command",
+        default=None,
+        help=(
+            "Explicit server command to write into the client config (e.g. a full path to "
+            "memory-fabric-mcp). Overrides the automatic local-binary/uvx resolution."
+        ),
     )
 
     dream_parser = subparsers.add_parser("dream", help="Run local memory maintenance")

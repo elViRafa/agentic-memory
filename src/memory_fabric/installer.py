@@ -16,7 +16,7 @@ import tomllib
 from pathlib import Path
 from typing import Literal, Mapping
 
-from memory_fabric.clients import CLIENTS, ClientSpec, build_entry, uv_available
+from memory_fabric.clients import CLIENTS, ClientSpec, build_entry, entry_note, uv_available
 from memory_fabric.contracts import InstallAllResult, InstallResult
 from memory_fabric.locking import locked_file
 from memory_fabric.templates import now_iso
@@ -41,6 +41,7 @@ def install(
     project: bool = False,
     dry_run: bool = False,
     uninstall: bool = False,
+    server_command: str | None = None,
     platform_name: str | None = None,
     env: Mapping[str, str] | None = None,
     home: Path | str | None = None,
@@ -63,6 +64,7 @@ def install(
             project=use_project,
             dry_run=dry_run,
             uninstall=uninstall,
+            server_command=server_command,
             warnings=warnings,
             platform_name=platform_name,
             env=env,
@@ -76,9 +78,23 @@ def install(
 
     if spec.fmt == "toml":
         return _install_toml(
-            spec, path, scope, dry_run=dry_run, uninstall=uninstall, warnings=warnings
+            spec,
+            path,
+            scope,
+            dry_run=dry_run,
+            uninstall=uninstall,
+            server_command=server_command,
+            warnings=warnings,
         )
-    return _install_json(spec, path, scope, dry_run=dry_run, uninstall=uninstall, warnings=warnings)
+    return _install_json(
+        spec,
+        path,
+        scope,
+        dry_run=dry_run,
+        uninstall=uninstall,
+        server_command=server_command,
+        warnings=warnings,
+    )
 
 
 def install_all(
@@ -87,6 +103,7 @@ def install_all(
     project: bool = False,
     dry_run: bool = False,
     uninstall: bool = False,
+    server_command: str | None = None,
     platform_name: str | None = None,
     env: Mapping[str, str] | None = None,
     home: Path | str | None = None,
@@ -103,6 +120,7 @@ def install_all(
             project=project,
             dry_run=dry_run,
             uninstall=uninstall,
+            server_command=server_command,
             platform_name=platform_name,
             env=env,
             home=home,
@@ -140,6 +158,7 @@ def _install_json(
     dry_run: bool,
     uninstall: bool,
     warnings: list[str],
+    server_command: str | None = None,
 ) -> InstallResult:
     try:
         config, old_text = _read_json_config(path)
@@ -172,7 +191,10 @@ def _install_json(
             new_text = old_text
             changed = False
     else:
-        entry = build_entry(uv_available())
+        entry = build_entry(uv_available(), server_command)
+        note = entry_note(entry)
+        if note:
+            warnings.append(note)
         new_config = _merge_entry(config, spec.root_key, entry, spec.extra_entry_keys)
         new_text = json.dumps(new_config, indent=2, ensure_ascii=False) + "\n"
         changed = new_text != old_text
@@ -240,6 +262,7 @@ def _install_toml(
     dry_run: bool,
     uninstall: bool,
     warnings: list[str],
+    server_command: str | None = None,
 ) -> InstallResult:
     old_text = path.read_text(encoding="utf-8") if path.exists() else ""
     if old_text:
@@ -259,8 +282,13 @@ def _install_toml(
         if not changed:
             warnings.append(f"No memory-fabric block found in {path}; nothing to remove.")
     else:
-        new_text, changed = _append_toml_block(old_text, uv_available())
-        if not changed:
+        entry = build_entry(uv_available(), server_command)
+        new_text, changed = _append_toml_block(old_text, entry)
+        if changed:
+            note = entry_note(entry)
+            if note:
+                warnings.append(note)
+        else:
             warnings.append(f"memory-fabric already present in {path}; nothing to do.")
 
     if new_text:
@@ -304,11 +332,10 @@ def _toml_result(
     }
 
 
-def _append_toml_block(old_text: str, use_uvx: bool) -> tuple[str, bool]:
+def _append_toml_block(old_text: str, entry: dict) -> tuple[str, bool]:
     if _TOML_START in old_text:
         return old_text, False
 
-    entry = build_entry(use_uvx)
     args_toml = ", ".join(_toml_string(arg) for arg in entry["args"])
     lines = [
         _TOML_START,
@@ -352,6 +379,7 @@ def _install_cli(
     platform_name: str | None,
     env: Mapping[str, str] | None,
     home: Path | str | None,
+    server_command: str | None = None,
 ) -> InstallResult:
     claude_bin = shutil.which("claude")
     scope: Literal["global", "project"] = "project" if project else "global"
@@ -361,7 +389,13 @@ def _install_cli(
             project=True, cwd=cwd, platform_name=platform_name, env=env, home=home
         )
         result = _install_json(
-            spec, fallback_path, "project", dry_run=dry_run, uninstall=uninstall, warnings=warnings
+            spec,
+            fallback_path,
+            "project",
+            dry_run=dry_run,
+            uninstall=uninstall,
+            server_command=server_command,
+            warnings=warnings,
         )
         result["warnings"] = [
             "`claude` CLI not found on PATH; wrote project .mcp.json directly instead.",
@@ -372,7 +406,10 @@ def _install_cli(
     if uninstall:
         argv = ["claude", "mcp", "remove", SERVER_NAME]
     else:
-        entry = build_entry(uv_available())
+        entry = build_entry(uv_available(), server_command)
+        note = entry_note(entry)
+        if note:
+            warnings.append(note)
         argv = ["claude", "mcp", "add", SERVER_NAME, "--", entry["command"], *entry["args"]]
     command_str = " ".join(argv)
 

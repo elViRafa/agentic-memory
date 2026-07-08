@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from memory_fabric.clients import (
     CLIENTS,
@@ -18,7 +19,9 @@ from memory_fabric.clients import (
     _vscode_user_dir,
     _windsurf_path,
     build_entry,
+    entry_note,
 )
+from memory_fabric.version import __version__
 
 
 class ClientRegistryTests(unittest.TestCase):
@@ -38,13 +41,34 @@ class ClientRegistryTests(unittest.TestCase):
             },
         )
 
-    def test_build_entry_uses_uvx_when_available(self) -> None:
-        entry = build_entry(True)
+    def test_build_entry_prefers_local_binary(self) -> None:
+        """P-02: the server installed next to the running CLI wins over uvx."""
+        fake = Path(tempfile.gettempdir()) / "memory-fabric-mcp.exe"
+        with mock.patch("memory_fabric.clients.local_server_binary", return_value=fake):
+            entry = build_entry(True)
+        self.assertEqual(entry["command"], str(fake))
+        self.assertEqual(entry["args"], [])
+        self.assertIn("same version as this CLI", entry_note(entry) or "")
+
+    def test_build_entry_uvx_is_version_pinned(self) -> None:
+        """P-01: an unpinned uvx spec is served stale from the uv cache forever."""
+        with mock.patch("memory_fabric.clients.local_server_binary", return_value=None):
+            entry = build_entry(True)
         self.assertEqual(entry["command"], "uvx")
-        self.assertEqual(entry["args"], ["--from", "memory-fabric[mcp]", "memory-fabric-mcp"])
+        self.assertEqual(
+            entry["args"],
+            ["--from", f"memory-fabric[mcp]=={__version__}", "memory-fabric-mcp"],
+        )
+        self.assertIn("re-run", entry_note(entry) or "")
+
+    def test_build_entry_server_command_override_wins(self) -> None:
+        entry = build_entry(True, server_command="C:/tools/memory-fabric-mcp.exe --flag")
+        self.assertEqual(entry["command"], "C:/tools/memory-fabric-mcp.exe")
+        self.assertEqual(entry["args"], ["--flag"])
 
     def test_build_entry_falls_back_when_uv_unavailable(self) -> None:
-        entry = build_entry(False)
+        with mock.patch("memory_fabric.clients.local_server_binary", return_value=None):
+            entry = build_entry(False)
         self.assertEqual(entry["args"], [])
 
 

@@ -100,10 +100,26 @@ Because Memory Fabric is in active development, we recommend upgrading regularly
    pipx install --force "memory-fabric[mcp] @ git+https://github.com/elViRafa/agentic-memory.git"
    ```
 
-2. **Restart MCP Clients**:
+2. **Refresh the MCP client config (uvx installs)**:
+   If your client config launches the server via `uvx` (the default written by older
+   `ai-memory install` runs), uv serves the build it cached the first time and never
+   re-resolves an unpinned spec — restarting the client is **not** enough and can leave
+   the server several releases behind without any signal. After upgrading, either:
+   ```sh
+   # Re-write the client config (now pins the exact installed version, or points
+   # at the local memory-fabric-mcp binary when one sits next to the CLI):
+   ai-memory install --client <your-client> --project
+
+   # ...or drop the stale cached build so uvx re-resolves:
+   uv cache clean memory-fabric
+   ```
+   `ai-memory doctor` warns when the local version drifts from the latest on PyPI or
+   when a different `ai-memory` installation shadows this one on PATH.
+
+3. **Restart MCP Clients**:
    After upgrading, restart your IDE (Cursor, VS Code) or assistant process (Claude Code) to ensure the client reloads the updated `memory-fabric-mcp` server.
 
-3. **Refresh Local Projects (Optional)**:
+4. **Refresh Local Projects (Optional)**:
    If you have projects initialized with older versions of Memory Fabric, navigate to the project directory and run:
    ```sh
    ai-memory init --install-hooks
