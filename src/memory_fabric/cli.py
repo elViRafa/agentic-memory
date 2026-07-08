@@ -26,8 +26,10 @@ from memory_fabric.storage import (
     initialize_memory_fabric,
     keyword_search,
     list_memory_store,
+    list_snapshots,
     mark_session_start,
     propose_memory_patch,
+    prune_dream_artifacts,
     read_memory_store,
     rollback,
     status,
@@ -278,8 +280,26 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 return 0
         if args.command == "rollback":
+            if getattr(args, "list", False):
+                _print_result({"snapshots": list_snapshots(cwd)}, args.json)
+                return 0
+            if not args.to:
+                print(
+                    "error: provide --to <snapshot>, or run `ai-memory rollback --list` "
+                    "to see available snapshots"
+                )
+                return 1
             rollback_result = rollback(cwd, args.to)
             _print_result(rollback_result, args.json)
+            return 0
+        if args.command == "clean":
+            clean_result = prune_dream_artifacts(
+                cwd,
+                keep_snapshots=args.keep_snapshots,
+                keep_candidates=args.keep_candidates,
+                dry_run=args.dry_run,
+            )
+            _print_result(clean_result, args.json)
             return 0
         if args.command == "store":
             store_action = getattr(args, "store_action", None)
@@ -457,7 +477,31 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("sync-global", help="Preview local-to-global promotion")
 
     rollback_parser = subparsers.add_parser("rollback", help="Restore local memory from a snapshot")
-    rollback_parser.add_argument("--to", required=True, help="Snapshot name")
+    rollback_parser.add_argument(
+        "--to", default=None, help="Snapshot name (run with --list to discover valid names)"
+    )
+    rollback_parser.add_argument(
+        "--list", action="store_true", help="List available snapshots and exit"
+    )
+
+    clean_parser = subparsers.add_parser(
+        "clean", help="Prune old dream snapshots and candidate stores"
+    )
+    clean_parser.add_argument(
+        "--keep-snapshots",
+        type=int,
+        default=None,
+        help="Snapshots to keep, newest first (default 10; env MEMORY_FABRIC_KEEP_SNAPSHOTS)",
+    )
+    clean_parser.add_argument(
+        "--keep-candidates",
+        type=int,
+        default=None,
+        help="Candidate stores to keep, newest first (default 3; env MEMORY_FABRIC_KEEP_CANDIDATES)",
+    )
+    clean_parser.add_argument(
+        "--dry-run", action="store_true", help="Report what would be removed without deleting"
+    )
 
     store_parser = subparsers.add_parser("store", help="Memory store operations")
     store_subs = store_parser.add_subparsers(dest="store_action")

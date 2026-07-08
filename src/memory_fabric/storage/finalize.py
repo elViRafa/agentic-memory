@@ -550,6 +550,21 @@ async def _process_and_finalize_candidate(
         _apply_candidate_to_live(memory_dir, candidate_root, affected_files)
         changed = True
 
+    if apply:
+        # Retention (P-11): every dream leaves one snapshot + one candidate
+        # copy of the whole memory tree behind; keep only the newest few.
+        # Best-effort — an applied dream must never fail over cleanup.
+        try:
+            from memory_fabric.storage.snapshots import prune_dream_artifacts
+
+            prune_dream_artifacts(
+                cwd="",
+                protect={snapshot or "", candidate_root.name},
+                memory_dir=memory_dir,
+            )
+        except Exception:
+            pass
+
     consolidation: DreamConsolidation = {
         "duplicates_found": duplicates_found,
         "lines_removed": lines_removed,

@@ -59,6 +59,8 @@ from memory_fabric.storage.sections import (
 )
 from memory_fabric.storage.snapshots import (
     create_snapshot as create_snapshot,
+    list_snapshots as list_snapshots,
+    prune_dream_artifacts as prune_dream_artifacts,
     rollback as rollback,
 )
 from memory_fabric.storage.store import (

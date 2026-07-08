@@ -354,6 +354,13 @@ def status(cwd: str) -> StatusResult:
                 pass
 
     from memory_fabric.storage.capture import capture_stats
+    from memory_fabric.storage.snapshots import list_snapshots
+
+    snapshots = list_snapshots(cwd) if memory_dir.exists() else []
+    candidates_root = memory_dir / "candidates"
+    candidates_count = (
+        sum(1 for p in candidates_root.iterdir() if p.is_dir()) if candidates_root.is_dir() else 0
+    )
 
     return {
         "cwd": str(project_root(cwd)),
@@ -365,6 +372,11 @@ def status(cwd: str) -> StatusResult:
         "memory_sizes": sizes,
         "version": __version__,
         "capture": capture_stats(cwd),
+        "snapshots": {
+            "count": len(snapshots),
+            "latest": snapshots[0]["name"] if snapshots else None,
+        },
+        "candidates_count": candidates_count,
     }
 
 

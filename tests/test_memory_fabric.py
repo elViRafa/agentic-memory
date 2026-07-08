@@ -175,6 +175,92 @@ class MemoryFabricTests(unittest.TestCase):
             self.assertIn("Original debt note.", section["text"])
             self.assertNotIn("Changed debt note.", section["text"])
 
+    def test_list_snapshots_returns_newest_first_with_stats(self) -> None:
+        """P-12: snapshots must be discoverable without touching .ai-memory/."""
+        from memory_fabric.storage import list_snapshots
+
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            self.assertEqual(list_snapshots(temp), [])
+
+            create_snapshot(temp, name="memory_v1")
+            create_snapshot(temp, name="memory_v2")
+            snapshots = list_snapshots(temp)
+            self.assertEqual(len(snapshots), 2)
+            names = {s["name"] for s in snapshots}
+            self.assertEqual(names, {"memory_v1", "memory_v2"})
+            for snap in snapshots:
+                self.assertGreater(snap["files"], 0)
+                self.assertGreater(snap["size_bytes"], 0)
+                self.assertIn("created", snap)
+
+    def test_cli_rollback_list_and_missing_to(self) -> None:
+        from memory_fabric.cli import main
+
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            create_snapshot(temp, name="memory_v1")
+            self.assertEqual(main(["--cwd", temp, "rollback", "--list"]), 0)
+            self.assertEqual(main(["--cwd", temp, "rollback"]), 1)
+
+    def test_prune_dream_artifacts_keeps_newest(self) -> None:
+        """P-11: retention removes all but the newest N snapshots/candidates."""
+        from memory_fabric.storage import prune_dream_artifacts
+
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            memory_dir = Path(temp) / ".ai-memory"
+            for i in range(5):
+                create_snapshot(temp, name=f"memory_v{i}")
+            candidates = memory_dir / "candidates"
+            candidates.mkdir(exist_ok=True)
+            for i in range(4):
+                (candidates / f"memory-cand-{i}").mkdir()
+
+            dry = prune_dream_artifacts(temp, keep_snapshots=2, keep_candidates=1, dry_run=True)
+            self.assertEqual(len(dry["removed_snapshots"]), 3)
+            self.assertEqual(len(list((memory_dir / "snapshots").iterdir())), 5, "dry-run deletes nothing")
+
+            result = prune_dream_artifacts(temp, keep_snapshots=2, keep_candidates=1)
+            self.assertEqual(len(result["removed_snapshots"]), 3)
+            self.assertEqual(len(result["removed_candidates"]), 3)
+            self.assertEqual(len(list((memory_dir / "snapshots").iterdir())), 2)
+            self.assertEqual(len(list(candidates.iterdir())), 1)
+
+            # protected names survive even beyond the keep window
+            again = prune_dream_artifacts(
+                temp, keep_snapshots=0, keep_candidates=0,
+                protect={p.name for p in (memory_dir / "snapshots").iterdir()},
+            )
+            self.assertEqual(again["removed_snapshots"], [])
+            self.assertEqual(len(list((memory_dir / "snapshots").iterdir())), 2)
+
+    def test_dream_apply_prunes_old_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            write_memory_store(temp, "architecture/notes", "# Notes\n\nFact.", title="Notes")
+            memory_dir = Path(temp) / ".ai-memory"
+            with mock.patch.dict(
+                os.environ,
+                {"MEMORY_FABRIC_KEEP_SNAPSHOTS": "2", "MEMORY_FABRIC_KEEP_CANDIDATES": "1"},
+            ):
+                for _ in range(4):
+                    dream(temp, mode="light", apply=True)
+
+            snap_count = len([p for p in (memory_dir / "snapshots").iterdir() if p.is_dir()])
+            cand_count = len([p for p in (memory_dir / "candidates").iterdir() if p.is_dir()])
+            self.assertLessEqual(snap_count, 2)
+            self.assertLessEqual(cand_count, 1)
+
+    def test_status_reports_snapshot_and_candidate_counts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            create_snapshot(temp, name="memory_v1")
+            res = status(temp)
+            self.assertEqual(res["snapshots"]["count"], 1)
+            self.assertEqual(res["snapshots"]["latest"], "memory_v1")
+            self.assertEqual(res["candidates_count"], 0)
+
     def test_pre_init_eval_creates_no_files(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             result = evaluate_memory_fabric(temp)

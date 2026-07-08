@@ -157,6 +157,8 @@ class StatusResult(TypedDict):
     memory_sizes: dict[str, dict[str, int]]
     version: str
     capture: NotRequired[dict[str, Any]]
+    snapshots: NotRequired[dict[str, Any]]
+    candidates_count: NotRequired[int]
 
 
 class MapsRegenResult(TypedDict):
