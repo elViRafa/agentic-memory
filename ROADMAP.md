@@ -415,7 +415,14 @@ Claims without numbers don't win "best in the world."
 5. **Phase 3.1 passive capture + Phase 3.5 git-native trust (v0.7)** — independent of the
    v1.0 gate and demo brilliantly ("commit, and the project brain updates itself"; "two
    branches merge their memory as cleanly as their code"); strong launch material.
-   (v0.7 shipped 2026-07-07.)
+   (v0.7 shipped 2026-07-07. v0.7.1 hardening shipped 2026-07-08: all 15 findings from
+   the first realistic end-to-end test campaign fixed — MCP dream results no longer
+   report isError on success, git hooks pin their CLI and fail audibly, failure-memory
+   dedup survives reworded errors, installer is local-first with a pinned uvx fallback,
+   append preserves priority, verify clears stale markers, no-op dreams keep the git
+   tree clean, snapshot retention + `rollback --list` + `clean`, doctor-clean init,
+   UTF-8 CLI output, accurate provider warnings, valid diff headers, and a
+   deterministic contradiction net.)
 6. **Phase 2.2 migration tooling (v0.8)** — still unbuilt; the last v1.0 blocker left
    from Phase 2. Do this before item 7.
 7. **Launch v1.0** (Phase 6 demo + announcements) on the strength of distribution and
