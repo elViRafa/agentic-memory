@@ -515,6 +515,26 @@ class MemoryFabricTests(unittest.TestCase):
             self.assertGreater(res["memory_sizes"]["architecture.md"]["tokens"], 0)
             self.assertEqual(res["version"], __version__)
 
+    def test_doctor_is_clean_right_after_init(self) -> None:
+        """P-03: a scaffold created by init must pass its own health check.
+
+        Environment-dependent warnings (rg missing, PATH drift, mcp extra) are
+        tolerated; the seven index-consistency warnings the v0.7.0 campaign
+        hit right after following the Quick Start must be gone.
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            res = doctor(temp)
+            self.assertTrue(res["ok"])
+            index_warnings = [
+                w
+                for w in res["warnings"]
+                if "index.md" in w or "memory-store" in w or "missing" in w.lower()
+            ]
+            self.assertEqual(index_warnings, [])
+            store_index = Path(temp) / ".ai-memory" / "memory-store" / "index.md"
+            self.assertTrue(store_index.exists())
+
     def test_doctor_checks_permissions_and_index_consistency(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             initialize_memory_fabric(temp)

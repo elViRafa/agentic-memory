@@ -258,6 +258,19 @@ def initialize_memory_fabric(
         else:
             warnings.append("Git repository not found; hooks were not installed.")
 
+    # Generate index.md and memory-store/index.md through the same code path
+    # Dreaming uses, so a fresh scaffold already satisfies doctor's consistency
+    # checks (P-03: doctor right after init used to show 7 warnings that only
+    # a first dream would clear).
+    try:
+        from memory_fabric.storage.consolidation import _regenerate_index_root
+
+        # compile_consolidated=False: the compiled context document is a
+        # Dreaming artifact; init only needs the indexes doctor checks.
+        _regenerate_index_root(memory_dir, mode="light", compile_consolidated=False)
+    except Exception as exc:
+        warnings.append(f"Could not generate the initial memory indexes: {exc}")
+
     return {
         "created": bool(files_created),
         "memory_dir": str(memory_dir),
@@ -460,7 +473,8 @@ def doctor(cwd: str, check_pypi: bool = False) -> DoctorResult:
 
             for sec in missing_in_index:
                 warnings.append(
-                    f"Section `{sec}` exists in local memory but is missing from index.md"
+                    f"Section `{sec}` exists in local memory but is missing from index.md "
+                    "(run `ai-memory dream --mode light --apply` to regenerate the index)"
                 )
             for sec in extra_in_index:
                 warnings.append(
@@ -474,7 +488,10 @@ def doctor(cwd: str, check_pypi: bool = False) -> DoctorResult:
     if store_root.exists():
         store_index_path = store_root / "index.md"
         if not store_index_path.exists():
-            warnings.append("memory-store/index.md is missing")
+            warnings.append(
+                "memory-store/index.md is missing "
+                "(run `ai-memory dream --mode light --apply` to generate it)"
+            )
         else:
             try:
                 store_meta, store_body = parse_frontmatter(

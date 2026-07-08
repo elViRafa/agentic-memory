@@ -139,6 +139,7 @@ def _regenerate_index_root(
     consolidation_hash: str | None = None,
     contradictions: list[str] | None = None,
     warnings: list[str] | None = None,
+    compile_consolidated: bool = True,
 ) -> list[str]:
     checked_files = [
         str(path)
@@ -182,46 +183,48 @@ def _regenerate_index_root(
                 "Please see the dedicated [Memory Store Index](memory-store/index.md) for a map of available semantic memory store files."
             )
 
-            # Compile memory-store/index.md (body kept timestamp-free, see above)
-            store_index_lines = [
-                "# Memory Store Index",
-                "",
-                f"Updated by Memory Fabric Dreaming mode `{mode}`.",
-                "",
-                "| Path | Priority | Summary | Key Topics | Tags |",
-                "| --- | --- | --- | --- | --- |",
-            ]
-            for sf in store_files:
-                try:
-                    sf_meta, sf_body = parse_frontmatter(sf.read_text(encoding="utf-8"))
-                    sp = _path_to_store_path(store_root, sf)
-                    sf_priority = sf_meta.get("priority", "medium")
-                    sf_summary = str(sf_meta.get("summary", "")).replace("|", "\\|")
-                    sf_topics = _extract_key_topics(sf_body)
-                    sf_tags = sf_meta.get("tags", [])
-                    tags_str = ", ".join(sf_tags) if isinstance(sf_tags, list) else str(sf_tags)
-                    store_index_lines.append(
-                        f"| `{sp}` | {sf_priority} | {sf_summary} | {sf_topics} | {tags_str} |"
-                    )
-                    checked_files.append(str(sf))
-                except Exception:
-                    pass
+        # Compile memory-store/index.md (body kept timestamp-free, see above).
+        # Written even when the store is still empty so a freshly initialized
+        # project passes doctor's index-consistency checks (P-03).
+        store_index_lines = [
+            "# Memory Store Index",
+            "",
+            f"Updated by Memory Fabric Dreaming mode `{mode}`.",
+            "",
+            "| Path | Priority | Summary | Key Topics | Tags |",
+            "| --- | --- | --- | --- | --- |",
+        ]
+        for sf in store_files:
+            try:
+                sf_meta, sf_body = parse_frontmatter(sf.read_text(encoding="utf-8"))
+                sp = _path_to_store_path(store_root, sf)
+                sf_priority = sf_meta.get("priority", "medium")
+                sf_summary = str(sf_meta.get("summary", "")).replace("|", "\\|")
+                sf_topics = _extract_key_topics(sf_body)
+                sf_tags = sf_meta.get("tags", [])
+                tags_str = ", ".join(sf_tags) if isinstance(sf_tags, list) else str(sf_tags)
+                store_index_lines.append(
+                    f"| `{sp}` | {sf_priority} | {sf_summary} | {sf_topics} | {tags_str} |"
+                )
+                checked_files.append(str(sf))
+            except Exception:
+                pass
 
-            store_index_path = store_root / "index.md"
-            store_root.mkdir(parents=True, exist_ok=True)
+        store_index_path = store_root / "index.md"
+        store_root.mkdir(parents=True, exist_ok=True)
 
-            store_metadata = {
-                "store_path": "index",
-                "title": "Memory Store Index",
-                "summary": "Index of all semantic memory store files.",
-                "priority": "high",
-                "tags": ["index", "memory-store"],
-                "schema_version": "1.3",
-                "last_updated": now_iso(),
-            }
-            _write_markdown_if_changed(
-                store_index_path, store_metadata, "\n".join(store_index_lines) + "\n"
-            )
+        store_metadata = {
+            "store_path": "index",
+            "title": "Memory Store Index",
+            "summary": "Index of all semantic memory store files.",
+            "priority": "high",
+            "tags": ["index", "memory-store"],
+            "schema_version": "1.3",
+            "last_updated": now_iso(),
+        }
+        _write_markdown_if_changed(
+            store_index_path, store_metadata, "\n".join(store_index_lines) + "\n"
+        )
 
     index_path = memory_dir / "index.md"
     if index_path.exists():
@@ -241,16 +244,17 @@ def _regenerate_index_root(
     metadata["priority"] = "high"
     _write_markdown_if_changed(index_path, metadata, "\n".join(lines) + "\n")
 
-    try:
-        consolidated_content = _compile_consolidated_memory(memory_dir)
-        consolidated_path = memory_dir / "consolidated_memory.md"
-        if (
-            not consolidated_path.exists()
-            or consolidated_path.read_text(encoding="utf-8") != consolidated_content
-        ):
-            consolidated_path.write_text(consolidated_content, encoding="utf-8")
-    except Exception:
-        pass
+    if compile_consolidated:
+        try:
+            consolidated_content = _compile_consolidated_memory(memory_dir)
+            consolidated_path = memory_dir / "consolidated_memory.md"
+            if (
+                not consolidated_path.exists()
+                or consolidated_path.read_text(encoding="utf-8") != consolidated_content
+            ):
+                consolidated_path.write_text(consolidated_content, encoding="utf-8")
+        except Exception:
+            pass
 
     return checked_files
 
