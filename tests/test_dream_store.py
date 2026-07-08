@@ -3,6 +3,7 @@ import tempfile
 import json
 import os
 import hashlib
+import time
 from pathlib import Path
 from unittest import mock
 
@@ -47,6 +48,10 @@ class DreamStoreTests(unittest.TestCase):
                 }
 
             before = tree_state()
+            # Cross a real second boundary: when both dreams share the same
+            # timestamp string, a broken changed-guard still produces identical
+            # bytes by accident and the test would pass vacuously.
+            time.sleep(1.1)
             result2 = dream(temp, mode="light", apply=True)
             after = tree_state()
 

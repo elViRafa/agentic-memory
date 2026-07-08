@@ -1122,11 +1122,11 @@ class MemoryFabricTests(unittest.TestCase):
                 mock_call_llm.reset_mock()
                 res2 = dream(temp, mode="deep", apply=True)
                 self.assertEqual(mock_call_llm.call_count, 0)  # exactly 0 calls!
-                # Only the regenerated indexes churn (their timestamp line changes).
-                self.assertEqual(
-                    sorted(res2["affected_files"]),
-                    sorted(["index.md", str(Path("memory-store") / "index.md")]),
-                )
+                # P-15: identical content no longer churns the regenerated
+                # indexes — a fully redundant dream leaves the tree untouched
+                # (this assertion previously documented the timestamp churn).
+                self.assertEqual(res2["affected_files"], [])
+                self.assertFalse(res2["changed"])
 
                 # 3. Third run: let's modify the file content so hash mismatches
                 store_meta, store_body = parse_frontmatter(store_file.read_text(encoding="utf-8"))

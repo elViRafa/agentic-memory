@@ -254,7 +254,10 @@ def _write_markdown_if_changed(
         if old_meta is not None:
             old_cmp = {k: v for k, v in old_meta.items() if k not in volatile_keys}
             new_cmp = {k: v for k, v in metadata.items() if k not in volatile_keys}
-            if old_cmp == new_cmp and old_body == body:
+            # dump_frontmatter writes `---\n\n<body>` but parse_frontmatter keeps
+            # the separator blank line in the returned body — compare modulo
+            # leading/trailing newlines or the guard never matches its own output.
+            if old_cmp == new_cmp and old_body.strip("\n") == body.strip("\n"):
                 return False
     path.write_text(dump_frontmatter(metadata, body), encoding="utf-8")
     return True
