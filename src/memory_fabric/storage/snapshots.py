@@ -24,6 +24,14 @@ def create_snapshot(cwd: str, name: str | None = None) -> str:
         "-", ""
     )
     snapshot_dir = memory_dir / "snapshots" / snapshot_name
+    if name is None:
+        # Timestamps have second resolution; two dreams inside the same second
+        # (e.g. back-to-back post-commit hooks) must not crash on a collision.
+        counter = 1
+        while snapshot_dir.exists():
+            snapshot_dir = memory_dir / "snapshots" / f"{snapshot_name}-{counter}"
+            counter += 1
+        snapshot_name = snapshot_dir.name
     snapshot_dir.mkdir(parents=True, exist_ok=False)
     for path in _iter_markdown_files(memory_dir):
         if _is_ignored_local_memory_path(memory_dir, path):

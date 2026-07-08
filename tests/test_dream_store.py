@@ -21,6 +21,57 @@ def dream(*args, **kwargs):
 
 
 class DreamStoreTests(unittest.TestCase):
+    def test_repeated_light_dream_is_byte_stable(self) -> None:
+        """P-15: a dream right after another must not rewrite any memory file.
+
+        The post-commit hook runs `dream --mode light --apply`; if that bumps
+        `last_updated` on the regenerated indexes even when nothing changed,
+        the working tree is dirty again immediately after every commit and the
+        next checkout/merge is blocked.
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            write_memory_store(
+                temp, "architecture/notes", "# Notes\n\nA stable fact.", title="Notes"
+            )
+            dream(temp, mode="light", apply=True)
+
+            memory_dir = Path(temp) / ".ai-memory"
+
+            def tree_state() -> dict[str, str]:
+                skip = {"snapshots", "candidates", "evals", "private"}
+                return {
+                    str(p.relative_to(memory_dir)): p.read_text(encoding="utf-8")
+                    for p in memory_dir.rglob("*.md")
+                    if not skip.intersection(p.relative_to(memory_dir).parts)
+                }
+
+            before = tree_state()
+            result2 = dream(temp, mode="light", apply=True)
+            after = tree_state()
+
+            self.assertEqual(before, after, "second no-op dream must not touch any file")
+            self.assertEqual(result2["affected_files"], [])
+            self.assertFalse(result2["changed"])
+
+    def test_dream_rewrites_index_when_store_actually_changed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            write_memory_store(temp, "architecture/notes", "# Notes\n\nFact one.", title="Notes")
+            dream(temp, mode="light", apply=True)
+
+            index_path = Path(temp) / ".ai-memory" / "memory-store" / "index.md"
+            body_before = parse_frontmatter(index_path.read_text(encoding="utf-8"))[1]
+            self.assertNotIn("decisions/new-decision", body_before)
+
+            write_memory_store(
+                temp, "decisions/new-decision", "# New\n\nUse feature flags.", title="New"
+            )
+            result = dream(temp, mode="light", apply=True)
+            self.assertTrue(result["changed"])
+            body_after = parse_frontmatter(index_path.read_text(encoding="utf-8"))[1]
+            self.assertIn("decisions/new-decision", body_after)
+
     def test_dream_store_light_mode_regenerates_index_with_topics(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             initialize_memory_fabric(temp)

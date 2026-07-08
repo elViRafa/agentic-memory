@@ -26,6 +26,7 @@ from memory_fabric.storage._shared import (
     _path_to_store_path,
     _read_memory_path,
     _safe_parse_for_sort,
+    _write_markdown_if_changed,
 )
 from memory_fabric.templates import build_empty_section, now_iso
 
@@ -146,10 +147,13 @@ def _regenerate_index_root(
         and not _is_ignored_local_memory_path(memory_dir, path)
         and not _is_store_path(memory_dir, path)
     ]
+    # NOTE: no timestamp in the body — the frontmatter `last_updated` carries
+    # it. A timestamped body would defeat the changed-content check below and
+    # dirty the git tree on every Dream (P-15).
     lines = [
         "# Project Memory Index",
         "",
-        f"Updated by Memory Fabric Dreaming mode `{mode}` at {now_iso()}.",
+        f"Updated by Memory Fabric Dreaming mode `{mode}`.",
         "",
         "| Section | Priority | Summary | Key Topics |",
         "| --- | --- | --- | --- |",
@@ -178,11 +182,11 @@ def _regenerate_index_root(
                 "Please see the dedicated [Memory Store Index](memory-store/index.md) for a map of available semantic memory store files."
             )
 
-            # Compile memory-store/index.md
+            # Compile memory-store/index.md (body kept timestamp-free, see above)
             store_index_lines = [
                 "# Memory Store Index",
                 "",
-                f"Updated by Memory Fabric Dreaming mode `{mode}` at {now_iso()}.",
+                f"Updated by Memory Fabric Dreaming mode `{mode}`.",
                 "",
                 "| Path | Priority | Summary | Key Topics | Tags |",
                 "| --- | --- | --- | --- | --- |",
@@ -215,9 +219,8 @@ def _regenerate_index_root(
                 "schema_version": "1.3",
                 "last_updated": now_iso(),
             }
-            store_index_path.write_text(
-                dump_frontmatter(store_metadata, "\n".join(store_index_lines) + "\n"),
-                encoding="utf-8",
+            _write_markdown_if_changed(
+                store_index_path, store_metadata, "\n".join(store_index_lines) + "\n"
             )
 
     index_path = memory_dir / "index.md"
@@ -236,11 +239,16 @@ def _regenerate_index_root(
     metadata["last_updated"] = now_iso()
     metadata["summary"] = "Map of available project memory sections."
     metadata["priority"] = "high"
-    index_path.write_text(dump_frontmatter(metadata, "\n".join(lines) + "\n"), encoding="utf-8")
+    _write_markdown_if_changed(index_path, metadata, "\n".join(lines) + "\n")
 
     try:
         consolidated_content = _compile_consolidated_memory(memory_dir)
-        (memory_dir / "consolidated_memory.md").write_text(consolidated_content, encoding="utf-8")
+        consolidated_path = memory_dir / "consolidated_memory.md"
+        if (
+            not consolidated_path.exists()
+            or consolidated_path.read_text(encoding="utf-8") != consolidated_content
+        ):
+            consolidated_path.write_text(consolidated_content, encoding="utf-8")
     except Exception:
         pass
 

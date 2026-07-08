@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 from typing import Any, Iterable
 
-from memory_fabric.frontmatter import FrontmatterError, parse_frontmatter
+from memory_fabric.frontmatter import FrontmatterError, dump_frontmatter, parse_frontmatter
 from memory_fabric.paths import local_memory_dir, memory_store_dir
 
 SECTION_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
@@ -225,6 +225,39 @@ def estimate_tokens(text: str) -> int:
     if len(text) < 100:
         return max(1, len(text) // 3)
     return max(1, len(text) // 4)
+
+
+def _write_markdown_if_changed(
+    path: Path,
+    metadata: dict[str, Any],
+    body: str,
+    volatile_keys: tuple[str, ...] = ("last_updated",),
+) -> bool:
+    """Write a frontmatter+body markdown file only when it semantically changed.
+
+    Regenerated views (index.md, memory-store/index.md, consolidated memory)
+    are rebuilt on every Dream. Stamping a fresh ``last_updated`` onto
+    byte-identical content marks the file as an affected change, dirties the
+    git tree right after every commit (post-commit hook loop, P-15), and
+    inflates the eval's churn ratio. When the only difference is in
+    ``volatile_keys``, the existing file — and its original timestamp — is
+    left untouched.
+
+    Returns True when the file was (re)written.
+    """
+    if path.exists():
+        try:
+            old_meta, old_body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, FrontmatterError):
+            old_meta = None
+            old_body = ""
+        if old_meta is not None:
+            old_cmp = {k: v for k, v in old_meta.items() if k not in volatile_keys}
+            new_cmp = {k: v for k, v in metadata.items() if k not in volatile_keys}
+            if old_cmp == new_cmp and old_body == body:
+                return False
+    path.write_text(dump_frontmatter(metadata, body), encoding="utf-8")
+    return True
 
 
 def _jaccard_similar(line_a: str, line_b: str, threshold: float | None = None) -> bool:
