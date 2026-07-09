@@ -37,7 +37,7 @@ Memory is stored as human-readable Markdown with YAML frontmatter. No vector dat
 
 ## Status
 
-**v0.7.0 — [live on PyPI](https://pypi.org/project/memory-fabric/).**
+**v0.7.1 — [live on PyPI](https://pypi.org/project/memory-fabric/).**
 Core CLI and MCP tools work end-to-end. See [`ROADMAP.md`](ROADMAP.md) for what shipped,
 what's in progress, and what's next.
 
@@ -468,7 +468,8 @@ Commands:
   store           CRUD operations on semantic memory store
   sync-agents     Regenerate agent instruction files from canonical templates
   sync-global     Preview local-to-global promotions
-  rollback        Restore from a snapshot
+  rollback        Restore from a snapshot (--to <name>, or --list to discover valid names)
+  clean           Prune old snapshots/candidates (--keep-snapshots, --keep-candidates, --dry-run)
 ```
 
 Eval examples:
