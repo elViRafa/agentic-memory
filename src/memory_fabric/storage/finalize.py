@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from memory_fabric.contracts import DreamConsolidation, DreamResult
-from memory_fabric.frontmatter import dump_frontmatter, parse_frontmatter
+from memory_fabric.frontmatter import FrontmatterError, dump_frontmatter, parse_frontmatter
 from memory_fabric.security import redact_secrets
 from memory_fabric.storage._shared import (
     SECTION_PATTERN,
@@ -439,7 +439,13 @@ async def _process_and_finalize_candidate(
             continue
         if _is_generated_file(path):
             continue
-        metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        try:
+            metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, FrontmatterError) as exc:
+            warnings.append(
+                f"Skipped {path.relative_to(candidate_root)} during consolidation: {exc}"
+            )
+            continue
         key = _get_section_key(candidate_root, path)
         final_sections_data[key] = body
 

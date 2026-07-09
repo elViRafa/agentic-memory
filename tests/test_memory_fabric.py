@@ -371,6 +371,27 @@ class MemoryFabricTests(unittest.TestCase):
             self.assertEqual(before_arch, read_section(temp, "architecture")["text"])
             self.assertEqual(before_decisions, read_section(temp, "decisions")["text"])
 
+    def test_dream_skips_malformed_store_file_instead_of_crashing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+
+            # Simulate a memory-store file written without going through
+            # write_memory_store (e.g. hand-edited, or written directly with a
+            # native filesystem tool) so it never got a YAML frontmatter header.
+            store_root = Path(temp) / ".ai-memory" / "memory-store"
+            store_root.mkdir(parents=True, exist_ok=True)
+            bad_file = store_root / "no_frontmatter.md"
+            bad_file.write_text("# Just a heading\n\nNo frontmatter at all.\n", encoding="utf-8")
+
+            # Must not raise FrontmatterError — previously this crashed the
+            # whole `ai-memory dream` command for both LLM and non-LLM runs.
+            result = dream(temp, mode="light", apply=False)
+
+            self.assertTrue(
+                any("no_frontmatter.md" in w and "frontmatter" in w.lower() for w in result["warnings"]),
+                result["warnings"],
+            )
+
     def test_dream_apply_mode_updates_live_memory(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             initialize_memory_fabric(temp)

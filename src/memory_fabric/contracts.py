@@ -173,6 +173,7 @@ class DreamConsolidation(TypedDict):
     duplicates_found: int
     lines_removed: int
     files_touched: list[str]
+    warnings: NotRequired[list[str]]
 
 
 class DreamRewriteTask(TypedDict):

@@ -12,7 +12,7 @@ import tempfile
 from pathlib import Path
 
 from memory_fabric.contracts import DreamConsolidation, DreamRewriteTask
-from memory_fabric.frontmatter import dump_frontmatter, parse_frontmatter
+from memory_fabric.frontmatter import FrontmatterError, dump_frontmatter, parse_frontmatter
 from memory_fabric.locking import locked_file
 from memory_fabric.paths import local_memory_dir
 from memory_fabric.storage._shared import (
@@ -280,13 +280,24 @@ def _consolidate_candidate_memory(candidate_root: Path) -> DreamConsolidation:
     files_touched: list[str] = []
     duplicates_found = 0
     lines_removed = 0
+    warnings: list[str] = []
 
     for path in sorted(
         path for path in _iter_markdown_files(candidate_root) if path.name != "index.md"
     ):
         if _is_generated_file(path):
             continue  # derived views are rebuilt from the store, not deduped
-        metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        try:
+            metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, FrontmatterError) as exc:
+            # A single malformed memory file (hand-edited, BOM, etc.) must not
+            # take down the whole Dream cycle — skip it and surface a warning
+            # instead, matching how _is_generated_file/_is_steering_file
+            # already treat unparsable files as non-fatal.
+            warnings.append(
+                f"Skipped {path.relative_to(candidate_root)} during consolidation: {exc}"
+            )
+            continue
         original_lines = body.splitlines()
         deduped_lines: list[str] = []
         removed_this_file = 0
@@ -314,6 +325,7 @@ def _consolidate_candidate_memory(candidate_root: Path) -> DreamConsolidation:
         "duplicates_found": duplicates_found,
         "lines_removed": lines_removed,
         "files_touched": sorted(files_touched),
+        "warnings": warnings,
     }
 
 
@@ -405,7 +417,10 @@ def _build_rewrite_tasks(candidate_root: Path, max_rewrite_tasks: int) -> list[D
             continue
         if _is_generated_file(path):
             continue  # maps are regenerated, never rewritten by agents
-        metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        try:
+            metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, FrontmatterError):
+            continue  # unparsable file — surfaced earlier in consolidation warnings
         section = _get_section_key(candidate_root, path)
         lines = [line.strip() for line in body.splitlines() if line.strip()]
         if len(lines) < 5:

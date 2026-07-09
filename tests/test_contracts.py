@@ -24,6 +24,7 @@ EXPECTED_OPTIONAL_KEYS: dict[str, set[str]] = {
     "StatusResult": {"capture", "snapshots", "candidates_count"},
     "EvalCheck": {"command"},
     "DreamResult": {"evaluation"},
+    "DreamConsolidation": {"warnings"},
 }
 
 try:

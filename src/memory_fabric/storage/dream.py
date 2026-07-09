@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from memory_fabric.contracts import DreamResult
-from memory_fabric.frontmatter import parse_frontmatter
+from memory_fabric.frontmatter import FrontmatterError, parse_frontmatter
 from memory_fabric.paths import local_memory_dir
 from memory_fabric.storage._shared import (
     _get_section_key,
@@ -164,6 +164,7 @@ async def dream(
             fallback_duplicates = local_c["duplicates_found"]
             fallback_lines_removed = local_c["lines_removed"]
             fallback_files_touched = local_c["files_touched"]
+            warnings.extend(local_c.get("warnings", []))
             resp_data = {"consolidated_files": {}}
             is_fallback = True
     else:
@@ -171,6 +172,7 @@ async def dream(
         fallback_duplicates = local_c["duplicates_found"]
         fallback_lines_removed = local_c["lines_removed"]
         fallback_files_touched = local_c["files_touched"]
+        warnings.extend(local_c.get("warnings", []))
         resp_data = {"consolidated_files": {}}
         is_fallback = True
 
@@ -239,13 +241,20 @@ def prepare_dream_payload(cwd: str, mode: str = "light") -> dict[str, Any]:
 
     # Read files into payload (generated maps are derived views — the LLM must
     # not rewrite them, and they must not perturb the consolidation hash)
+    payload_warnings: list[str] = []
     sections_data = {}
     for path in _iter_markdown_files(candidate_root):
         if path.name == "index.md" or _is_ignored_local_memory_path(candidate_root, path):
             continue
         if _is_generated_file(path):
             continue
-        metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        try:
+            metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, FrontmatterError) as exc:
+            payload_warnings.append(
+                f"Skipped {path.relative_to(candidate_root)} during consolidation: {exc}"
+            )
+            continue
         key = _get_section_key(candidate_root, path)
         sections_data[key] = body
 
@@ -282,7 +291,7 @@ def prepare_dream_payload(cwd: str, mode: str = "light") -> dict[str, Any]:
             "snapshot": snapshot,
             "current_consolidation_hash": current_consolidation_hash,
             "contradictions": previous_contradictions,
-            "warnings": list(previous_warnings) + early_maps["warnings"],
+            "warnings": list(previous_warnings) + early_maps["warnings"] + payload_warnings,
         }
 
     # Build consolidation prompt (shared builder — the split-tool variant keeps
@@ -302,7 +311,7 @@ def prepare_dream_payload(cwd: str, mode: str = "light") -> dict[str, Any]:
         "current_consolidation_hash": current_consolidation_hash,
         "consolidation_prompt": prompt,
         "sections_data": sections_data,
-        "warnings": early_maps["warnings"],
+        "warnings": early_maps["warnings"] + payload_warnings,
     }
 
 
