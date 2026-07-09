@@ -139,8 +139,11 @@ class VerifyEvidenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             initialize_memory_fabric(temp)
             write_memory_store(
-                temp, "schemas/flaky", "Cites a file that appears later.",
-                title="Flaky", evidence=["late.py"],
+                temp,
+                "schemas/flaky",
+                "Cites a file that appears later.",
+                title="Flaky",
+                evidence=["late.py"],
             )
             first = verify_evidence(temp)
             self.assertFalse(first["ok"])
@@ -160,8 +163,12 @@ class VerifyEvidenceTests(unittest.TestCase):
             initialize_memory_fabric(temp)
             (Path(temp) / "models.py").write_text("class Task:\n    pass\n", encoding="utf-8")
             write_memory_store(
-                temp, "schemas/broken-evidence-test", "Cites a ghost.",
-                title="Broken", evidence=["nonexistent_file.py:999"], mode="replace",
+                temp,
+                "schemas/broken-evidence-test",
+                "Cites a ghost.",
+                title="Broken",
+                evidence=["nonexistent_file.py:999"],
+                mode="replace",
             )
             verify_evidence(temp)
 
@@ -172,8 +179,12 @@ class VerifyEvidenceTests(unittest.TestCase):
             self.assertEqual(metadata.get("review_status"), "broken-evidence")
 
             write_memory_store(
-                temp, "schemas/broken-evidence-test", "Cites the real model.",
-                title="Fixed", evidence=["models.py:1"], mode="replace",
+                temp,
+                "schemas/broken-evidence-test",
+                "Cites the real model.",
+                title="Fixed",
+                evidence=["models.py:1"],
+                mode="replace",
             )
             result = verify_evidence(temp)
             self.assertTrue(result["ok"])
@@ -183,9 +194,7 @@ class VerifyEvidenceTests(unittest.TestCase):
     def test_verify_clears_marker_when_evidence_removed(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             initialize_memory_fabric(temp)
-            write_memory_store(
-                temp, "schemas/dropped", "x", title="Dropped", evidence=["gone.py"]
-            )
+            write_memory_store(temp, "schemas/dropped", "x", title="Dropped", evidence=["gone.py"])
             verify_evidence(temp)
 
             # Rewrite without evidence at all — marker must not stick around.

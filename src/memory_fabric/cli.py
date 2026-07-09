@@ -50,9 +50,16 @@ def _ensure_utf8_output() -> None:
     the MCP server's stdio transport must not be touched.
     """
     for stream in (sys.stdout, sys.stderr):
+        # `reconfigure` is a TextIOWrapper method, not part of the abstract
+        # TextIO type sys.stdout/stderr are typed as — fetch it dynamically so
+        # mypy doesn't require narrowing, and so any stream that duck-types
+        # TextIOWrapper (e.g. colorama's Windows console wrapper) still works.
+        reconfigure = getattr(stream, "reconfigure", None)
+        if not callable(reconfigure):
+            continue
         try:
-            if stream and (stream.encoding or "").lower().replace("-", "") != "utf8":
-                stream.reconfigure(encoding="utf-8", errors="replace")
+            if (stream.encoding or "").lower().replace("-", "") != "utf8":
+                reconfigure(encoding="utf-8", errors="replace")
         except (AttributeError, OSError, ValueError):
             pass
 

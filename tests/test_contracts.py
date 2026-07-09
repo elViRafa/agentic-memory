@@ -73,9 +73,7 @@ class TestDreamResultPydanticValidation(unittest.TestCase):
         """
         with tempfile.TemporaryDirectory() as temp:
             initialize_memory_fabric(temp)
-            write_memory_store(
-                temp, "architecture/notes", "# Notes\n\nSome fact.", title="Notes"
-            )
+            write_memory_store(temp, "architecture/notes", "# Notes\n\nSome fact.", title="Notes")
             result = asyncio.run(dream(temp, mode="light", apply=True))
             self.assertNotIn("evaluation", result)
             validated = TypeAdapter(contracts.DreamResult).validate_python(result)

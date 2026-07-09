@@ -219,7 +219,9 @@ class MemoryFabricTests(unittest.TestCase):
 
             dry = prune_dream_artifacts(temp, keep_snapshots=2, keep_candidates=1, dry_run=True)
             self.assertEqual(len(dry["removed_snapshots"]), 3)
-            self.assertEqual(len(list((memory_dir / "snapshots").iterdir())), 5, "dry-run deletes nothing")
+            self.assertEqual(
+                len(list((memory_dir / "snapshots").iterdir())), 5, "dry-run deletes nothing"
+            )
 
             result = prune_dream_artifacts(temp, keep_snapshots=2, keep_candidates=1)
             self.assertEqual(len(result["removed_snapshots"]), 3)
@@ -229,7 +231,9 @@ class MemoryFabricTests(unittest.TestCase):
 
             # protected names survive even beyond the keep window
             again = prune_dream_artifacts(
-                temp, keep_snapshots=0, keep_candidates=0,
+                temp,
+                keep_snapshots=0,
+                keep_candidates=0,
                 protect={p.name for p in (memory_dir / "snapshots").iterdir()},
             )
             self.assertEqual(again["removed_snapshots"], [])
@@ -1508,14 +1512,15 @@ class MemoryStoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             initialize_memory_fabric(temp)
             write_memory_store(
-                temp, "architecture/decisions/task-due-dates", "Old decision line.",
+                temp,
+                "architecture/decisions/task-due-dates",
+                "Old decision line.",
                 title="Due Dates",
             )
             preview = propose_memory_patch(
                 temp,
                 instructions=(
-                    "store: architecture/decisions/task-due-dates\n"
-                    "New paragraph about validation."
+                    "store: architecture/decisions/task-due-dates\nNew paragraph about validation."
                 ),
             )
             patch = preview["patch"]

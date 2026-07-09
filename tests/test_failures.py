@@ -125,9 +125,7 @@ class WriteFailureMemoryTests(unittest.TestCase):
 
             failures_dir = Path(temp) / ".ai-memory" / "memory-store" / "failures"
             files = list(failures_dir.glob("*.md"))
-            self.assertEqual(
-                len(files), 1, "reworded reports of the same root cause must merge"
-            )
+            self.assertEqual(len(files), 1, "reworded reports of the same root cause must merge")
             metadata, body = parse_frontmatter(files[0].read_text(encoding="utf-8"))
             self.assertEqual(metadata.get("occurrences"), "2")
             self.assertIn("error_signature", metadata)

@@ -323,9 +323,7 @@ class ClaudeCodeCliTests(unittest.TestCase):
         ):
             result = install(temp, "cursor", project=True)
             self.assertTrue(result["ok"])
-            config = _json.loads(
-                (Path(temp) / ".cursor" / "mcp.json").read_text(encoding="utf-8")
-            )
+            config = _json.loads((Path(temp) / ".cursor" / "mcp.json").read_text(encoding="utf-8"))
             entry = config["mcpServers"]["memory-fabric"]
             self.assertEqual(entry["command"], str(fake))
             self.assertTrue(any("local binary" in w for w in result["warnings"]))
@@ -338,9 +336,7 @@ class ClaudeCodeCliTests(unittest.TestCase):
                 temp, "cursor", project=True, server_command="C:/custom/server.exe --debug"
             )
             self.assertTrue(result["ok"])
-            config = _json.loads(
-                (Path(temp) / ".cursor" / "mcp.json").read_text(encoding="utf-8")
-            )
+            config = _json.loads((Path(temp) / ".cursor" / "mcp.json").read_text(encoding="utf-8"))
             entry = config["mcpServers"]["memory-fabric"]
             self.assertEqual(entry["command"], "C:/custom/server.exe")
             self.assertEqual(entry["args"], ["--debug"])
