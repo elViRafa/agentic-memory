@@ -422,7 +422,10 @@ Claims without numbers don't win "best in the world."
    append preserves priority, verify clears stale markers, no-op dreams keep the git
    tree clean, snapshot retention + `rollback --list` + `clean`, doctor-clean init,
    UTF-8 CLI output, accurate provider warnings, valid diff headers, and a
-   deterministic contradiction net.)
+   deterministic contradiction net. v0.7.2 shipped 2026-07-09: a malformed
+   memory-store file's YAML frontmatter no longer crashes `ai-memory dream` —
+   the consolidation, hash-recalculation, and rewrite-task scans now skip the
+   bad file and surface a warning instead of aborting the whole command.)
 6. **Phase 2.2 migration tooling (v0.8)** — still unbuilt; the last v1.0 blocker left
    from Phase 2. Do this before item 7.
 7. **Launch v1.0** (Phase 6 demo + announcements) on the strength of distribution and
