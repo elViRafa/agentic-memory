@@ -388,7 +388,10 @@ class MemoryFabricTests(unittest.TestCase):
             result = dream(temp, mode="light", apply=False)
 
             self.assertTrue(
-                any("no_frontmatter.md" in w and "frontmatter" in w.lower() for w in result["warnings"]),
+                any(
+                    "no_frontmatter.md" in w and "frontmatter" in w.lower()
+                    for w in result["warnings"]
+                ),
                 result["warnings"],
             )
 
