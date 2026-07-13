@@ -7,19 +7,19 @@
     "url": "https://github.com/elViRafa/agentic-memory",
     "source": "github"
   },
-  "version": "0.7.2",
+  "version": "0.7.3",
   "packages": [
     {
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "memory-fabric",
-      "version": "0.7.2",
+      "version": "0.7.3",
       "runtimeHint": "uvx",
       "runtimeArguments": [
         {
           "type": "named",
           "name": "--from",
-          "value": "memory-fabric[mcp]==0.7.2"
+          "value": "memory-fabric[mcp]==0.7.3"
         },
         {
           "type": "positional",

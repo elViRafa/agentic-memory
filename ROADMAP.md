@@ -4,7 +4,7 @@
 > one command in VS Code, Claude (Code + Desktop), Codex, Antigravity, Cursor, Windsurf,
 > Gemini CLI, Cline, and anything MCP-compatible.
 
-Last updated: 2026-07-13 · Current version: 0.7.2 ([live on PyPI](https://pypi.org/project/memory-fabric/)) · Tests: 264 passing (+70 subtests, +1 skipped on Windows by design) · Coverage: 85.5% (gate: 82%) · Lint: ruff (E4,E7,E9,F,I,B,UP,SIM,RUF,BLE001,S110,S112) + mypy clean · No `src/` file >25 KB except 4 tracked borderline files · Phase 0 exit criteria met
+Last updated: 2026-07-13 · Current version: 0.7.3 ([live on PyPI](https://pypi.org/project/memory-fabric/)) · Tests: 264 passing (+70 subtests, +1 skipped on Windows by design) · Coverage: 85.5% (gate: 82%) · Lint: ruff (E4,E7,E9,F,I,B,UP,SIM,RUF,BLE001,S110,S112) + mypy clean · No `src/` file >25 KB except 4 tracked borderline files · Phase 0 exit criteria met
 
 ---
 
