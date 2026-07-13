@@ -5,7 +5,6 @@ from __future__ import annotations
 import math
 import re
 
-
 SECRET_VALUE = "[REDACTED_SECRET]"
 
 _KEY_VALUE_PATTERN = re.compile(

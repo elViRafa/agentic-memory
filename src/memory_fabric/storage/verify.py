@@ -72,7 +72,7 @@ def _check_commit_ref(root: Path, commit_hash: str) -> str | None:
             timeout=5.0,
             check=False,
         )
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         return None  # not a git repo, or git unavailable — skip rather than false-fail
     if res.returncode != 0:
         return f"commit not found: {commit_hash}"

@@ -22,14 +22,14 @@ from memory_fabric.storage._shared import (
 from memory_fabric.templates import (
     LOCAL_GITIGNORE,
     SECTION_TEMPLATES,
-    build_memory_file,
     build_agents_md,
-    build_agents_rule_memory,
     build_agents_rule_dreaming,
-    build_cursor_rule,
-    build_windsurf_rule,
+    build_agents_rule_memory,
     build_claude_md,
     build_copilot_md,
+    build_cursor_rule,
+    build_memory_file,
+    build_windsurf_rule,
 )
 from memory_fabric.version import __version__
 
@@ -253,7 +253,7 @@ def initialize_memory_fabric(
                     for hook_file in [post_commit, pre_commit]:
                         mode = hook_file.stat().st_mode
                         hook_file.chmod(mode | 0o111)
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 - reported via warnings, not swallowed.
                     warnings.append(f"Failed to set executable permissions on git hooks: {exc}")
         else:
             warnings.append("Git repository not found; hooks were not installed.")
@@ -268,7 +268,7 @@ def initialize_memory_fabric(
         # compile_consolidated=False: the compiled context document is a
         # Dreaming artifact; init only needs the indexes doctor checks.
         _regenerate_index_root(memory_dir, mode="light", compile_consolidated=False)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - reported via warnings, not swallowed.
         warnings.append(f"Could not generate the initial memory indexes: {exc}")
 
     return {
@@ -363,8 +363,8 @@ def status(cwd: str) -> StatusResult:
                     "bytes": len(content.encode("utf-8")),
                     "tokens": estimate_tokens(content),
                 }
-            except Exception:
-                pass
+            except (OSError, UnicodeDecodeError):
+                pass  # size/token stats are informational; a skipped file just omits a row
 
     from memory_fabric.storage.capture import capture_stats
     from memory_fabric.storage.snapshots import list_snapshots
@@ -393,7 +393,7 @@ def status(cwd: str) -> StatusResult:
     }
 
 
-def doctor(cwd: str, check_pypi: bool = False) -> DoctorResult:
+def doctor(cwd: str, check_network: bool = False) -> DoctorResult:
     memory_dir = local_memory_dir(cwd)
     errors: list[str] = []
     warnings: list[str] = []
@@ -448,7 +448,7 @@ def doctor(cwd: str, check_pypi: bool = False) -> DoctorResult:
         warnings.append("index.md is missing")
     else:
         try:
-            index_metadata, index_body = parse_frontmatter(index_path.read_text(encoding="utf-8"))
+            _index_metadata, index_body = parse_frontmatter(index_path.read_text(encoding="utf-8"))
             listed_sections = set()
             for line in index_body.splitlines():
                 if line.strip().startswith("|") and not line.strip().startswith("| ---"):
@@ -480,7 +480,7 @@ def doctor(cwd: str, check_pypi: bool = False) -> DoctorResult:
                 warnings.append(
                     f"Section `{sec}` is listed in index.md but the corresponding file does not exist"
                 )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - reported via errors, not swallowed.
             errors.append(f"Failed to check index consistency: {exc}")
 
     # Verify consistency of memory-store sub-index
@@ -494,7 +494,7 @@ def doctor(cwd: str, check_pypi: bool = False) -> DoctorResult:
             )
         else:
             try:
-                store_meta, store_body = parse_frontmatter(
+                _store_meta, store_body = parse_frontmatter(
                     store_index_path.read_text(encoding="utf-8")
                 )
                 listed_store_paths = set()
@@ -523,12 +523,13 @@ def doctor(cwd: str, check_pypi: bool = False) -> DoctorResult:
                     warnings.append(
                         f"Store file `{sp}` is listed in memory-store/index.md but the file does not exist"
                     )
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - reported via errors, not swallowed.
                 errors.append(f"Failed to check memory-store index consistency: {exc}")
 
     _check_hook_health(cwd, warnings)
     _check_install_drift(warnings)
-    if check_pypi:
+    _check_llm_provider(warnings, check_network=check_network)
+    if check_network:
         _check_pypi_drift(warnings)
 
     if not shutil.which("rg"):
@@ -568,8 +569,9 @@ def _check_install_drift(warnings: list[str]) -> None:
 def _check_pypi_drift(warnings: list[str]) -> None:
     """Best-effort comparison of the local version against the latest on PyPI.
 
-    Network access is opt-in (`ai-memory doctor` passes check_pypi=True); any
-    failure — offline, timeout, proxy — is silent by design.
+    Network access is opt-in (`ai-memory doctor` passes check_network=True,
+    the default unless `--offline` is given); any failure — offline, timeout,
+    proxy — is silent by design.
     """
     try:
         import json as _json
@@ -580,13 +582,76 @@ def _check_pypi_drift(warnings: list[str]) -> None:
         ) as response:
             data = _json.load(response)
         latest = str(data.get("info", {}).get("version") or "")
-    except Exception:
+    except (OSError, ValueError):
         return
     if latest and latest != __version__:
         warnings.append(
             f"Installed memory-fabric is {__version__} but PyPI's latest is {latest}. If your MCP "
             "client was configured via uvx, its cached server may be even older — re-run "
             "`ai-memory install` after upgrading (or `uv cache clean memory-fabric`)."
+        )
+
+
+def _check_llm_provider(warnings: list[str], check_network: bool) -> None:
+    """Preflight the configured LLM provider so a misconfiguration surfaces in
+    `ai-memory doctor` instead of as an opaque failure mid-Dream (field-test
+    finding AV-2: a nonexistent OLLAMA_MODEL produced a raw HTTP-error string
+    with no actionable next step).
+
+    API-key-presence checks are pure env-var reads (no network, always run).
+    The Ollama reachability + model-existence check is a real socket call —
+    gated behind `check_network` (same opt-out-via-`--offline` flag as the
+    PyPI check) even though it defaults to localhost, for the same
+    local-first-by-default reasoning as `_check_pypi_drift`.
+    """
+    provider = (os.environ.get("MEMORY_FABRIC_LLM_PROVIDER") or "").strip().lower()
+    if not provider:
+        return
+
+    if provider == "gemini":
+        if not os.environ.get("GEMINI_API_KEY"):
+            warnings.append("MEMORY_FABRIC_LLM_PROVIDER=gemini but GEMINI_API_KEY is not set.")
+        return
+    if provider == "openai":
+        base_url = os.environ.get("OPENAI_API_BASE") or os.environ.get("OPENAI_BASE_URL") or ""
+        if not os.environ.get("OPENAI_API_KEY") and (not base_url or "api.openai.com" in base_url):
+            warnings.append("MEMORY_FABRIC_LLM_PROVIDER=openai but OPENAI_API_KEY is not set.")
+        return
+    if provider == "anthropic":
+        if not os.environ.get("ANTHROPIC_API_KEY"):
+            warnings.append(
+                "MEMORY_FABRIC_LLM_PROVIDER=anthropic but ANTHROPIC_API_KEY is not set."
+            )
+        return
+    if provider != "ollama":
+        warnings.append(
+            f"MEMORY_FABRIC_LLM_PROVIDER is set to an unrecognized value: `{provider}`."
+        )
+        return
+
+    if not check_network:
+        return
+
+    host = (os.environ.get("OLLAMA_HOST") or "http://localhost:11434").rstrip("/")
+    model = os.environ.get("OLLAMA_MODEL") or "gemma2"
+    try:
+        import json as _json
+        import urllib.request
+
+        with urllib.request.urlopen(f"{host}/api/tags", timeout=3.0) as response:
+            data = _json.load(response)
+        installed = {str(m.get("name") or "") for m in data.get("models", [])}
+        # Ollama model names carry an implicit ":latest" tag; accept either form.
+        installed_bare = {name.split(":", 1)[0] for name in installed}
+        if model not in installed and model.split(":", 1)[0] not in installed_bare:
+            warnings.append(
+                f"Ollama is reachable at {host} but model `{model}` (OLLAMA_MODEL) is not "
+                f"installed. Run `ollama pull {model}` or `ollama list` to see available models."
+            )
+    except (OSError, ValueError):
+        warnings.append(
+            f"MEMORY_FABRIC_LLM_PROVIDER=ollama but Ollama is not reachable at {host}. "
+            "Start Ollama, or check OLLAMA_HOST if it runs elsewhere."
         )
 
 

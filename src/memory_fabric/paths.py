@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import os
 import platform
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Mapping
-
 
 APP_DIR_NAME = "memory-fabric"
 LOCAL_MEMORY_DIR = ".ai-memory"

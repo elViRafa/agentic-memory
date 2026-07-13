@@ -18,7 +18,7 @@ import os
 import re
 
 from memory_fabric.contracts import WriteResult
-from memory_fabric.frontmatter import dump_frontmatter, parse_frontmatter
+from memory_fabric.frontmatter import FrontmatterError, dump_frontmatter, parse_frontmatter
 from memory_fabric.paths import memory_store_dir
 from memory_fabric.storage._shared import _jaccard_similar
 from memory_fabric.storage.store import read_memory_store, write_memory_store
@@ -90,7 +90,7 @@ def _find_similar_failure(cwd: str, normalized: str) -> str | None:
             continue
         try:
             metadata, _body = parse_frontmatter(path.read_text(encoding="utf-8"))
-        except Exception:
+        except (OSError, UnicodeDecodeError, FrontmatterError):
             continue
         signature = str(metadata.get("error_signature") or "")
         if signature and _jaccard_similar(normalized, signature, threshold=threshold):

@@ -11,6 +11,7 @@ from typing import Any
 
 from memory_fabric.contracts import DreamResult
 from memory_fabric.frontmatter import FrontmatterError, parse_frontmatter
+from memory_fabric.llm import call_llm
 from memory_fabric.paths import local_memory_dir
 from memory_fabric.storage._shared import (
     _get_section_key,
@@ -32,7 +33,41 @@ from memory_fabric.storage.finalize import (
 from memory_fabric.storage.lifecycle import initialize_memory_fabric
 from memory_fabric.storage.maps import regenerate_maps
 from memory_fabric.storage.snapshots import create_snapshot
-from memory_fabric.llm import call_llm
+
+
+def _read_optional_text(path: Path) -> str:
+    """Best-effort read of an optional private input file (session transcript,
+    tool-call log). Absence or unreadability just means less context for
+    consolidation, not a failure — dream(), prepare_dream_payload(), and
+    apply_dream_results() all ingest the same two optional files this way.
+    """
+    if not path.exists():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+
+def _read_previous_consolidation_metadata(
+    index_path: Path,
+) -> tuple[str | None, list[Any], list[Any]]:
+    """Read the prior run's (consolidation_hash, contradictions, warnings) from
+    index.md frontmatter, used to skip a redundant LLM call when nothing
+    changed. A missing or malformed index just means no cache hit — never a
+    failure worth surfacing, since a fresh consolidation covers for it.
+    """
+    if not index_path.exists():
+        return None, [], []
+    try:
+        index_metadata, _ = parse_frontmatter(index_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, FrontmatterError):
+        return None, [], []
+    return (
+        index_metadata.get("consolidation_hash"),
+        index_metadata.get("contradictions", []),
+        index_metadata.get("consolidation_warnings", []),
+    )
 
 
 async def dream(
@@ -65,22 +100,11 @@ async def dream(
 
     # Ingest external inputs
     git_diff_text = _get_git_diff(cwd)
-    session_text = ""
-    tool_calls_text = ""
-
     session_path = memory_dir / "private" / "session_transcripts.md"
-    if session_path.exists():
-        try:
-            session_text = session_path.read_text(encoding="utf-8")
-        except Exception:
-            pass
+    session_text = _read_optional_text(session_path)
 
     tool_calls_path = memory_dir / "private" / "tool_calls.jsonl"
-    if tool_calls_path.exists():
-        try:
-            tool_calls_text = tool_calls_path.read_text(encoding="utf-8")
-        except Exception:
-            pass
+    tool_calls_text = _read_optional_text(tool_calls_path)
 
     llm_active = _is_llm_ready(context)
 
@@ -102,7 +126,7 @@ async def dream(
                     continue
                 if _is_generated_file(path):
                     continue
-                metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+                _metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
                 key = _get_section_key(candidate_root, path)
                 sections_data[key] = body
 
@@ -122,18 +146,12 @@ async def dream(
             ).hexdigest()
 
             # Read previous consolidation metadata from index.md
-            previous_consolidation_hash = None
-            previous_contradictions = []
-            previous_warnings = []
             index_path = memory_dir / "index.md"
-            if index_path.exists():
-                try:
-                    index_metadata, _ = parse_frontmatter(index_path.read_text(encoding="utf-8"))
-                    previous_consolidation_hash = index_metadata.get("consolidation_hash")
-                    previous_contradictions = index_metadata.get("contradictions", [])
-                    previous_warnings = index_metadata.get("consolidation_warnings", [])
-                except Exception:
-                    pass
+            (
+                previous_consolidation_hash,
+                previous_contradictions,
+                previous_warnings,
+            ) = _read_previous_consolidation_metadata(index_path)
 
             if previous_consolidation_hash == current_consolidation_hash:
                 # Skip LLM consolidation call and use cached results
@@ -158,7 +176,7 @@ async def dream(
                 )
                 resp_data = _parse_llm_json_response(response_str)
 
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - any LLM/parsing failure falls back to local consolidation, reported below.
             warnings.append(f"LLM-based consolidation failed; falling back to local. Error: {exc}")
             local_c = _consolidate_candidate_memory(candidate_root)
             fallback_duplicates = local_c["duplicates_found"]
@@ -222,22 +240,11 @@ def prepare_dream_payload(cwd: str, mode: str = "light") -> dict[str, Any]:
 
     # Ingest external inputs
     git_diff_text = _get_git_diff(cwd)
-    session_text = ""
-    tool_calls_text = ""
-
     session_path = memory_dir / "private" / "session_transcripts.md"
-    if session_path.exists():
-        try:
-            session_text = session_path.read_text(encoding="utf-8")
-        except Exception:
-            pass
+    session_text = _read_optional_text(session_path)
 
     tool_calls_path = memory_dir / "private" / "tool_calls.jsonl"
-    if tool_calls_path.exists():
-        try:
-            tool_calls_text = tool_calls_path.read_text(encoding="utf-8")
-        except Exception:
-            pass
+    tool_calls_text = _read_optional_text(tool_calls_path)
 
     # Read files into payload (generated maps are derived views — the LLM must
     # not rewrite them, and they must not perturb the consolidation hash)
@@ -249,7 +256,7 @@ def prepare_dream_payload(cwd: str, mode: str = "light") -> dict[str, Any]:
         if _is_generated_file(path):
             continue
         try:
-            metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+            _metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, FrontmatterError) as exc:
             payload_warnings.append(
                 f"Skipped {path.relative_to(candidate_root)} during consolidation: {exc}"
@@ -272,18 +279,10 @@ def prepare_dream_payload(cwd: str, mode: str = "light") -> dict[str, Any]:
     current_consolidation_hash = hashlib.md5("\n".join(hash_input).encode("utf-8")).hexdigest()
 
     # Read previous consolidation metadata from index.md
-    previous_consolidation_hash = None
-    previous_contradictions = []
-    previous_warnings = []
     index_path = memory_dir / "index.md"
-    if index_path.exists():
-        try:
-            index_metadata, _ = parse_frontmatter(index_path.read_text(encoding="utf-8"))
-            previous_consolidation_hash = index_metadata.get("consolidation_hash")
-            previous_contradictions = index_metadata.get("contradictions", [])
-            previous_warnings = index_metadata.get("consolidation_warnings", [])
-        except Exception:
-            pass
+    previous_consolidation_hash, previous_contradictions, previous_warnings = (
+        _read_previous_consolidation_metadata(index_path)
+    )
 
     if previous_consolidation_hash == current_consolidation_hash:
         return {
@@ -348,28 +347,14 @@ async def apply_dream_results(
 
     # Extract snapshot name from candidate_root name
     parts = candidate_root.name.split("-")
-    if len(parts) >= 2:
-        snapshot = "-".join(parts[:-1])
-    else:
-        snapshot = candidate_root.name
+    snapshot = "-".join(parts[:-1]) if len(parts) >= 2 else candidate_root.name
 
     git_diff_text = _get_git_diff(cwd)
-    session_text = ""
-    tool_calls_text = ""
-
     session_path = memory_dir / "private" / "session_transcripts.md"
-    if session_path.exists():
-        try:
-            session_text = session_path.read_text(encoding="utf-8")
-        except Exception:
-            pass
+    session_text = _read_optional_text(session_path)
 
     tool_calls_path = memory_dir / "private" / "tool_calls.jsonl"
-    if tool_calls_path.exists():
-        try:
-            tool_calls_text = tool_calls_path.read_text(encoding="utf-8")
-        except Exception:
-            pass
+    tool_calls_text = _read_optional_text(tool_calls_path)
 
     resp_data = _parse_llm_json_response(llm_response)
 

@@ -9,13 +9,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from memory_fabric.version import __version__
 from memory_fabric.clients import CLIENTS
-from memory_fabric.merge_driver import install_merge_driver
-from memory_fabric.merge_driver import run as run_merge_driver
 from memory_fabric.contracts import DreamEvalResult, EvalResult
 from memory_fabric.eval import evaluate_dream_quality, evaluate_memory_fabric
 from memory_fabric.installer import install, install_all
+from memory_fabric.merge_driver import install_merge_driver
+from memory_fabric.merge_driver import run as run_merge_driver
 from memory_fabric.paths import local_memory_dir
 from memory_fabric.storage import (
     capture_commit,
@@ -33,11 +32,12 @@ from memory_fabric.storage import (
     read_memory_store,
     rollback,
     status,
+    sync_agent_rules,
     verify_evidence,
     write_failure_memory,
     write_memory_store,
-    sync_agent_rules,
 )
+from memory_fabric.version import __version__
 
 
 def _ensure_utf8_output() -> None:
@@ -98,8 +98,9 @@ def main(argv: list[str] | None = None) -> int:
                     f"merge-driver: {w}" for w in merge_driver_result["warnings"]
                 ]
                 if merge_driver_result["gitattributes_changed"]:
-                    init_result["files_created"] = list(init_result.get("files_created", [])) + [
-                        str(Path(cwd) / ".gitattributes")
+                    init_result["files_created"] = [
+                        *list(init_result.get("files_created", [])),
+                        str(Path(cwd) / ".gitattributes"),
                     ]
             _print_result(init_result, args.json)
             return 0
@@ -120,7 +121,7 @@ def main(argv: list[str] | None = None) -> int:
             # stop" from an operational error, and surface the reason.
             return 0 if guard_result["ok"] else 2
         if args.command == "doctor":
-            doctor_result = doctor(cwd, check_pypi=not getattr(args, "offline", False))
+            doctor_result = doctor(cwd, check_network=not getattr(args, "offline", False))
             _print_result(doctor_result, args.json)
             return 0 if doctor_result["ok"] else 1
         if args.command == "verify":
@@ -212,13 +213,14 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "sync-global":
             memory_dir = local_memory_dir(cwd)
             if not args.json and sys.stdin.isatty() and memory_dir.exists():
+                import shutil
+
+                from memory_fabric.locking import locked_file
                 from memory_fabric.paths import global_memory_dir
                 from memory_fabric.storage import (
-                    _iter_markdown_files,
                     _is_ignored_local_memory_path,
+                    _iter_markdown_files,
                 )
-                from memory_fabric.locking import locked_file
-                import shutil
 
                 promoted_count = 0
                 local_files = [
@@ -261,10 +263,7 @@ def main(argv: list[str] | None = None) -> int:
                                     .strip()
                                     .lower()
                                 )
-                                if append in {"y", "yes"}:
-                                    action = "append"
-                                else:
-                                    action = "skip"
+                                action = "append" if append in {"y", "yes"} else "skip"
 
                         if action == "copy":
                             with locked_file(target_path):
@@ -273,8 +272,8 @@ def main(argv: list[str] | None = None) -> int:
                             promoted_count += 1
                         elif action == "append":
                             from memory_fabric.frontmatter import (
-                                parse_frontmatter,
                                 dump_frontmatter,
+                                parse_frontmatter,
                             )
 
                             with locked_file(target_path):

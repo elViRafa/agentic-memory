@@ -136,8 +136,8 @@ def read_combined_context(
                         "estimated_tokens": est_tokens,
                         "warnings": [f"Tier 0 directives not found: {tier0}"],
                     }
-        except Exception:
-            pass
+        except (OSError, UnicodeDecodeError):
+            pass  # cache-read fast path failed; fall through to the authoritative slow path below
 
     if tier0.exists():
         text = tier0.read_text(encoding="utf-8")
@@ -160,7 +160,7 @@ def read_combined_context(
                 )
                 included.append("local/memory_prompt")
                 remaining -= estimate_tokens(p_text)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - reported via warnings, not swallowed.
             warnings.append(f"Failed to read memory_prompt.txt: {exc}")
 
     # Steering sections (framework-rules, ubiquitous-language, or any section

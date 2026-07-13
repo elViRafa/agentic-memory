@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from memory_fabric.contracts import EpisodicJournalResult
 from memory_fabric.security import redact_secrets
@@ -34,7 +34,7 @@ def write_session_journal(
         session_label:  Optional short label for this session (e.g. "auth-refactor").
                         If omitted, the ISO timestamp is used.
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     date_str = now.strftime("%Y-%m-%d")
     time_str = now.strftime("%H:%M UTC")
     store_path = f"episodic/{date_str}"

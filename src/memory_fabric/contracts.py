@@ -21,7 +21,9 @@ if sys.version_info >= (3, 12):
     from typing import NotRequired, TypedDict
 else:
     try:
-        from typing_extensions import NotRequired, TypedDict
+        from typing import NotRequired
+
+        from typing_extensions import TypedDict
     except ImportError:
         from typing import NotRequired, TypedDict
 
@@ -36,7 +38,10 @@ class InitResult(TypedDict):
     memory_dir: str
     files_created: list[str]
     warnings: list[str]
-    resource_uris: NotRequired[list[str]]
+    # `| None`: see the FastMCP output-validation note on DreamResult.evaluation
+    # below. Currently always populated by initialize_memory_fabric_tool, so
+    # dormant rather than live — kept nullable so it stays that way.
+    resource_uris: NotRequired[list[str] | None]
 
 
 class ContextBundle(TypedDict):
@@ -246,4 +251,15 @@ class DreamResult(TypedDict):
     rewrite_tasks: list[DreamRewriteTask]
     apply_required: bool
     redactions: int
-    evaluation: NotRequired[DreamEvalResult]
+    # `| None`, not just NotRequired[DreamEvalResult]: FastMCP converts a
+    # tool's top-level return TypedDict into a BaseModel by giving every
+    # NotRequired field `default=None` while leaving its original (non-null)
+    # annotation in place (`_create_model_from_typeddict`), then dumps the
+    # result without `exclude_unset`. An omitted `evaluation` therefore
+    # serializes onto the wire as an explicit `null`, which a non-nullable
+    # `object` schema rejects — resurfacing P-13 (isError: True on a
+    # successful apply) through the real MCP path even though direct
+    # TypeAdapter validation (tests/test_contracts.py) looks clean. Found via
+    # tests/test_mcp_contract.py, which calls tools through an in-process
+    # ClientSession instead of the raw Python function.
+    evaluation: NotRequired[DreamEvalResult | None]

@@ -53,7 +53,7 @@ def propose_memory_patch(cwd: str, instructions: str) -> PatchPreview:
             "patch": "",
             "affected_files": [],
             "redactions": redactions,
-            "warnings": warnings + ["No proposed content provided after directive line."],
+            "warnings": [*warnings, "No proposed content provided after directive line."],
         }
 
     # --- Resolve target file --------------------------------------------------
@@ -65,7 +65,7 @@ def propose_memory_patch(cwd: str, instructions: str) -> PatchPreview:
                 "patch": "",
                 "affected_files": [],
                 "redactions": redactions,
-                "warnings": warnings + [f"Invalid store path: {exc}"],
+                "warnings": [*warnings, f"Invalid store path: {exc}"],
             }
     elif target_section:
         if not SECTION_PATTERN.match(target_section):
@@ -73,9 +73,9 @@ def propose_memory_patch(cwd: str, instructions: str) -> PatchPreview:
                 "patch": "",
                 "affected_files": [],
                 "redactions": redactions,
-                "warnings": warnings
-                + [
-                    f"Invalid section name '{target_section}': must match [A-Za-z0-9][A-Za-z0-9_-]*"
+                "warnings": [
+                    *warnings,
+                    f"Invalid section name '{target_section}': must match [A-Za-z0-9][A-Za-z0-9_-]*",
                 ],
             }
         target_path = memory_dir / f"{target_section}.md"
@@ -93,7 +93,7 @@ def propose_memory_patch(cwd: str, instructions: str) -> PatchPreview:
                 "patch": "",
                 "affected_files": [],
                 "redactions": redactions,
-                "warnings": warnings + [f"Cannot read target file: {exc}"],
+                "warnings": [*warnings, f"Cannot read target file: {exc}"],
             }
     else:
         original_text = ""

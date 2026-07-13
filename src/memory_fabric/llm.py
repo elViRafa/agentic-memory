@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import json
 import os
-import urllib.request
 import urllib.error
+import urllib.request
 from typing import Any
 
 
@@ -50,7 +50,7 @@ def load_env_from_cwd(cwd: str | Any) -> None:
         for env_name in env_names:
             dotenv_path = cwd_path / env_name
             if dotenv_path.is_file():
-                with open(dotenv_path, "r", encoding="utf-8", errors="replace") as f:
+                with open(dotenv_path, encoding="utf-8", errors="replace") as f:
                     for line in f:
                         line = line.strip()
                         if not line or line.startswith("#"):
@@ -70,7 +70,7 @@ def load_env_from_cwd(cwd: str | Any) -> None:
 
                             if key and not os.environ.get(key):
                                 os.environ[key] = val
-    except Exception:
+    except OSError:
         # Graceful fallback: do not crash if file access/parsing fails
         pass
 
@@ -136,7 +136,7 @@ async def call_llm(prompt: str, system_instruction: str = "", context: Any = Non
                             if hasattr(item, "text"):
                                 return item.text
                 raise LLMError(f"Unexpected sampling response format: {result}")
-        except asyncio.TimeoutError as exc:
+        except TimeoutError as exc:
             raise LLMError(
                 "MCP Sampling request timed out after 45 seconds. This deadlock is usually caused by "
                 "the client/IDE sequential JSON-RPC loop blocking incoming sampling requests while waiting "
@@ -166,7 +166,7 @@ def _call_gemini(prompt: str, system_instruction: str) -> str:
     try:
         return response_data["candidates"][0]["content"]["parts"][0]["text"]
     except (KeyError, IndexError, TypeError) as exc:
-        raise LLMError(f"Gemini response parsing failed: {exc}. Response: {response_data}")
+        raise LLMError(f"Gemini response parsing failed: {exc}. Response: {response_data}") from exc
 
 
 def _call_openai(prompt: str, system_instruction: str) -> str:
@@ -198,7 +198,7 @@ def _call_openai(prompt: str, system_instruction: str) -> str:
     try:
         return response_data["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError) as exc:
-        raise LLMError(f"OpenAI response parsing failed: {exc}. Response: {response_data}")
+        raise LLMError(f"OpenAI response parsing failed: {exc}. Response: {response_data}") from exc
 
 
 def _call_anthropic(prompt: str, system_instruction: str) -> str:
@@ -225,7 +225,9 @@ def _call_anthropic(prompt: str, system_instruction: str) -> str:
     try:
         return response_data["content"][0]["text"]
     except (KeyError, IndexError, TypeError) as exc:
-        raise LLMError(f"Anthropic response parsing failed: {exc}. Response: {response_data}")
+        raise LLMError(
+            f"Anthropic response parsing failed: {exc}. Response: {response_data}"
+        ) from exc
 
 
 def _call_ollama(prompt: str, system_instruction: str) -> str:
@@ -251,7 +253,7 @@ def _call_ollama(prompt: str, system_instruction: str) -> str:
     try:
         return response_data["message"]["content"]
     except (KeyError, TypeError) as exc:
-        raise LLMError(f"Ollama response parsing failed: {exc}. Response: {response_data}")
+        raise LLMError(f"Ollama response parsing failed: {exc}. Response: {response_data}") from exc
 
 
 def _log_debug(message: str) -> None:
@@ -285,7 +287,7 @@ def _log_debug(message: str) -> None:
             log_file_path.parent.mkdir(parents=True, exist_ok=True)
             with open(log_file_path, "a", encoding="utf-8") as f:
                 f.write(message + "\n")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - debug logging must not crash the caller; failure is reported.
             sys.stderr.write(f"Failed to write to LLM debug log file: {exc}\n")
             sys.stderr.flush()
 
@@ -302,8 +304,8 @@ def _sanitize_headers(headers: dict[str, str]) -> dict[str, str]:
 
 
 def _http_post(url: str, payload: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
-    import time
     import random
+    import time
 
     # Log the request
     sanitized_headers = _sanitize_headers(headers)
@@ -344,7 +346,7 @@ def _http_post(url: str, payload: dict[str, Any], headers: dict[str, str]) -> di
         except urllib.error.HTTPError as exc:
             try:
                 err_body = exc.read().decode("utf-8")
-            except Exception:
+            except Exception:  # noqa: BLE001 - best-effort detail for the LLMError raised just below.
                 err_body = ""
 
             # Log the HTTP error

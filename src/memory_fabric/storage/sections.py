@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 
 from memory_fabric.contracts import MemorySection, WriteMode, WriteResult
-from memory_fabric.frontmatter import dump_frontmatter, parse_frontmatter
+from memory_fabric.frontmatter import FrontmatterError, dump_frontmatter, parse_frontmatter
 from memory_fabric.locking import locked_file
 from memory_fabric.paths import local_memory_dir
 from memory_fabric.security import redact_secrets
@@ -31,7 +31,10 @@ def read_section(cwd: str, section: str, max_tokens: int = 8000) -> MemorySectio
     if not path.exists():
         raise FileNotFoundError(f"Memory section not found: {section}")
 
-    metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+    try:
+        metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, FrontmatterError) as exc:
+        raise ValueError(f"Memory section `{section}` is unreadable: {exc}") from exc
     text = dump_frontmatter(metadata, body)
     truncated = False
     if estimate_tokens(text) > max_tokens:
@@ -69,8 +72,22 @@ def write_local_memory(
     path = _section_path(cwd, section)
 
     with locked_file(path):
+        recovery_warning: str | None = None
         if path.exists():
-            metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+            try:
+                metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, FrontmatterError) as exc:
+                if mode == "append":
+                    # Can't safely merge into content we can't read — refuse
+                    # loudly instead of silently dropping whatever is there.
+                    raise ValueError(
+                        f"Cannot append to section `{section}`: existing file is unreadable "
+                        f"({exc}). Use mode='replace' to overwrite it."
+                    ) from exc
+                # replace mode: the caller's intent is to overwrite anyway, so
+                # a corrupted existing file must not block that — start fresh.
+                metadata, body = parse_frontmatter(build_empty_section(section))
+                recovery_warning = f"Existing section `{section}` could not be read ({exc}) and was fully replaced."
         else:
             metadata, body = parse_frontmatter(build_empty_section(section))
 
@@ -84,11 +101,13 @@ def write_local_memory(
                 for k, v in input_meta.items():
                     if k not in {"section", "last_updated", "schema_version"}:
                         metadata[k] = v
-            except Exception:
-                pass
+            except FrontmatterError:
+                pass  # content merely starts with "---"; treat it as plain body text
 
         redacted, redactions = redact_secrets(input_body)
         warnings = ["Detected and redacted secrets before writing memory."] if redactions else []
+        if recovery_warning:
+            warnings.append(recovery_warning)
 
         metadata["section"] = section
         metadata["last_updated"] = now_iso()

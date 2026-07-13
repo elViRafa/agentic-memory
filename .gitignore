@@ -35,3 +35,6 @@ Thumbs.db
 # Local env scripts
 z_env_memory.ps1
 
+# Scratch / working files
+scratch/
+

@@ -7,9 +7,10 @@ import platform
 import shlex
 import shutil
 import sys
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Literal, Mapping
+from typing import Any, Literal
 
 from memory_fabric.version import __version__
 

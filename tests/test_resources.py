@@ -16,7 +16,6 @@ import pytest
 # module so they can be called like plain functions.
 from memory_fabric import server as server_module
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

@@ -56,13 +56,34 @@ def write_memory_store(
     path.parent.mkdir(parents=True, exist_ok=True)
 
     with locked_file(path):
+        recovery_warning: str | None = None
+        needs_fresh_metadata = not path.exists()
         if path.exists():
-            metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
-            if mode == "replace":
-                # `review_status` is derived state (stamped by verify/dream);
-                # a full rewrite starts clean unless the caller re-supplies it.
-                metadata.pop("review_status", None)
-        else:
+            try:
+                metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, FrontmatterError) as exc:
+                if mode == "append":
+                    # Can't safely merge into content we can't read — refuse
+                    # loudly instead of silently dropping whatever is there.
+                    raise ValueError(
+                        f"Cannot append to {store_path}: existing file is unreadable ({exc}). "
+                        "Use mode='replace' to overwrite it."
+                    ) from exc
+                # replace mode: the caller's intent is to overwrite anyway, so
+                # a corrupted existing file must not block that — start fresh,
+                # same as the "file does not exist" branch below.
+                needs_fresh_metadata = True
+                body = ""
+                recovery_warning = (
+                    f"Existing {store_path} could not be read ({exc}) and was fully replaced."
+                )
+            else:
+                if mode == "replace":
+                    # `review_status` is derived state (stamped by verify/dream);
+                    # a full rewrite starts clean unless the caller re-supplies it.
+                    metadata.pop("review_status", None)
+
+        if needs_fresh_metadata:
             display_title = title or store_path.split("/")[-1].replace("-", " ").title()
             metadata = {
                 "store_path": store_path,
@@ -83,13 +104,15 @@ def write_memory_store(
                 for k, v in input_meta.items():
                     if k not in {"store_path", "last_updated", "schema_version"}:
                         metadata[k] = v
-            except Exception:
-                pass
+            except FrontmatterError:
+                pass  # content merely starts with "---"; treat it as plain body text
 
         redacted, redactions = redact_secrets(input_body)
         warnings: list[str] = (
             ["Detected and redacted secrets before writing memory."] if redactions else []
         )
+        if recovery_warning:
+            warnings.append(recovery_warning)
 
         # Update metadata
         metadata["store_path"] = store_path

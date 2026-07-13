@@ -131,7 +131,7 @@ def resolve_conflict(
         return ours_text, warnings
 
     try:
-        ancestor_meta, ancestor_body = (
+        _ancestor_meta, ancestor_body = (
             parse_frontmatter(ancestor_text) if ancestor_text.strip() else ({}, "")
         )
         ours_meta, ours_body = parse_frontmatter(ours_text)
@@ -176,7 +176,7 @@ def _git_merge_file_fallback(ancestor: str, ours: str, theirs: str) -> int:
             capture_output=True,
             check=False,
         )
-    except Exception as exc:
+    except (OSError, subprocess.SubprocessError) as exc:
         print(f"ai-memory merge-driver: git merge-file unavailable: {exc}", file=sys.stderr)
         return 1
     return res.returncode

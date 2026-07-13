@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from memory_fabric.frontmatter import FrontmatterError, dump_frontmatter, parse_frontmatter
 from memory_fabric.paths import local_memory_dir, memory_store_dir
@@ -94,7 +95,7 @@ def _get_section_key(root: Path, path: Path) -> str:
     try:
         metadata, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
         sec_name = metadata.get("section") or path.stem
-    except Exception:
+    except (OSError, UnicodeDecodeError, FrontmatterError):
         sec_name = path.stem
     return f"local/{sec_name}"
 

@@ -12,9 +12,10 @@ from __future__ import annotations
 
 import os
 import shutil
+from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from memory_fabric.contracts import WriteResult
 from memory_fabric.locking import locked_file

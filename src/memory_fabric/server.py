@@ -23,25 +23,25 @@ from memory_fabric.contracts import (
 from memory_fabric.eval import evaluate_dream_quality, evaluate_memory_fabric
 from memory_fabric.paths import local_memory_dir, validate_cwd
 from memory_fabric.storage import (
+    apply_dream_results,
     delete_memory_store,
     dream,
     initialize_memory_fabric,
     keyword_search,
     list_memory_store,
+    prepare_dream_payload,
     propose_memory_patch,
     read_combined_context,
     read_memory_store,
     read_section,
+    write_failure_memory,
     write_local_memory,
     write_memory_store,
     write_session_journal,
-    write_failure_memory,
-    prepare_dream_payload,
-    apply_dream_results,
 )
 
 try:
-    from mcp.server.fastmcp import FastMCP, Context
+    from mcp.server.fastmcp import Context, FastMCP
     from mcp.server.transport_security import TransportSecuritySettings
 except ImportError:  # pragma: no cover - exercised only when optional mcp is absent.
     FastMCP = None  # type: ignore[assignment, misc]

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import unittest
+
 from memory_fabric.frontmatter import (
-    parse_frontmatter,
-    dump_frontmatter,
     FrontmatterError,
     _can_be_bare,
     _parse_value,
+    dump_frontmatter,
+    parse_frontmatter,
 )
 
 

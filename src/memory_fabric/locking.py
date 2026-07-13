@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import os
 import sys
-from contextlib import contextmanager
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager, suppress
 from pathlib import Path
-from typing import BinaryIO, Iterator
+from typing import BinaryIO
 
 # A safe upper-bound for the number of bytes to lock on Windows.
 # msvcrt.locking requires a byte count; we use a large fixed value
@@ -32,15 +34,13 @@ def locked_file(target: Path) -> Iterator[None]:
             # path in the first place.
             _unlock(handle)
             handle.close()
-            try:
+            # PermissionError: another waiter still has this sidecar file open
+            # (e.g. blocked in a concurrent _lock() retry). The data file write
+            # already completed correctly by this point — leaving the empty
+            # .lock sidecar behind is harmless housekeeping debt, not a
+            # correctness issue.
+            with suppress(FileNotFoundError, PermissionError):
                 lock_path.unlink()
-            except (FileNotFoundError, PermissionError):
-                # PermissionError: another waiter still has this sidecar file
-                # open (e.g. blocked in a concurrent _lock() retry). The data
-                # file write already completed correctly by this point — leaving
-                # the empty .lock sidecar behind is harmless housekeeping debt,
-                # not a correctness issue.
-                pass
         else:
             # Unlink while STILL holding the lock, not after releasing it.
             # Unlinking after unlock left a window where a waiter's blocked
@@ -74,8 +74,25 @@ def _acquire_lock(lock_path: Path) -> BinaryIO:
     either contends with whoever really holds it or safely finds no lock is
     currently held.
     """
+    win_open_retries = 0
     while True:
-        handle = lock_path.open("a+b")
+        try:
+            handle = lock_path.open("a+b")
+        except PermissionError:
+            # Windows only: another *process* (not just another thread in this
+            # one — confirmed by a real subprocess-level stress test, never
+            # reproduced with same-process threads) can be mid-unlink() on
+            # this exact path — Windows leaves a brief pending-delete window
+            # where a concurrent open() of the same name raises
+            # PermissionError instead of succeeding or cleanly not-found.
+            # Bounded retry: transient and clears in well under a millisecond
+            # once the delete completes; a real permissions problem (e.g. a
+            # read-only file) would still fail every time and must surface.
+            if sys.platform != "win32" or win_open_retries >= 200:
+                raise
+            win_open_retries += 1
+            time.sleep(0.005)
+            continue
         _lock(handle)
         try:
             same_file = os.path.samestat(os.fstat(handle.fileno()), os.stat(lock_path))

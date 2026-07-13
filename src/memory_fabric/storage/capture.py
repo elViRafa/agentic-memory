@@ -18,12 +18,13 @@ All pure standard library. Everything degrades gracefully outside a git repo.
 
 from __future__ import annotations
 
+import contextlib
 import subprocess
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from memory_fabric.frontmatter import dump_frontmatter, parse_frontmatter
+from memory_fabric.frontmatter import FrontmatterError, dump_frontmatter, parse_frontmatter
 from memory_fabric.paths import local_memory_dir, memory_store_dir
 from memory_fabric.security import redact_secrets
 from memory_fabric.storage.store import write_memory_store
@@ -51,7 +52,7 @@ def _git(cwd: str, *args: str, timeout: float = 5.0) -> str | None:
             check=False,
             timeout=timeout,
         )
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         return None
     if res.returncode != 0:
         return None
@@ -64,7 +65,7 @@ def _is_git_repo(cwd: str) -> bool:
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 # ---------------------------------------------------------------------------
@@ -113,16 +114,16 @@ def capture_commit(cwd: str, commit: str = "HEAD") -> dict[str, Any]:
     ]
     stat = (_git(cwd, "show", "--stat", "--format=", full_hash) or "").strip()
 
-    date_str = (author_date[:10] if len(author_date) >= 10 else "") or datetime.now(
-        timezone.utc
-    ).strftime("%Y-%m-%d")
+    date_str = (author_date[:10] if len(author_date) >= 10 else "") or datetime.now(UTC).strftime(
+        "%Y-%m-%d"
+    )
     store_path = f"{_COMMITS_PREFIX}/{date_str}"
 
     target = memory_store_dir(cwd) / "episodic" / "commits" / f"{date_str}.md"
     if target.exists():
         try:
             existing = target.read_text(encoding="utf-8")
-        except Exception:
+        except (OSError, UnicodeDecodeError):
             existing = ""
         if short_hash in existing or full_hash in existing:
             result["commit"] = short_hash
@@ -200,7 +201,7 @@ def _read_marker(path: Path) -> str | None:
     try:
         text = path.read_text(encoding="utf-8").strip()
         return text or None
-    except Exception:
+    except (OSError, UnicodeDecodeError):
         return None
 
 
@@ -217,8 +218,7 @@ def mark_journal_written(cwd: str) -> None:
     try:
         marker = _private_dir(cwd) / _LAST_JOURNAL_MARKER
         marker.write_text(_now_iso() + "\n", encoding="utf-8")
-    except Exception:
-        # Marker plumbing must never break the journal write itself.
+    except Exception:  # noqa: BLE001, S110 - marker plumbing must never break the journal write itself.
         pass
 
 
@@ -270,10 +270,8 @@ def capture_stats(cwd: str) -> dict[str, Any]:
     commits_dir = store_root / "episodic" / "commits"
     if commits_dir.exists():
         for path in commits_dir.glob("*.md"):
-            try:
+            with contextlib.suppress(OSError, UnicodeDecodeError):
                 commit_captures += path.read_text(encoding="utf-8").count("### commit ")
-            except Exception:
-                pass
 
     journals = 0
     episodic_dir = store_root / "episodic"
@@ -282,7 +280,7 @@ def capture_stats(cwd: str) -> dict[str, Any]:
 
     memories_total = 0
     memories_last_7d = 0
-    cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+    cutoff = datetime.now(UTC) - timedelta(days=7)
     if store_root.exists():
         for path in store_root.rglob("*.md"):
             if not path.is_file() or path.name == "index.md":
@@ -290,14 +288,14 @@ def capture_stats(cwd: str) -> dict[str, Any]:
             memories_total += 1
             try:
                 metadata, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
-            except Exception:
+            except (OSError, UnicodeDecodeError, FrontmatterError):
                 continue
             lu = str(metadata.get("last_updated") or "")
             if lu:
                 try:
                     lu_dt = datetime.fromisoformat(lu.replace("Z", "+00:00"))
                     if lu_dt.tzinfo is None:
-                        lu_dt = lu_dt.replace(tzinfo=timezone.utc)
+                        lu_dt = lu_dt.replace(tzinfo=UTC)
                     if lu_dt >= cutoff:
                         memories_last_7d += 1
                 except ValueError:

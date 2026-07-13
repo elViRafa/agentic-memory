@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import subprocess
 import tempfile
 import unittest
@@ -102,10 +103,8 @@ class VerifyEvidenceTests(unittest.TestCase):
 
     def test_commit_ref_checked_against_real_repo(self) -> None:
         git = None
-        try:
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
             git = subprocess.run(["git", "--version"], capture_output=True, check=False)
-        except Exception:
-            pass
         if not git or git.returncode != 0:
             self.skipTest("git not available")
 

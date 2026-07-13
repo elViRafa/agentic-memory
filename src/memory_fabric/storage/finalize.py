@@ -5,16 +5,18 @@ git context gathering, and finalizing a candidate store's consolidation result.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
-from datetime import datetime, timezone
 from typing import Any
 
 from memory_fabric.contracts import DreamConsolidation, DreamResult
 from memory_fabric.frontmatter import FrontmatterError, dump_frontmatter, parse_frontmatter
+from memory_fabric.llm import call_llm
 from memory_fabric.security import redact_secrets
 from memory_fabric.storage._shared import (
     SECTION_PATTERN,
@@ -34,7 +36,6 @@ from memory_fabric.storage.consolidation import (
 )
 from memory_fabric.storage.maps import regenerate_maps
 from memory_fabric.templates import build_empty_section, now_iso
-from memory_fabric.llm import call_llm
 
 
 def _is_llm_ready(context: Any = None) -> bool:
@@ -68,10 +69,8 @@ def _parse_llm_json_response(llm_response: str) -> dict[str, Any]:
         start = cleaned_resp.find("{")
         end = cleaned_resp.rfind("}")
         if start != -1 and end != -1 and end > start:
-            try:
+            with contextlib.suppress(json.JSONDecodeError):
                 resp_data = json.loads(cleaned_resp[start : end + 1])
-            except json.JSONDecodeError:
-                pass
 
     if resp_data is None:
         import re
@@ -265,7 +264,7 @@ def _get_git_diff(cwd: str) -> str:
             git_info.append("=== Recent Git Commits ===\n" + res_log.stdout)
 
         return "\n\n".join(git_info)
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         pass
     return ""
 
@@ -298,8 +297,8 @@ def _detect_numeric_contradictions(memory_root: Path) -> list[str]:
             continue
         try:
             _meta, body = parse_frontmatter(path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
+        except (OSError, UnicodeDecodeError, FrontmatterError):
+            continue  # advisory heuristic scan; a skipped file just doesn't participate
         numbers = frozenset(_NUMBER_RE.findall(body))
         if not numbers:
             continue
@@ -512,12 +511,12 @@ async def _process_and_finalize_candidate(
                     metadata["summary"] = new_summary_clean
                     metadata["summary_hash"] = body_hash
                     path.write_text(dump_frontmatter(metadata, body), encoding="utf-8")
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - reported via warnings, not swallowed.
                 warnings.append(f"Failed to generate summary for `{path.name}`: {exc}")
 
     # Stale section detection in candidate files (generated maps regenerate on
     # every Dream, so a staleness marker would be meaningless on them)
-    now_dt = datetime.now(timezone.utc)
+    now_dt = datetime.now(UTC)
     for path in _iter_markdown_files(candidate_root):
         if path.name == "index.md" or _is_ignored_local_memory_path(candidate_root, path):
             continue
@@ -530,16 +529,15 @@ async def _process_and_finalize_candidate(
             if lu_str:
                 lu_dt = datetime.fromisoformat(lu_str.replace("Z", "+00:00"))
                 if lu_dt.tzinfo is None:
-                    lu_dt = lu_dt.replace(tzinfo=timezone.utc)
-                if (now_dt - lu_dt).days > 30:
-                    if metadata.get("review_status") != "stale":
-                        metadata["review_status"] = "stale"
-                        path.write_text(dump_frontmatter(metadata, body), encoding="utf-8")
-                        warnings.append(
-                            f"Section `{key}` has not been updated in over 30 days and is marked as stale."
-                        )
-        except Exception:
-            pass
+                    lu_dt = lu_dt.replace(tzinfo=UTC)
+                if (now_dt - lu_dt).days > 30 and metadata.get("review_status") != "stale":
+                    metadata["review_status"] = "stale"
+                    path.write_text(dump_frontmatter(metadata, body), encoding="utf-8")
+                    warnings.append(
+                        f"Section `{key}` has not been updated in over 30 days and is marked as stale."
+                    )
+        except (OSError, UnicodeDecodeError, FrontmatterError, ValueError) as exc:
+            warnings.append(f"Skipped staleness check for {path.name}: {exc}")
 
     # Store-first model: rebuild root maps as generated views over memory-store/.
     # Runs in the candidate root (changes flow through the normal diff/apply) and
@@ -566,8 +564,10 @@ async def _process_and_finalize_candidate(
             if r_count > 0:
                 path.write_text(redacted, encoding="utf-8")
                 redactions += r_count
-        except Exception:
-            pass
+        except (OSError, UnicodeDecodeError) as exc:
+            # Security-relevant: a file that fails the redaction pass keeps
+            # whatever secrets it had, so this must not be silent.
+            warnings.append(f"Secret-redaction scan skipped {path.name}: {exc}")
 
     if redactions > 0:
         warnings.append(f"Detected and redacted {redactions} secrets during Dreaming.")
@@ -628,7 +628,10 @@ async def _process_and_finalize_candidate(
                     encoding="utf-8"
                 ):
                     compiled_changed = True
-            except Exception:
+            except (OSError, UnicodeDecodeError) as exc:
+                # Fail toward re-applying rather than silently keeping a stale
+                # compiled view; still worth a trace since it's unexpected.
+                warnings.append(f"Could not compare consolidated_memory.md: {exc}")
                 compiled_changed = True
 
     if apply and (affected_files or compiled_changed):
@@ -647,8 +650,8 @@ async def _process_and_finalize_candidate(
                 protect={snapshot or "", candidate_root.name},
                 memory_dir=memory_dir,
             )
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - cleanup is genuinely best-effort; reported, never fatal.
+            warnings.append(f"Snapshot/candidate retention cleanup failed (non-fatal): {exc}")
 
     consolidation: DreamConsolidation = {
         "duplicates_found": duplicates_found,

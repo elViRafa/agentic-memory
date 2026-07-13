@@ -27,7 +27,7 @@ jobs:
         run: pip install -e ".[mcp,test]"
 
       - name: Run tests
-        run: pytest tests/ -v
+        run: pytest tests/ -v --cov=memory_fabric --cov-report=term-missing
 
       - name: Verify MCP entry point exists (Linux/macOS)
         if: runner.os != 'Windows'

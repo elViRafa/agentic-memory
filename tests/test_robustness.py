@@ -12,8 +12,10 @@ import tempfile
 import threading
 import time
 import unittest
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from pathlib import Path
+from typing import ClassVar
 
 from memory_fabric.frontmatter import dump_frontmatter, parse_frontmatter
 from memory_fabric.locking import locked_file
@@ -34,7 +36,7 @@ class ConcurrentWriteTests(unittest.TestCase):
     # and single-digit numbers get stripped by its word-length filter (len > 2) —
     # "entry 0" / "entry 1" collapse to the same significant word-set and would be
     # (correctly) deduplicated to one line, defeating the point of this test.
-    _TOPICS = [
+    _TOPICS: ClassVar[list[str]] = [
         "database migration strategy",
         "authentication token rotation",
         "caching layer redesign",
@@ -112,9 +114,8 @@ class LockReleaseTests(unittest.TestCase):
             target = Path(temp) / "section.md"
             target.write_text("placeholder", encoding="utf-8")
 
-            with self.assertRaises(RuntimeError):
-                with locked_file(target):
-                    raise RuntimeError("simulated crash while holding the lock")
+            with self.assertRaises(RuntimeError), locked_file(target):
+                raise RuntimeError("simulated crash while holding the lock")
 
             # If the lock leaked, this second acquisition would hang forever.
             # Run it on a worker thread so a regression fails the test instead
@@ -137,10 +138,9 @@ class LockReleaseTests(unittest.TestCase):
             target.write_text("placeholder", encoding="utf-8")
             lock_path = target.with_name(target.name + ".lock")
 
-            with self.assertRaises(ValueError):
-                with locked_file(target):
-                    self.assertTrue(lock_path.exists())
-                    raise ValueError("simulated crash")
+            with self.assertRaises(ValueError), locked_file(target):
+                self.assertTrue(lock_path.exists())
+                raise ValueError("simulated crash")
 
             self.assertFalse(lock_path.exists(), "lock sidecar file leaked after a crash")
 
@@ -243,6 +243,41 @@ class LargeStorePerformanceTests(unittest.TestCase):
             self.assertGreater(len(bundle["included_sections"]), 0)
             self.assertLess(
                 elapsed, 15.0, f"read_combined_context took {elapsed:.1f}s for {self.N_FILES} files"
+            )
+
+    def test_read_combined_context_p95_latency_budget(self) -> None:
+        """Establishes a measured baseline for Phase 4 retrieval work (ROADMAP.md:
+        "read_combined_context p95 under 150ms on a 500-file store").
+
+        Real measurement on this store size (2026-07-13): p95 ~390ms at 500
+        files, ~740ms at this test's 1000 — 2-5x over the Phase 4 aspirational
+        target, because read_combined_context reads and parses every store
+        file up front before ranking/trimming to the token budget, instead of
+        short-circuiting once the budget is full. That gap is real Phase 4
+        work (a lazy/indexed read path), not something to paper over here by
+        asserting an unmet target. This assertion is a regression guard
+        instead: loose enough to pass reliably on a slower CI runner, tight
+        enough to catch an accidental O(n^2)-shaped regression.
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            self._seed_large_store(temp)
+
+            read_combined_context(temp)  # warm up (first call pays FS-cache costs)
+
+            samples_ms = []
+            for _ in range(10):
+                start = time.monotonic()
+                read_combined_context(temp)
+                samples_ms.append((time.monotonic() - start) * 1000)
+            samples_ms.sort()
+            p95 = samples_ms[int(len(samples_ms) * 0.95)]
+
+            self.assertLess(
+                p95,
+                3000.0,
+                f"read_combined_context p95 was {p95:.0f}ms over {len(samples_ms)} runs "
+                f"at {self.N_FILES} files (samples: {[round(s) for s in samples_ms]})",
             )
 
 

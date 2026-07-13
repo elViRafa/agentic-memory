@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from memory_fabric.contracts import MapsRegenResult
-from memory_fabric.frontmatter import dump_frontmatter, parse_frontmatter
+from memory_fabric.frontmatter import FrontmatterError, dump_frontmatter, parse_frontmatter
 from memory_fabric.storage._shared import (
     CURRENT_SCHEMA_VERSION,
     PRIORITY_ORDER,
@@ -55,7 +55,9 @@ def _map_token_cap() -> int:
     return _MAP_TOKEN_CAP_DEFAULT
 
 
-def _category_entries(store_root: Path, category: str) -> list[dict[str, Any]]:
+def _category_entries(
+    store_root: Path, category: str, warnings: list[str] | None = None
+) -> list[dict[str, Any]]:
     """Collect the map inputs (path, title, summary, priority) for one category."""
     category_root = store_root / category
     if not category_root.exists():
@@ -66,7 +68,11 @@ def _category_entries(store_root: Path, category: str) -> list[dict[str, Any]]:
             continue
         try:
             metadata, _body = parse_frontmatter(path.read_text(encoding="utf-8"))
-        except Exception:
+        except (OSError, UnicodeDecodeError, FrontmatterError) as exc:
+            # A fact that fails to parse must not silently vanish from the
+            # generated map — that looks identical to "never recorded".
+            if warnings is not None:
+                warnings.append(f"Excluded {path.relative_to(store_root)} from its map: {exc}")
             continue
         entries.append(
             {
@@ -108,16 +114,14 @@ def _build_map_body(category: str, entries: list[dict[str, Any]]) -> str:
         "",
     ]
     cap = _map_token_cap()
-    included = 0
-    for entry in entries:
+    for included, entry in enumerate(entries):
         summary = entry["summary"].replace("\n", " ").strip()
         line = f"- **{entry['title']}** (`{entry['store_path']}`, {entry['priority']}) — {summary}"
-        if included > 0 and estimate_tokens("\n".join(lines + [line])) > cap:
+        if included > 0 and estimate_tokens("\n".join([*lines, line])) > cap:
             remaining = len(entries) - included
             lines.append(f"- …and {remaining} more entries — see `memory-store/index.md`.")
             break
         lines.append(line)
-        included += 1
     return "\n".join(lines) + "\n"
 
 
@@ -152,7 +156,7 @@ def _fold_into_store(store_root: Path, category: str, section_name: str, body: s
     if target.exists():
         try:
             metadata, existing = parse_frontmatter(target.read_text(encoding="utf-8"))
-        except Exception:
+        except (OSError, UnicodeDecodeError, FrontmatterError):
             metadata, existing = {}, ""
         if body.strip() and body.strip() in existing:
             return None
@@ -202,7 +206,8 @@ def regenerate_maps(memory_root: Path) -> MapsRegenResult:
             continue
         try:
             file_meta, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
-        except Exception:
+        except (OSError, UnicodeDecodeError, FrontmatterError) as exc:
+            warnings.append(f"Could not check {path.name} for a hand-edited generated map: {exc}")
             continue
         if file_meta.get("generated"):
             categories.add(path.stem)
@@ -220,7 +225,7 @@ def regenerate_maps(memory_root: Path) -> MapsRegenResult:
         if map_path.exists():
             try:
                 old_meta, old_body = parse_frontmatter(map_path.read_text(encoding="utf-8"))
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - reported via warnings, not swallowed.
                 warnings.append(f"Could not parse existing map {map_path.name}: {exc}")
 
         # Fold hand-written content into the store before overwriting: either a
@@ -240,7 +245,7 @@ def regenerate_maps(memory_root: Path) -> MapsRegenResult:
                         f"memory-store/{folded}.md for review before regenerating the map."
                     )
 
-        entries = _category_entries(store_root, category)
+        entries = _category_entries(store_root, category, warnings=warnings)
         if not entries:
             # Nothing recorded for this category yet: leave the starter map alone.
             continue

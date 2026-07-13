@@ -82,8 +82,8 @@ def _compile_consolidated_memory(memory_dir: Path) -> str:
                 fragments.append(
                     f"<!-- memory-fabric:local/memory_prompt -->\nMemory Prompt Steering Instructions:\n{p_text}"
                 )
-        except Exception:
-            pass
+        except (OSError, UnicodeDecodeError):
+            pass  # optional steering file; absence/unreadability is not an error
     local_files = [
         path
         for path in _iter_markdown_files(memory_dir)
@@ -164,7 +164,18 @@ def _regenerate_index_root(
             continue
         if _is_store_path(memory_dir, path):
             continue
-        metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        try:
+            metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, FrontmatterError) as exc:
+            # Same non-fatal-skip pattern as _consolidate_candidate_memory and
+            # _process_and_finalize_candidate (see 7ee983a) — this loop just
+            # wasn't covered by that fix, so a malformed flat section still
+            # crashed every `dream` (light and deep) via index regeneration.
+            if warnings is not None:
+                warnings.append(
+                    f"Skipped {path.relative_to(memory_dir)} during index regeneration: {exc}"
+                )
+            continue
         section = metadata.get("section", path.stem)
         priority = metadata.get("priority", "medium")
         summary = str(metadata.get("summary", "")).replace("|", "\\|")
@@ -207,8 +218,11 @@ def _regenerate_index_root(
                     f"| `{sp}` | {sf_priority} | {sf_summary} | {sf_topics} | {tags_str} |"
                 )
                 checked_files.append(str(sf))
-            except Exception:
-                pass
+            except (OSError, UnicodeDecodeError, FrontmatterError) as exc:
+                if warnings is not None:
+                    warnings.append(
+                        f"Skipped {sf.relative_to(store_root)} during index regeneration: {exc}"
+                    )
 
         store_index_path = store_root / "index.md"
         store_root.mkdir(parents=True, exist_ok=True)
@@ -253,8 +267,9 @@ def _regenerate_index_root(
                 or consolidated_path.read_text(encoding="utf-8") != consolidated_content
             ):
                 consolidated_path.write_text(consolidated_content, encoding="utf-8")
-        except Exception:
-            pass
+        except (OSError, UnicodeDecodeError) as exc:
+            if warnings is not None:
+                warnings.append(f"Failed to write consolidated_memory.md: {exc}")
 
     return checked_files
 
@@ -418,7 +433,7 @@ def _build_rewrite_tasks(candidate_root: Path, max_rewrite_tasks: int) -> list[D
         if _is_generated_file(path):
             continue  # maps are regenerated, never rewritten by agents
         try:
-            metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+            _metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, FrontmatterError):
             continue  # unparsable file — surfaced earlier in consolidation warnings
         section = _get_section_key(candidate_root, path)

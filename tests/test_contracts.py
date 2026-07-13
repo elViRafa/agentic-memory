@@ -7,6 +7,14 @@ blinds the TypedDict metaclass to `NotRequired[...]` — every key landed in
 rejected legitimate results that omit optional keys. `dream_tool` /
 `apply_dream_results_tool` with `apply=True` and no evaluation applied changes
 to disk but reported `isError: True` to the MCP client.
+
+NOTE: `TypeAdapter(...).validate_python()` below validates via pydantic's
+*native* TypedDict support, which is NOT the code path FastMCP actually uses
+for a tool's top-level return type (a hand-built BaseModel — see
+`_create_model_from_typeddict` in the `mcp` SDK). This suite alone passed
+while a second instance of the P-13 bug class was still live; see
+`tests/test_mcp_contract.py`, which calls tools through a real in-process
+`ClientSession` and is what actually caught it.
 """
 
 import asyncio

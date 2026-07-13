@@ -13,8 +13,9 @@ import re
 import shutil
 import subprocess
 import tomllib
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Literal, Mapping
+from typing import Literal
 
 from memory_fabric.clients import CLIENTS, ClientSpec, build_entry, entry_note, uv_available
 from memory_fabric.contracts import InstallAllResult, InstallResult
@@ -346,10 +347,7 @@ def _append_toml_block(old_text: str, entry: dict) -> tuple[str, bool]:
     ]
     block = "\n".join(lines)
 
-    if not old_text:
-        new_text = block + "\n"
-    else:
-        new_text = old_text.rstrip("\n") + "\n\n" + block + "\n"
+    new_text = block + "\n" if not old_text else old_text.rstrip("\n") + "\n\n" + block + "\n"
     return new_text, True
 
 

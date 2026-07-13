@@ -7,7 +7,6 @@ from typing import Any
 
 from memory_fabric.frontmatter import dump_frontmatter
 
-
 SCHEMA_VERSION = "1.3"
 
 SECTION_TEMPLATES: dict[str, dict[str, Any]] = {

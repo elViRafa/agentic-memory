@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import unittest
-from memory_fabric.security import redact_secrets, _shannon_entropy, _looks_like_secret
+
+from memory_fabric.security import _looks_like_secret, _shannon_entropy, redact_secrets
 
 
 class SecurityTests(unittest.TestCase):
