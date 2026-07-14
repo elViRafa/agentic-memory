@@ -6,6 +6,7 @@ priority: high
 tags: [grok, agents, architecture, mcp, docs]
 schema_version: 1.3
 last_updated: "2026-06-05T09:42:41-04:00"
+review_status: stale
 ---
 
 ## Grok Support Added (2026-06-05)

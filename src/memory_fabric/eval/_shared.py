@@ -12,6 +12,7 @@ from typing import Any, Literal
 from memory_fabric.contracts import EvalCategory, EvalCheck, EvalResult
 from memory_fabric.frontmatter import FrontmatterError, parse_frontmatter
 from memory_fabric.security import redact_secrets
+from memory_fabric.storage._shared import _is_ignored_local_memory_path, _is_store_path
 
 REQUIRED_SECTIONS = [
     "architecture",
@@ -147,6 +148,7 @@ def _load_sections(memory_dir: Path) -> dict[str, dict[str, Any]]:
     for path in sorted(memory_dir.rglob("*.md")):
         if _is_ignored_memory_path(memory_dir, path):
             continue
+        is_store = _is_store_path(memory_dir, path)
         try:
             raw = path.read_text(encoding="utf-8")
             metadata, body = parse_frontmatter(raw)
@@ -156,6 +158,7 @@ def _load_sections(memory_dir: Path) -> dict[str, dict[str, Any]]:
                 "raw": raw,
                 "metadata": metadata,
                 "body": body,
+                "is_store": is_store,
                 "error": None,
             }
         except (OSError, UnicodeDecodeError, FrontmatterError) as exc:
@@ -164,17 +167,18 @@ def _load_sections(memory_dir: Path) -> dict[str, dict[str, Any]]:
                 "raw": "",
                 "metadata": {},
                 "body": "",
+                "is_store": is_store,
                 "error": str(exc),
             }
     return sections
 
 
 def _is_ignored_memory_path(memory_dir: Path, path: Path) -> bool:
-    try:
-        relative_parts = path.relative_to(memory_dir).parts
-    except ValueError:
-        return False
-    return bool({"private", "snapshots", "evals", "candidates"}.intersection(relative_parts))
+    # Delegate to the storage-layer rule so the two can never drift again:
+    # this used to be a hand-copied variant that forgot consolidated_memory.md,
+    # so eval penalized the compiled Dreaming artifact that every other
+    # subsystem (snapshots, capture, context assembly) explicitly ignores.
+    return _is_ignored_local_memory_path(memory_dir, path)
 
 
 def _section_load_warnings(sections: dict[str, dict[str, Any]]) -> list[str]:

@@ -677,6 +677,89 @@ exercise the full path for real — nothing else in D needs further code changes
 
 ---
 
+## Milestone H — v0.8 migration tooling (ROADMAP Phase 2.2 — last v1.0 blocker)
+
+Planned 2026-07-13. Everything hand-written must survive; every write goes through the
+existing `write_memory_store` path (locking + secret redaction); the flat file only
+flips to a generated map after its granular entries are safely on disk.
+
+### H1. `[x]` `storage/migrate.py` — plan + apply engine — DONE (2026-07-13)
+
+`async def migrate_memory(cwd, dry_run=False, sections=None, use_llm=None) -> MigrateResult`
+(async mirrors `dream()`; CLI bridges with `asyncio.run`).
+
+- **Target selection**: flat `.ai-memory/*.md` files that are not `index`, not ignored
+  (`_is_ignored_local_memory_path`), not steering (`_is_steering_file`), not
+  `generated: true`, not a starter placeholder, and not empty. Hand-edited *generated*
+  maps stay Dreaming's fold flow — migrate only owns the legacy (never-generated) files.
+- **Heuristic split (always runs — it IS the content)**: split body on H2 headings,
+  fence-aware (a `## ` inside a ``` code block is not a boundary). Preamble before the
+  first H2 (minus a lone leading H1 title) → `<category>/overview`. Chunk content is
+  verbatim source; the heading line moves into `title`. Empty-bodied headings are
+  skipped with a warning. Slugs: lowercase, non-alnum → `-`, must match
+  `STORE_PATH_SEGMENT`; empty slug → `part-N`; in-plan collisions get `-2`, `-3`.
+- **LLM assist = naming only, never content**: one `call_llm` per section proposing
+  `{index, store_path, title, summary, tags}` per chunk (JSON, parsed with
+  `_parse_llm_json_response`). Validated per entry (`_validate_store_path`, forced
+  `<category>/` prefix, index in range); any failure falls back to the heuristic name
+  for that entry. No LLM configured → same pipeline, heuristic names. This keeps
+  "never delete user content" true by construction instead of by prompt-engineering.
+- **Existing-file collisions**: planned target exists with byte-identical (redacted,
+  stripped) body → counted as already-migrated, no write (makes re-runs after a partial
+  failure resumable without duplicating); exists with different content → `-migrated`
+  suffix. Fresh paths write with `mode="replace"`.
+- **Snapshot first** (`create_snapshot`, auto name) unless `--dry-run`; rollback is the
+  existing `ai-memory rollback --to <name>`.
+- **Map handoff**: after a section's entries land, build its generated map directly via
+  a helper extracted from `regenerate_maps` (H2) — deliberately bypassing the fold,
+  which would re-blob the just-granularized body into `map-notes-pending-review`.
+- Idempotent end state: re-run finds no legacy sections, returns an empty plan.
+
+### H2. `[x]` `maps.py` refactor — extract `_generate_category_map` — DONE (2026-07-13)
+
+Pull the per-category "collect entries → fingerprint → build body → unchanged-check →
+write" block out of `regenerate_maps` into a helper both it and `migrate_memory` call
+(with optional pre-read `(old_meta, old_body)` so `regenerate_maps` doesn't parse
+twice). Pure mechanical move; fold logic stays only in `regenerate_maps`.
+
+### H3. `[x]` CLI + contracts — DONE (2026-07-13)
+
+`ai-memory migrate [--dry-run] [--section <name>]... [--no-llm]` — CLI-only like
+`install` (one-shot, human-supervised; also keeps `server.py`, already over the size
+bar, untouched). `MigrateResult`/`MigrateSectionPlan`/`MigrateEntryPlan` TypedDicts in
+`contracts.py` (total — no `NotRequired`, so the FastMCP null-vs-omitted trap can't
+apply even if this ever becomes a tool).
+
+### H4. `[x]` `init` pre-scaffolds store categories — DONE (2026-07-13)
+
+Map categories derived from `SECTION_TEMPLATES` `generated_from` (architecture,
+decisions, schemas, debt) + `episodic`, `failures`, `rules`, each with `.gitkeep`.
+Empty dirs are invisible to `regenerate_maps` (`_category_entries` returns `[]` →
+starter map left alone), so no behavior change until first write.
+
+### H5. `[x]` CHANGELOG.md + migration guide — DONE (2026-07-13)
+
+keep-a-changelog; backfill 0.4.1→0.7.3 from tags; `[Unreleased]` documents migrate +
+init scaffolding + the store-first migration guide (ROADMAP 4.2's requirement). No
+version bump in this session — tagging stays a separate, owner-driven step.
+
+### H6. `[x]` Tests — DONE (2026-07-13; 288 total, was 264)
+
+Heuristic split (fences, preamble, empty headings, slug collisions); dry-run writes
+nothing; snapshot created on apply; rollback restores the pre-migration body; LLM
+naming path with mocked `call_llm` (and its fallback on garbage JSON); steering/
+generated/index files untouched; re-run is a no-op; secrets in a legacy section are
+redacted in the store entries; init scaffolding present on fresh init.
+
+### H7. `[x]` Dogfood on this repo + record before/after eval — DONE (2026-07-13)
+
+`ai-memory eval` → `migrate --dry-run` (review) → `migrate` → `dream --apply` (refresh
+indexes) → `eval`; record both scores in the CHANGELOG migration guide as the
+reference case. Also closes §2.1 Q8's last sub-item (commit the untracked dogfood
+store entries).
+
+---
+
 ## Milestone E — Retrieval quality (post-launch, iterate with users)
 
 Keep the invariant: **zero required dependencies; every new capability degrades gracefully.**

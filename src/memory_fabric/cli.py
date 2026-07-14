@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from memory_fabric.clients import CLIENTS
-from memory_fabric.contracts import DreamEvalResult, EvalResult
+from memory_fabric.contracts import DreamEvalResult, EvalResult, MigrateResult
 from memory_fabric.eval import evaluate_dream_quality, evaluate_memory_fabric
 from memory_fabric.installer import install, install_all
 from memory_fabric.merge_driver import install_merge_driver
@@ -27,6 +27,7 @@ from memory_fabric.storage import (
     list_memory_store,
     list_snapshots,
     mark_session_start,
+    migrate_memory,
     propose_memory_patch,
     prune_dream_artifacts,
     read_memory_store,
@@ -180,6 +181,21 @@ def main(argv: list[str] | None = None) -> int:
                     "Dream evaluation requires --apply because candidate mode does not mutate live memory."
                 )
             _print_result(dream_result, args.json)
+            return 0
+        if args.command == "migrate":
+            migrate_result = asyncio.run(
+                migrate_memory(
+                    cwd,
+                    dry_run=args.dry_run,
+                    sections=args.section,
+                    use_llm=False if args.no_llm else None,
+                )
+            )
+            if args.json:
+                _print_result(migrate_result, True)
+            else:
+                _print_migrate_plan(migrate_result)
+                _print_result({k: v for k, v in migrate_result.items() if k != "plan"}, False)
             return 0
         if args.command == "eval":
             eval_result: EvalResult | DreamEvalResult
@@ -495,6 +511,27 @@ def build_parser() -> argparse.ArgumentParser:
         "--llm-review", action="store_true", help="Add optional qualitative LLM review notes"
     )
 
+    migrate_parser = subparsers.add_parser(
+        "migrate",
+        help="Split legacy hand-written sections into memory-store entries (store-first)",
+    )
+    migrate_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the full plan without writing anything (no snapshot, no entries, no maps)",
+    )
+    migrate_parser.add_argument(
+        "--section",
+        action="append",
+        default=None,
+        help="Migrate only this section (repeatable; default: every legacy hand-written section)",
+    )
+    migrate_parser.add_argument(
+        "--no-llm",
+        action="store_true",
+        help="Skip LLM naming and use deterministic heading-based names",
+    )
+
     eval_parser = subparsers.add_parser("eval", help="Evaluate memory and Dreaming quality")
     eval_parser.add_argument(
         "--llm-review", action="store_true", help="Add optional qualitative LLM review notes"
@@ -575,6 +612,23 @@ def build_parser() -> argparse.ArgumentParser:
     store_delete.add_argument("store_path", help="Semantic path")
 
     return parser
+
+
+def _print_migrate_plan(result: MigrateResult) -> None:
+    """Human-readable plan listing for `ai-memory migrate` (non-JSON output)."""
+    plan = result.get("plan") or []
+    if not plan:
+        print("Nothing to migrate: no legacy hand-written sections found.")
+        return
+    print("Migration plan (dry run):" if result.get("dry_run") else "Migration applied:")
+    for section_plan in plan:
+        marker = " [LLM-named]" if section_plan.get("llm_named") else ""
+        print(f"  {section_plan['section']}.md -> memory-store/{section_plan['category']}/{marker}")
+        for entry in section_plan.get("entries", []):
+            print(
+                f"    - {entry['store_path']}  ({entry['status']}, {entry['chars']} chars)"
+                f"  <- {entry['source']}"
+            )
 
 
 def _print_result(result: Any, as_json: bool) -> None:

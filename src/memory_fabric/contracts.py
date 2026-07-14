@@ -174,6 +174,49 @@ class MapsRegenResult(TypedDict):
     warnings: list[str]
 
 
+class MigrateEntryPlan(TypedDict):
+    """One store entry a migration will create from a legacy section chunk."""
+
+    store_path: str
+    title: str
+    # Where the chunk came from: the H2 heading text, or "(preamble)".
+    source: str
+    chars: int
+    # "planned" (dry-run) | "written" | "already-migrated" (identical entry
+    # found on disk — makes re-runs after a partial failure resumable).
+    status: str
+
+
+class MigrateSectionPlan(TypedDict):
+    """Migration plan for one legacy hand-written section."""
+
+    section: str
+    category: str
+    # True when an LLM proposed the entry names/tags; content is always the
+    # verbatim heuristic chunks either way.
+    llm_named: bool
+    entries: list[MigrateEntryPlan]
+
+
+class MigrateResult(TypedDict):
+    """Result of `ai-memory migrate` (store-first migration, ROADMAP Phase 2.2).
+
+    Deliberately total (no NotRequired): this ships CLI-only, but if it ever
+    becomes an MCP tool the FastMCP omitted-optional-becomes-null trap
+    (see DreamResult.evaluation) can't apply to an all-required contract.
+    """
+
+    changed: bool
+    dry_run: bool
+    snapshot: str | None
+    sections_migrated: list[str]
+    entries_written: list[str]
+    maps_written: list[str]
+    plan: list[MigrateSectionPlan]
+    redactions: int
+    warnings: list[str]
+
+
 class DreamConsolidation(TypedDict):
     duplicates_found: int
     lines_removed: int

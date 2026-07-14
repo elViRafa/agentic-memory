@@ -180,6 +180,69 @@ def _fold_into_store(store_root: Path, category: str, section_name: str, body: s
     return store_path
 
 
+def _generate_category_map(
+    memory_root: Path,
+    store_root: Path,
+    category: str,
+    warnings: list[str],
+    old_meta: dict[str, Any] | None = None,
+) -> str | None:
+    """(Re)build one root map from its store category subtree.
+
+    Returns the filename written, or None when the category has no entries yet
+    (the starter map is left alone) or the existing generated map is already up
+    to date. Folding hand-written content is the caller's concern — this
+    overwrites whatever is at ``<category>.md``, so callers must either fold
+    first (`regenerate_maps`) or have already granularized the body into the
+    store (`migrate_memory`).
+
+    ``old_meta``: pass pre-parsed frontmatter of the existing map to avoid a
+    second read; None means "read it here".
+    """
+    map_path = memory_root / f"{category}.md"
+    if old_meta is None:
+        old_meta = {}
+        if map_path.exists():
+            try:
+                old_meta, _ = parse_frontmatter(map_path.read_text(encoding="utf-8"))
+            except Exception as exc:  # noqa: BLE001 - reported via warnings, not swallowed.
+                warnings.append(f"Could not parse existing map {map_path.name}: {exc}")
+
+    entries = _category_entries(store_root, category, warnings=warnings)
+    if not entries:
+        # Nothing recorded for this category yet: leave the starter map alone.
+        return None
+
+    fingerprint = _fingerprint_entries(entries)
+    body = _build_map_body(category, entries)
+
+    # body_hash compares stripped content: frontmatter round-trips may move
+    # a leading/trailing newline, which must not count as a change.
+    unchanged = (
+        bool(old_meta.get("generated"))
+        and str(old_meta.get("store_fingerprint") or "") == fingerprint
+        and str(old_meta.get("body_hash") or "") == _body_hash(body)
+    )
+    if unchanged:
+        return None
+
+    template = SECTION_TEMPLATES.get(category, {})
+    metadata: dict[str, Any] = {
+        "section": category,
+        "summary": f"Generated map of memory-store/{category}/ ({len(entries)} entries).",
+        "priority": str(old_meta.get("priority") or template.get("priority") or "medium"),
+        "tags": old_meta.get("tags") or template.get("tags") or [category],
+        "schema_version": CURRENT_SCHEMA_VERSION,
+        "last_updated": now_iso(),
+        "generated": True,
+        "generated_from": f"memory-store/{category}",
+        "store_fingerprint": fingerprint,
+        "body_hash": _body_hash(body),
+    }
+    map_path.write_text(dump_frontmatter(metadata, body), encoding="utf-8")
+    return map_path.name
+
+
 def regenerate_maps(memory_root: Path) -> MapsRegenResult:
     """Regenerate root map sections from the memory-store tree under ``memory_root``.
 
@@ -245,39 +308,11 @@ def regenerate_maps(memory_root: Path) -> MapsRegenResult:
                         f"memory-store/{folded}.md for review before regenerating the map."
                     )
 
-        entries = _category_entries(store_root, category, warnings=warnings)
-        if not entries:
-            # Nothing recorded for this category yet: leave the starter map alone.
-            continue
-
-        fingerprint = _fingerprint_entries(entries)
-        body = _build_map_body(category, entries)
-
-        # body_hash compares stripped content: frontmatter round-trips may move
-        # a leading/trailing newline, which must not count as a change.
-        unchanged = (
-            bool(old_meta.get("generated"))
-            and str(old_meta.get("store_fingerprint") or "") == fingerprint
-            and str(old_meta.get("body_hash") or "") == _body_hash(body)
+        written = _generate_category_map(
+            memory_root, store_root, category, warnings, old_meta=old_meta
         )
-        if unchanged:
-            continue
-
-        template = SECTION_TEMPLATES.get(category, {})
-        metadata: dict[str, Any] = {
-            "section": category,
-            "summary": f"Generated map of memory-store/{category}/ ({len(entries)} entries).",
-            "priority": str(old_meta.get("priority") or template.get("priority") or "medium"),
-            "tags": old_meta.get("tags") or template.get("tags") or [category],
-            "schema_version": CURRENT_SCHEMA_VERSION,
-            "last_updated": now_iso(),
-            "generated": True,
-            "generated_from": f"memory-store/{category}",
-            "store_fingerprint": fingerprint,
-            "body_hash": _body_hash(body),
-        }
-        map_path.write_text(dump_frontmatter(metadata, body), encoding="utf-8")
-        maps_written.append(map_path.name)
+        if written:
+            maps_written.append(written)
 
     return {
         "maps_written": maps_written,

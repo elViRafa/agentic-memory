@@ -515,7 +515,12 @@ def _evaluate_metadata_quality(
             )
             continue
         metadata = info["metadata"]
-        for field in ["section", "summary", "priority", "tags", "schema_version", "last_updated"]:
+        # Store files are identified by `store_path` (the only identity field
+        # write_memory_store produces); flat sections by `section`. Requiring
+        # `section` on store files flagged every entry the canonical write
+        # path creates — the same local-vs-store split doctor already handles.
+        identity = "store_path" if info.get("is_store") else "section"
+        for field in [identity, "summary", "priority", "tags", "schema_version", "last_updated"]:
             if field not in metadata:
                 checks.append(
                     _check(

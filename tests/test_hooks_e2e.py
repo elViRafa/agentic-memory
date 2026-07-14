@@ -16,7 +16,6 @@ import shutil
 import subprocess
 import tempfile
 import unittest
-from datetime import UTC, datetime
 from pathlib import Path
 
 from memory_fabric.storage import initialize_memory_fabric
@@ -67,9 +66,21 @@ class HookEndToEndTests(unittest.TestCase):
             full_hash = _run_git(temp, "rev-parse", "HEAD").stdout.strip()
             self.assertTrue(full_hash)
 
-            today = datetime.now(UTC).strftime("%Y-%m-%d")
+            # The capture file is named after the commit's *author date* in the
+            # committer's local timezone (capture.py takes author_date[:10]) —
+            # not after UTC "today". Asserting datetime.now(UTC) here made this
+            # test fail every day from 20:00 to midnight in UTC-4: the two
+            # clocks disagree on the date for exactly the offset window. Derive
+            # the expected name from the same source capture itself uses.
+            author_date = _run_git(temp, "show", "-s", "--format=%aI", "HEAD").stdout.strip()
+            self.assertGreaterEqual(len(author_date), 10, author_date)
             episodic_path = (
-                Path(temp) / ".ai-memory" / "memory-store" / "episodic" / "commits" / f"{today}.md"
+                Path(temp)
+                / ".ai-memory"
+                / "memory-store"
+                / "episodic"
+                / "commits"
+                / f"{author_date[:10]}.md"
             )
             self.assertTrue(
                 episodic_path.exists(),

@@ -265,5 +265,43 @@ class EvalMapFreshnessTests(unittest.TestCase):
             self.assertIn("architecture_map_stale", check_ids2)
 
 
+class StoreFileMetadataEvalTests(unittest.TestCase):
+    """Regressions found by the v0.8 migration dogfood run (2026-07-13)."""
+
+    def _failed_check_ids(self, temp: str) -> list[str]:
+        result = evaluate_memory_fabric(temp, save_report=False)
+        return [
+            check["id"]
+            for category in result["categories"]
+            for check in category["checks"]
+            if check["status"] == "fail"
+        ]
+
+    def test_store_files_are_identified_by_store_path_not_section(self) -> None:
+        # write_memory_store writes `store_path`, never `section`; the eval
+        # used to fail every such file with <stem>_section_missing.
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            write_memory_store(temp, "decisions/db-choice", "Postgres.", title="DB Choice")
+
+            failed = self._failed_check_ids(temp)
+            self.assertNotIn("db-choice_section_missing", failed)
+            self.assertNotIn("db-choice_store_path_missing", failed)
+
+    def test_consolidated_memory_artifact_is_not_scored(self) -> None:
+        # consolidated_memory.md is a compiled Dreaming artifact with no
+        # frontmatter; every other subsystem ignores it, and the eval's
+        # hand-copied ignore rule had drifted and penalized it.
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            (_memory_dir(temp) / "consolidated_memory.md").write_text(
+                "# Compiled context document\n\nNo frontmatter on purpose.\n",
+                encoding="utf-8",
+            )
+
+            failed = self._failed_check_ids(temp)
+            self.assertNotIn("consolidated_memory_frontmatter_invalid", failed)
+
+
 if __name__ == "__main__":
     unittest.main()

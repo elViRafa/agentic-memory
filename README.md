@@ -37,7 +37,7 @@ Memory is stored as human-readable Markdown with YAML frontmatter. No vector dat
 
 ## Status
 
-**v0.7.3 — [live on PyPI](https://pypi.org/project/memory-fabric/).**
+**v0.8.0 — [live on PyPI](https://pypi.org/project/memory-fabric/).**
 Core CLI and MCP tools work end-to-end. See [`ROADMAP.md`](ROADMAP.md) for what shipped,
 what's in progress, and what's next.
 
@@ -464,6 +464,7 @@ Commands:
   install         Configure an MCP client to use memory-fabric (--client <name|all>)
   eval            Score memory quality or Dreaming quality
   dream           Run memory maintenance (--mode light|deep)
+  migrate         Split legacy hand-written sections into store entries (--dry-run, --section, --no-llm)
   query           Search memory
   store           CRUD operations on semantic memory store
   sync-agents     Regenerate agent instruction files from canonical templates

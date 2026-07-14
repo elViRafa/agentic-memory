@@ -22,6 +22,7 @@ from memory_fabric.storage._shared import (
 from memory_fabric.templates import (
     LOCAL_GITIGNORE,
     SECTION_TEMPLATES,
+    STORE_CATEGORY_SCAFFOLD,
     build_agents_md,
     build_agents_rule_dreaming,
     build_agents_rule_memory,
@@ -158,6 +159,17 @@ def initialize_memory_fabric(
     if not gitkeep.exists():
         gitkeep.write_text("", encoding="utf-8")
         files_created.append(str(gitkeep))
+
+    # Pre-scaffold the canonical store categories (ROADMAP Phase 2.2): visible
+    # structure steers an agent's first writes toward the right category. Empty
+    # dirs are invisible to map regeneration until a first entry lands, so this
+    # changes nothing else.
+    for category in STORE_CATEGORY_SCAFFOLD:
+        category_keep = store_dir / category / ".gitkeep"
+        category_keep.parent.mkdir(parents=True, exist_ok=True)
+        if not category_keep.exists():
+            category_keep.write_text("", encoding="utf-8")
+            files_created.append(str(category_keep))
 
     if memory_prompt is not None:
         prompt_path = memory_dir / "memory_prompt.txt"

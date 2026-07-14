@@ -61,6 +61,22 @@ SECTION_TEMPLATES: dict[str, dict[str, Any]] = {
     },
 }
 
+# Store categories pre-scaffolded by `ai-memory init` (ROADMAP Phase 2.2).
+# The map categories are derived from SECTION_TEMPLATES' `generated_from` so
+# the two can't drift; episodic/failures/rules are the categories written by
+# session journaling, failure memory, and the steering templates' granular-
+# record pointers respectively.
+STORE_CATEGORY_SCAFFOLD: tuple[str, ...] = tuple(
+    sorted(
+        {
+            str(template["frontmatter"]["generated_from"]).split("/", 1)[1]
+            for template in SECTION_TEMPLATES.values()
+            if "generated_from" in template.get("frontmatter", {})
+        }
+        | {"episodic", "failures", "rules"}
+    )
+)
+
 LOCAL_GITIGNORE = """*.patch
 *.tmp
 *.log

@@ -15,6 +15,7 @@ import X` without knowing which submodule actually implements it:
 - `consolidation`: Dreaming's candidate-store mechanics
 - `dream`: Dreaming's public entry points and orchestration
 - `maps`: generated root maps rebuilt from memory-store/ subtrees (store-first)
+- `migrate`: one-shot split of legacy hand-written sections into store entries
 - `capture`: passive commit capture + session/journal enforcement primitives
 - `verify`: self-verifying citations — checks `evidence` refs still resolve
 - `merge`: semantic 3-way merge for memory files (git merge driver backend)
@@ -98,6 +99,9 @@ from memory_fabric.storage.maps import (
 )
 from memory_fabric.storage.maps import (
     regenerate_maps as regenerate_maps,
+)
+from memory_fabric.storage.migrate import (
+    migrate_memory as migrate_memory,
 )
 from memory_fabric.storage.patch import propose_memory_patch as propose_memory_patch
 from memory_fabric.storage.search import keyword_search as keyword_search

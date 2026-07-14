@@ -4,7 +4,7 @@
 > one command in VS Code, Claude (Code + Desktop), Codex, Antigravity, Cursor, Windsurf,
 > Gemini CLI, Cline, and anything MCP-compatible.
 
-Last updated: 2026-07-13 · Current version: 0.7.3 ([live on PyPI](https://pypi.org/project/memory-fabric/)) · Tests: 264 passing (+70 subtests, +1 skipped on Windows by design) · Coverage: 85.5% (gate: 82%) · Lint: ruff (E4,E7,E9,F,I,B,UP,SIM,RUF,BLE001,S110,S112) + mypy clean · No `src/` file >25 KB except 4 tracked borderline files · Phase 0 exit criteria met
+Last updated: 2026-07-14 · Current version: 0.8.0 ([live on PyPI](https://pypi.org/project/memory-fabric/)) · Tests: 288 passing (+73 subtests, +1 skipped on Windows by design) · Coverage: 85.9% (gate: 82%) · Lint: ruff (E4,E7,E9,F,I,B,UP,SIM,RUF,BLE001,S110,S112) + mypy clean · No `src/` file >25 KB except 4 tracked borderline files · Phase 0 exit criteria met · Phase 2.2 migration tooling shipped
 
 ---
 
@@ -282,11 +282,13 @@ Priority order: Q1–Q3 before v0.8 migration work starts; Q4–Q10 interleave w
       Verified: `ruff check .`, `ruff format --check .`, and `mypy
       src/memory_fabric` all clean; full suite still 249 passed, coverage
       85.32%.
-- [ ] **Q8 — Repo & dogfood hygiene.** Delete the stray `0001-*.patch` at the repo
-      root (already merged as `7ee983a`); gitignore `scratch/`; commit the untracked
-      `.ai-memory/memory-store/features/` entries — an uncommitted dogfood store
-      contradicts the "memory is git-committable" pitch; clean the broken
-      `~~mory-fabric` distribution in the local venv.
+- [x] **Q8 — Repo & dogfood hygiene.** Stray patch file deleted, `scratch/`
+      gitignored, and the broken `~~mory-fabric` venv dist-info cleaned on 2026-07-13
+      (first round). The last sub-item — committing the untracked
+      `.ai-memory/memory-store/features/` entries — lands with the v0.8 migration
+      commit, which touches the same dogfood store (the 2026-07-13 migration run
+      rewrote its maps and added 15 granular entries; committing `features/` separately
+      mid-review would just split one logical change in two).
 - [x] **Q9 — Provider preflight UX** (field-test finding AV-2). Done 2026-07-13.
       Added `_check_llm_provider` to `doctor()` in `lifecycle.py`: for
       `gemini`/`openai`/`anthropic`, a pure env-var check that the matching
@@ -341,8 +343,10 @@ Dreaming, a non-UTF-8-existing-file crash across both write paths, and a genuine
 Windows-only cross-process race in the core file lock), `eval.py` split from the
 single largest module in the repo (48 KB) into a 5-file package, 52→21 broad
 `except Exception` sites (the rest narrowed or justified), lint ruleset widened
-and clean, repo hygiene cleaned up. Next: Phase 2.2 migration tooling (v0.8),
-per the execution order above.
+and clean, repo hygiene cleaned up. Phase 2.2 migration tooling (v0.8) followed
+on 2026-07-13 — see §4.2. Next: v0.8 release (bump + tag), then v1.0 launch
+prep (execution-order item 8) with Phase 2.3's flat-write removal as the one
+remaining model change.
 
 ## 3. Phase 1 — Install everywhere (distribution)
 
@@ -473,15 +477,37 @@ v0.8, still unbuilt.
 - [x] README "Project Memory Layout" rewritten to describe the store-first model
       (`memory-store/` as source of truth, generated maps, steering sections, `evidence`
       citations, capture reliability, git-native trust). Done 2026-07-07.
-- [ ] `ai-memory migrate`: split legacy hand-written sections into store entries
-      (LLM-assisted when configured; heading-based heuristic fallback). Snapshot first,
-      `--dry-run` prints the full plan, rollback restores the snapshot.
-- [ ] `ai-memory init` pre-scaffolds empty store category directories (`memory-store/`
-      currently only gets a `.gitkeep`; categories are created lazily on first write).
-- [ ] Migration guide in `CHANGELOG.md` (the repo has no changelog yet — needs to exist
-      before this can point to it; see Phase 6 community-hygiene item).
-- [ ] Run the migration on this repo's own `.ai-memory/` and record before/after eval
-      scores as the reference case.
+- [x] `ai-memory migrate`: split legacy hand-written sections into store entries.
+      Done 2026-07-13 (`storage/migrate.py`, see `z_PLAN.md` Milestone H). One design
+      sharpening over this item's original wording: the heading-based heuristic split is
+      *always* the content pipeline (chunks are verbatim source, so "never delete user
+      content" holds by construction); a configured LLM improves only the *names*
+      (store_path/title/tags) of those chunks and degrades to heuristic names on any
+      failure. Snapshot first, `--dry-run` prints the full plan, `rollback --to` restores
+      the flat sections; re-runs are resumable (identical entries recognized, conflicting
+      names get a `-migrated` suffix). After a section's entries land, the flat file is
+      rewritten as a `generated: true` map directly — deliberately bypassing the Dream
+      fold, which would re-blob the just-granularized body into pending-review.
+- [x] `ai-memory init` pre-scaffolds empty store category directories. Done 2026-07-13:
+      the four map categories (derived from `SECTION_TEMPLATES`, so they can't drift)
+      plus `episodic`/`failures`/`rules`, each with `.gitkeep`. Empty dirs are invisible
+      to map regeneration until a first entry lands, so nothing else changes.
+- [x] Migration guide in `CHANGELOG.md`. Done 2026-07-13 — `CHANGELOG.md` created
+      (keep-a-changelog, 0.4.0→0.7.3 backfilled from tags) with the step-by-step guide
+      under `[Unreleased]`.
+- [x] Run the migration on this repo's own `.ai-memory/` and record before/after eval
+      scores as the reference case. Done 2026-07-13: **85/100 → 96/100, zero failing
+      checks** (section_coverage 65→100, metadata_quality 73→100). Full numbers in the
+      CHANGELOG migration guide. The run surfaced two pre-existing eval bugs (store files
+      scored for a `section` field the canonical write path never produces — the same
+      local-vs-store split doctor was already fixed for; and `consolidated_memory.md`
+      scored despite being ignored by every other subsystem via a drifted hand-copied
+      ignore rule) — both fixed with regression tests, which is exactly the kind of
+      finding this dogfood step existed to produce. Bonus find while running the suite at
+      night: `test_hooks_e2e` asserted the capture filename with UTC "today" while capture
+      names files after the commit's local-timezone author date, so it failed every day
+      from 20:00 to midnight in UTC-4 — fixed by deriving the expected name from the
+      commit itself.
 
 ### 4.3 v1.0 — flat write path removed
 
@@ -732,8 +758,9 @@ Claims without numbers don't win "best in the world."
    Q1 MCP-boundary tests, Q2 version-truth check, and Q3 coverage gate land before v0.8
    starts; Q4–Q10 interleave with it. Rationale: both field-test criticals lived in
    layers the suite doesn't reach — close that bug class before building more surface.
-7. **Phase 2.2 migration tooling (v0.8)** — still unbuilt; the last v1.0 blocker left
-   from Phase 2. Do this before item 8.
+7. **Phase 2.2 migration tooling (v0.8)** — done 2026-07-13 (`ai-memory migrate`, init
+   store scaffolding, CHANGELOG + migration guide, dogfood reference case 85→96; see
+   §4.2). Release tag pending, per the separate-release-step convention.
 8. **Launch v1.0** (Phase 6 demo + announcements) on the strength of distribution and
    the clean store-first model.
 9. **Phase 3.2–3.3 client-hook enforcement + capture stats** — post-launch, guided by

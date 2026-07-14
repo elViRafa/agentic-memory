@@ -6,6 +6,7 @@ priority: high
 tags: [architecture, agents, rules]
 schema_version: 1.3
 last_updated: "2026-06-03T19:37:24-04:00"
+review_status: stale
 ---
 
 # Agentic Architecture

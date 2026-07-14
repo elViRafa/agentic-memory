@@ -6,6 +6,7 @@ tags: [domain, language, glossary, definitions]
 schema_version: 1.3
 last_updated: "2026-06-03T08:28:05-04:00"
 summary_hash: 6efb9a96e28e10e10f2f2514a3a17e0f
+review_status: stale
 ---
 
 # Ubiquitous Language
