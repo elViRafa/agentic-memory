@@ -8,7 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.8.0] — 2026-07-14
+## [0.8.1] — 2026-07-14
+
+> `v0.8.0` was tagged and pushed but never published: its release CI caught a
+> pre-existing test bug before the publish step ran (same class the project
+> has hit before — a test asserted an app-returned resolved path against a
+> raw, unresolved temp path; failed only on the Windows runner's 8.3 short
+> name). Per the `v0.4.0`→`v0.4.1` precedent below, the tag isn't force-moved;
+> `v0.8.1` carries the same migration-tooling changes plus the fix.
+
+### Fixed
+
+- `tests/test_migrate.py::InitScaffoldTests::test_init_scaffolds_store_categories`
+  compared `initialize_memory_fabric`'s resolved `files_created` paths against
+  an unresolved temp path — passed locally, failed on Windows CI.
 
 ### Added
 
@@ -210,8 +223,8 @@ with those fixed the final score is **96/100 with zero failing checks**
   {ubuntu, windows, macos} × {3.11–3.14}; `storage/_core.py` god module split
   into 12 focused modules.
 
-[Unreleased]: https://github.com/elViRafa/agentic-memory/compare/v0.8.0...HEAD
-[0.8.0]: https://github.com/elViRafa/agentic-memory/compare/v0.7.3...v0.8.0
+[Unreleased]: https://github.com/elViRafa/agentic-memory/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/elViRafa/agentic-memory/compare/v0.7.3...v0.8.1
 [0.7.3]: https://github.com/elViRafa/agentic-memory/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/elViRafa/agentic-memory/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/elViRafa/agentic-memory/compare/v0.7.0...v0.7.1

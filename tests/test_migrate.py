@@ -382,7 +382,13 @@ class InitScaffoldTests(unittest.TestCase):
     def test_init_scaffolds_store_categories(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             result = initialize_memory_fabric(temp)
-            store = _memory_dir(temp) / "memory-store"
+            # initialize_memory_fabric resolves cwd internally (project_root
+            # -> .resolve()), so files_created paths are canonical. Comparing
+            # against a raw, unresolved temp path breaks on Windows CI
+            # runners whose account name needs an 8.3 short-name alias
+            # (RUNNER~1 vs runneradmin) — the same bug class this project has
+            # hit and fixed before (z_PLAN.md Milestone A/D).
+            store = Path(temp).resolve() / ".ai-memory" / "memory-store"
             for category in STORE_CATEGORY_SCAFFOLD:
                 self.assertTrue((store / category / ".gitkeep").exists(), category)
             self.assertIn(str(store / "architecture" / ".gitkeep"), result["files_created"])
