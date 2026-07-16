@@ -5,7 +5,7 @@
 > because enforcement amplifies volume — once hooks guarantee a record per commit and a
 > journal per session, every noise commit becomes permanent noise. Cut the noise first.
 
-Status: Stages 0–2 done, 2 clients (claude-code + gemini-cli) (2026-07-16) · Created: 2026-07-16 · Total estimate: ~5–8 days of focused work
+Status: Stages 0–2 done, 3 clients (claude-code + gemini-cli + codex) (2026-07-16) · Created: 2026-07-16 · Total estimate: ~5–8 days of focused work
 
 **Global exit criterion:** a 100% non-cooperative agent still produces a clean episodic
 record per *relevant* commit plus a session journal per session, without inflating
@@ -186,7 +186,7 @@ client):
 | Client | Mechanism | SessionStart-equivalent | Stop-equivalent (real block) | Compaction signal | Verdict |
 |---|---|---|---|---|---|
 | **Gemini CLI** | Hooks (`SessionStart`/`AfterAgent`/`PreCompress`) | ✅ works | ✅ exit 2 + stderr, same contract as ours | ⚠️ advisory-only (matches our own PreCompact) | **Implemented** — see below. Primary docs verified directly. |
-| **Codex CLI** | Hooks framework (distinct from the older `notify`) | ✅ works | ✅ exit 2 + stderr, or `decision: block` | ✅ **can actually block** compaction (`continue: false`) — stronger than ours | Worth building next; docs 403'd on direct fetch, secondary-sourced only |
+| **Codex CLI** | Hooks framework (distinct from the older `notify`) | ✅ works | ✅ exit 2 + stderr, same contract as ours (confirmed from source, not docs) | ⚠️ schema *can* set `continue: false` but we don't use it — same non-blocking design as the others | **Implemented** — see below. Verified straight from Rust source, doc pages all 403'd. |
 | **Cursor** | Agent Hooks (`hooks.json`) | ⚠️ documented but **open upstream bug**: `additional_context` reportedly not reaching the agent (2 forum threads) | ✅ solid | ⚠️ advisory-only | Hold — verify the injection bug is fixed first |
 | **VS Code + Copilot** | Agent Hooks | ✅ works, modeled on Claude Code's schema | ✅ exit 2 + stderr (same channel we already learned about the hard way) | ❓ blocking semantics unconfirmed | Hold — feature is explicitly labeled Preview |
 | **Windsurf** | Cascade Hooks | ❌ no session-lifecycle hook exists at all — only per-action pre/post hooks | ❌ none | ❌ none | Not viable — missing mechanism entirely |
@@ -237,10 +237,74 @@ and `.../hooks/index.md` (fetched as raw GitHub markdown, not training-data reca
   command strings through `sh -c` — confirmed exit 2 + stderr reason and a real light dream
   exiting 0, same verification standard as the claude-code adapter.
 
-**Not implemented this round**: Codex CLI (next candidate — high ceiling, PreCompact can
-truly block there, but the docs I could verify came from secondary sources only; do the
-same direct-fetch verification pass before writing its merge logic). Cursor/VS
-Code/Windsurf/Cline held per the table above.
+**Implemented: codex adapter.** Every official doc URL for Codex hooks (`developers.
+openai.com/codex/hooks`, `.../config-reference`) 403'd on every fetch attempt, same as the
+first survey found — so this went one level deeper than doc-page verification: straight to
+Codex's own Rust source (`openai/codex` on GitHub, fetched as raw files), which is more
+authoritative than any doc page could be. Read `codex-rs/hooks/src/lib.rs` (event names,
+which events have meaningful matchers), `codex-rs/config/src/hook_config.rs`
+(`HooksFile`/`HookEventsToml`/`MatcherGroup`/`HookHandlerConfig` — the literal wire schema),
+`codex-rs/hooks/src/events/common.rs` (matcher-matching semantics), and the
+`session_start.rs`/`stop.rs`/`compact.rs` test suites (exact I/O behavior, quoted from
+actual test names and assertions, not paraphrased).
+
+- **Turned out structurally identical to Claude Code, confirmed from struct definitions**:
+  `hooks.json`'s shape is the same `{"hooks": {"Event": [{"matcher": ..., "hooks": [{"type":
+  "command", "command": ...}]}]}}` block wrapper — so `_install_codex_hooks` reuses the
+  claude-code adapter's merge/remove logic directly. Refactored those two functions out of
+  the `claude-code` section into shared `_merge_matcher_block_hooks`/
+  `_remove_matcher_block_hooks` (parametrized on the managed-events tuple) rather than
+  duplicating them a second time — the "share only where the shape truly matches" principle
+  paying off concretely, not just in theory.
+- **One config-shape refinement matchers make possible**: `events/common.rs::matches_matcher`
+  showed matcher strings made only of alphanumeric/underscore/`|` chars are treated as an
+  **exact-set match** (split on `|`, equality per candidate) — not a Claude-Code-style single
+  literal each. So `"startup|resume"` and `"manual|auto"` each cover both sources in **one**
+  block, where Claude Code needs two. `Stop` is confirmed absent from
+  `HOOK_EVENT_NAMES_WITH_MATCHERS` (its matcher is accepted but ignored at dispatch), so it
+  keeps the same `""` match-all convention as Claude Code's Stop block.
+- **`Stop`'s exit-2 contract confirmed byte-for-byte identical** to Claude Code's, straight
+  from a test literally named `exit_code_two_uses_stderr_feedback_only` in `events/stop.rs`:
+  non-empty stderr on exit 2 blocks with that text as the reason. `guard-journal` needed zero
+  changes. A real trap surfaced by another test, `exit_code_two_without_stderr_does_not_
+  block`: exit 2 with *empty* stderr is silently ignored, not a concern here since
+  `guard_journal()`'s `reason` string is never empty when it actually blocks.
+- **`PreCompact`'s output wire type (`PreCompactCommandOutputWire`) carries only the
+  universal `continue`/`stopReason`/`suppressOutput`/`systemMessage` fields** — no
+  context-injection field, and while `continue: false` is schema-legal there, our adapter
+  never sets it, keeping the same non-blocking `dream --mode light --apply || true`
+  checkpoint design used for the other two clients.
+- **New finding this survey didn't anticipate, source-confirmed and NOT silently
+  worked around**: Codex gates hooks behind a hash-based trust check
+  (`hook_trust_status` in `discovery.rs`) — a newly added or modified hook is discovered
+  but **not added to the active handler set** (and therefore doesn't run) until trusted.
+  The exact end-user trust command wasn't found in the portion of the CLI source
+  checked, so rather than assert a guessed command name, `_install_codex_hooks` appends
+  an explicit warning on every install that changes the file: check Codex CLI's
+  hook-trust command/UI, or the hooks won't actually execute. This is the same
+  "audible, not silent" standard the whole roadmap has followed since Stage 0's capture
+  filter, applied to an unresolved-but-real gap instead of a code path.
+- **Config-path confidence note**: `.codex/hooks.json` for the project scope is inferred
+  from the `ConfigLayerSource::Project { dot_codex_folder }` variant (the project layer's
+  hook folder defaults to that directory) and matches this repo's own existing
+  project-scoped MCP path for codex (`.codex/config.toml`) — high confidence, but the one
+  piece of this adapter not read from a literal "hooks.json lives here" line in the source.
+- **Tests**: 8 new cases mirroring the claude-code/gemini-cli suites (fresh install
+  produces the single-block-per-event shape confirming the pipe-matcher simplification,
+  byte-stable reinstall with the trust warning correctly absent on a no-op re-run,
+  preserves unrelated `description`/Stop-hook content, dry-run, uninstall removes only
+  managed entries, clean no-op uninstall, malformed-JSON backup-and-abort) plus a
+  project-scoped `session-start --hook-format codex` CLI test. Same CLI-test carve-out as
+  gemini-cli: codex's MCP-config install also defaults to a real **global**
+  `~/.codex/config.toml` with no `home`/`env` override through `main()`, so no combined
+  `install --with-hooks` test was written for it either.
+- **Real end-to-end smoke test**: ran the actual generated `Stop` and `PreCompact` command
+  strings through `sh -c` — confirmed exit 2 + stderr reason and a real light dream exiting
+  0, plus the trust warning appearing in the install result.
+
+**Not implemented this round**: Cursor (open upstream bug on context injection), VS Code
+Copilot Hooks (labeled Preview), Windsurf and Cline (missing mechanism/wrong primitive) —
+held per the table above pending upstream fixes or better verification.
 
 ---
 

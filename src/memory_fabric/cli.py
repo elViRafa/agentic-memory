@@ -45,7 +45,7 @@ from memory_fabric.version import __version__
 # JSON envelope on stdout (exit 0) — currently byte-identical across both,
 # verified independently against each client's own docs. Split into separate
 # builders here the moment either schema diverges; don't assume it stays true.
-_SESSION_START_JSON_HOOK_FORMATS = frozenset({"claude-code", "gemini-cli"})
+_SESSION_START_JSON_HOOK_FORMATS = frozenset({"claude-code", "gemini-cli", "codex"})
 
 
 def _ensure_utf8_output() -> None:
@@ -124,13 +124,14 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "session-start":
             mark_result = mark_session_start(cwd)
             if args.hook_format in _SESSION_START_JSON_HOOK_FORMATS:
-                # Both Claude Code's and Gemini CLI's SessionStart hooks parse
-                # stdout as JSON on exit 0 and inject
+                # Claude Code's, Gemini CLI's, and Codex's SessionStart hooks all
+                # parse stdout as JSON on exit 0 and inject
                 # hookSpecificOutput.additionalContext into the session — the
-                # same envelope shape on both clients (Gemini CLI's hook schema
-                # is explicitly modeled on Claude Code's) — a different shape
-                # than our plain result dict, so this bypasses _print_result
-                # entirely rather than being folded into the generic output path.
+                # same envelope shape on all three (Gemini CLI's and Codex's hook
+                # schemas are both explicitly modeled on Claude Code's, confirmed
+                # from Codex's own source) — a different shape than our plain
+                # result dict, so this bypasses _print_result entirely rather
+                # than being folded into the generic output path.
                 additional_context = (
                     f'Memory Fabric reminder: call read_combined_context_tool(cwd="{cwd}") '
                     "now if project memory has not been loaded yet this session. Before your "
@@ -522,7 +523,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     session_start_parser.add_argument(
         "--hook-format",
-        choices=["claude-code", "gemini-cli"],
+        choices=["claude-code", "gemini-cli", "codex"],
         default=None,
         help="Emit output in a specific client's hook-envelope format instead of "
         "the plain result (e.g. hookSpecificOutput.additionalContext)",
