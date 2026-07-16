@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from memory_fabric.client_hooks import install_hooks
 from memory_fabric.clients import CLIENTS
 from memory_fabric.contracts import DreamEvalResult, EvalResult, MigrateResult
 from memory_fabric.eval import evaluate_dream_quality, evaluate_memory_fabric
@@ -115,14 +116,44 @@ def main(argv: list[str] | None = None) -> int:
             _print_result(capture_result, args.json)
             return 0
         if args.command == "session-start":
-            _print_result(mark_session_start(cwd), args.json)
+            mark_result = mark_session_start(cwd)
+            if args.hook_format == "claude-code":
+                # Claude Code's SessionStart hook parses stdout as JSON on exit
+                # 0 and injects hookSpecificOutput.additionalContext into the
+                # session — a different envelope than our plain result dict,
+                # so this bypasses _print_result entirely rather than being
+                # folded into the generic output path.
+                additional_context = (
+                    f'Memory Fabric reminder: call read_combined_context_tool(cwd="{cwd}") '
+                    "now if project memory has not been loaded yet this session. Before your "
+                    "final response, call write_session_journal_tool to log what was "
+                    "accomplished — the Stop hook will block ending the session without it."
+                )
+                print(
+                    json.dumps(
+                        {
+                            "hookSpecificOutput": {
+                                "hookEventName": "SessionStart",
+                                "additionalContext": additional_context,
+                            }
+                        }
+                    )
+                )
+                return 0
+            _print_result(mark_result, args.json)
             return 0
         if args.command == "guard-journal":
             guard_result = guard_journal(cwd)
             _print_result(guard_result, args.json)
             # Exit 2 (not 1) so a client Stop hook can distinguish "block the
-            # stop" from an operational error, and surface the reason.
-            return 0 if guard_result["ok"] else 2
+            # stop" from an operational error, and surface the reason. Claude
+            # Code (and hook conventions generally) read the block reason from
+            # stderr on a plain exit 2, not stdout — printing only to stdout
+            # above is silent to the very hook this command exists for.
+            if not guard_result["ok"]:
+                print(guard_result["reason"], file=sys.stderr)
+                return 2
+            return 0
         if args.command == "doctor":
             doctor_result = doctor(cwd, check_network=not getattr(args, "offline", False))
             _print_result(doctor_result, args.json)
@@ -147,6 +178,12 @@ def main(argv: list[str] | None = None) -> int:
                     uninstall=args.uninstall,
                     server_command=args.server_command,
                 )
+                if args.with_hooks:
+                    install_all_result["warnings"] = [
+                        *install_all_result["warnings"],
+                        "--with-hooks is only supported together with a single --client for "
+                        "now (e.g. --client claude-code --with-hooks); skipped for --client all.",
+                    ]
                 _print_result(install_all_result, args.json)
                 return 0 if all(r["ok"] for r in install_all_result["results"]) else 1
             install_result = install(
@@ -157,8 +194,16 @@ def main(argv: list[str] | None = None) -> int:
                 uninstall=args.uninstall,
                 server_command=args.server_command,
             )
-            _print_result(install_result, args.json)
-            return 0 if install_result["ok"] else 1
+            combined_result: dict[str, Any] = dict(install_result)
+            ok = install_result["ok"]
+            if args.with_hooks:
+                hook_result = install_hooks(
+                    cwd, args.client, dry_run=args.dry_run, uninstall=args.uninstall
+                )
+                combined_result["hooks"] = hook_result
+                ok = ok and hook_result["ok"]
+            _print_result(combined_result, args.json)
+            return 0 if ok else 1
         if args.command == "dream":
             dream_result = asyncio.run(
                 dream(
@@ -464,8 +509,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Also capture noise commits (merges, [bot] authors, chore:/style:/ci:/"
         "build(deps) prefixes, lockfile-only changes) that are skipped by default",
     )
-    subparsers.add_parser(
+    session_start_parser = subparsers.add_parser(
         "session-start", help="Mark session start (for client SessionStart hooks)"
+    )
+    session_start_parser.add_argument(
+        "--hook-format",
+        choices=["claude-code"],
+        default=None,
+        help="Emit output in a specific client's hook-envelope format instead of "
+        "the plain result (e.g. Claude Code's hookSpecificOutput.additionalContext)",
     )
     subparsers.add_parser(
         "guard-journal",
@@ -499,6 +551,12 @@ def build_parser() -> argparse.ArgumentParser:
             "Explicit server command to write into the client config (e.g. a full path to "
             "memory-fabric-mcp). Overrides the automatic local-binary/uvx resolution."
         ),
+    )
+    install_parser.add_argument(
+        "--with-hooks",
+        action="store_true",
+        help="Also wire client lifecycle hooks (SessionStart/Stop/PreCompact enforcement) "
+        "if the chosen client has a supported hook adapter",
     )
 
     dream_parser = subparsers.add_parser("dream", help="Run local memory maintenance")

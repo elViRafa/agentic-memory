@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from memory_fabric.clients import resolve_cli_binary
 from memory_fabric.contracts import DoctorResult, InitResult, StatusResult
 from memory_fabric.frontmatter import FrontmatterError, parse_frontmatter
 from memory_fabric.paths import global_memory_dir, local_memory_dir, memory_store_dir, project_root
@@ -50,27 +51,6 @@ _LEGACY_HOOK_LINES = {
     "ai-memory sync-agents || true",
     "git add .agents/rules/ .cursor/rules/memory-fabric.mdc .windsurf/rules/memory-fabric.md CLAUDE.md .github/copilot-instructions.md 2>/dev/null || true",
 }
-
-
-def _resolve_cli_binary() -> tuple[str, str | None]:
-    """Resolve the ai-memory CLI the git hooks should invoke.
-
-    Hooks run in whatever shell git spawns, where the project venv is usually
-    NOT activated — a bare `ai-memory` dies silently (or runs an unrelated
-    global copy). Prefer the binary sitting next to the interpreter that is
-    executing init, i.e. the installation the user actually asked to hook up.
-    """
-    exe_name = "ai-memory.exe" if os.name == "nt" else "ai-memory"
-    sibling = Path(sys.executable).with_name(exe_name)
-    if sibling.exists():
-        return sibling.as_posix(), None
-    on_path = shutil.which("ai-memory")
-    if on_path:
-        return Path(on_path).as_posix(), None
-    return "ai-memory", (
-        "Could not resolve an absolute path for the ai-memory CLI; git hooks will rely on "
-        "PATH lookup and may be skipped in shells where memory-fabric is not available."
-    )
 
 
 def _build_hook_block(bin_path: str, inner_lines: list[str]) -> str:
@@ -226,7 +206,7 @@ def initialize_memory_fabric(
             hooks_dir = git_dir / "hooks"
             hooks_dir.mkdir(parents=True, exist_ok=True)
 
-            cli_bin, bin_warning = _resolve_cli_binary()
+            cli_bin, bin_warning = resolve_cli_binary()
             if bin_warning:
                 warnings.append(bin_warning)
 

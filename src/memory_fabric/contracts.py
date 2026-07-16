@@ -152,6 +152,24 @@ class InstallAllResult(TypedDict):
     warnings: list[str]
 
 
+class HookInstallResult(TypedDict):
+    """Result of wiring memory-fabric into a client's *lifecycle hook*
+    mechanism (SessionStart/Stop/PreCompact-style enforcement) — distinct from
+    `InstallResult`, which wires the MCP server connection itself. A client
+    with no registered hook adapter yet reports `supported: False` rather than
+    silently no-op'ing.
+    """
+
+    client: str
+    ok: bool
+    changed: bool
+    supported: bool
+    path: str
+    diff: str
+    backup_path: str
+    warnings: list[str]
+
+
 class StatusResult(TypedDict):
     cwd: str
     memory_dir: str

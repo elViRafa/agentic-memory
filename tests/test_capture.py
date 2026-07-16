@@ -3,6 +3,8 @@ enforcement primitives, capture stats, extraction prompt, and the diff budget.""
 
 from __future__ import annotations
 
+import contextlib
+import io
 import shutil
 import subprocess
 import tempfile
@@ -276,6 +278,44 @@ class SessionGuardTests(unittest.TestCase):
             # Should never raise even if called directly.
             mark_journal_written(temp)
             self.assertTrue((Path(temp) / ".ai-memory" / "private" / "last_journal_at").exists())
+
+
+class GuardJournalCliTests(unittest.TestCase):
+    """A Claude Code Stop hook reads the block reason from stderr on a plain
+    exit 2, not stdout (docs: https://code.claude.com/docs/en/hooks-guide.md
+    - "Exit 2: ... Write a reason to stderr, and Claude receives it as
+    feedback"). `ai-memory guard-journal` must write the reason there, not
+    just in the JSON result it prints to stdout.
+    """
+
+    def test_blocked_guard_writes_reason_to_stderr_and_exits_2(self) -> None:
+        from memory_fabric.cli import main
+
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            mark_session_start(temp)
+
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                exit_code = main(["--cwd", temp, "guard-journal"])
+
+            self.assertEqual(exit_code, 2)
+            self.assertIn("write_session_journal_tool", stderr.getvalue())
+
+    def test_unblocked_guard_writes_nothing_to_stderr_and_exits_0(self) -> None:
+        from memory_fabric.cli import main
+
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            mark_session_start(temp)
+            write_session_journal(temp, summary="Did work.")
+
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                exit_code = main(["--cwd", temp, "guard-journal"])
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(stderr.getvalue(), "")
 
 
 class CaptureStatsTests(unittest.TestCase):

@@ -5,7 +5,7 @@
 > because enforcement amplifies volume — once hooks guarantee a record per commit and a
 > journal per session, every noise commit becomes permanent noise. Cut the noise first.
 
-Status: Stages 0–1 done (2026-07-16) · Created: 2026-07-16 · Total estimate: ~5–8 days of focused work
+Status: Stages 0–2 done (2026-07-16) · Created: 2026-07-16 · Total estimate: ~5–8 days of focused work
 
 **Global exit criterion:** a 100% non-cooperative agent still produces a clean episodic
 record per *relevant* commit plus a session journal per session, without inflating
@@ -92,35 +92,88 @@ contains weekly summaries + only the recent daily files, and nothing was silentl
 
 ---
 
-## Stage 2 — Claude Code hooks writer (the main item, ~3–5 days)
+## Stage 2 — Client lifecycle-hooks writer (the main item, ~3–5 days) — ✅ done 2026-07-16
 
-**Files:** `src/memory_fabric/installer.py`, `cli.py` · Closes ROADMAP.md §5.2's open items.
+**Files:** `src/memory_fabric/client_hooks.py` (new), `clients.py`, `contracts.py`, `cli.py`
+· Closes ROADMAP.md §5.2's open items for Claude Code.
 
-**Step 1 — verify before writing (risk item, do first):** check the live Claude Code hooks
-schema (SessionStart / Stop / PreCompact event names, settings.json shape, exit-code 2
-blocking semantics) against current official docs. ROADMAP.md already mandates this
-("deferred rather than guessed") — it is the one part with real staleness risk, and the
-same class of drift Milestone C caught for VS Code/Antigravity paths.
+**Scope change from the original plan, decided before writing code:** the settings.json
+hook mechanism (SessionStart/Stop/PreCompact) is Claude-Code-specific by construction — no
+other client shares that schema (Cursor's hooks beta, Codex's `notify`, Gemini CLI all
+differ or don't exist yet). Rather than hard-wiring a single Claude Code writer into
+`installer.py`, the client-agnostic and client-specific parts were split:
 
-**Step 2 — the writer:** `ai-memory install --client claude-code --with-hooks` writes:
+- **`client_hooks.py`** (new module): a generalized `HOOK_ADAPTERS` registry +
+  `install_hooks(cwd, client, ...)` dispatcher, parallel to `clients.py`/`installer.py`'s
+  MCP-config registry but *not* sharing its json/toml/cli engine — each client's hook event
+  model is different enough that a shared format engine doesn't fit. A client with no
+  registered adapter gets a plain, honest `supported: False` result naming which clients
+  **are** supported today, instead of a silent no-op — same audible-not-silent standard as
+  Stage 0's capture filter. Adding Cursor/Codex/Gemini CLI later (ROADMAP.md §5.2's "Client
+  capability survey") means registering one more adapter, not touching this dispatcher.
+- **claude-code adapter** (in the same file): the only implemented adapter today.
 
-| Hook | Command | Purpose |
-|---|---|---|
-| SessionStart | `ai-memory session-start` + context injection | mark session, load memory |
-| Stop | `ai-memory guard-journal` | already exits 2 with a reason — blocks unjournaled session end |
-| PreCompact | journal checkpoint | knowledge survives context compression |
+**Step 1 — verify before writing (risk item, done first):** checked the live Claude Code
+hooks schema against current official docs (`code.claude.com/docs/en/hooks.md` and
+`hooks-guide.md`) via three rounds of targeted verification, not training-data guesses:
+- settings.json shape: `hooks.<Event>` is an array of `{"matcher": ..., "hooks": [{"type":
+  "command", "command": ...}]}` blocks. `Stop` has no matcher concept (always fires,
+  `matcher: ""`); `SessionStart` matchers are `startup`/`resume`/`clear`/`compact`;
+  `PreCompact` matchers are `manual`/`auto`.
+- **Real finding, not a false alarm:** exit code 2 feedback is read from **stderr only**,
+  never stdout — confirmed against `hooks-guide.md`'s explicit wording ("Write a reason to
+  stderr, and Claude receives it as feedback"). `ai-memory guard-journal` was printing its
+  JSON result (including the block reason) to stdout only, then exiting 2 — a Stop hook
+  built on it as originally shipped would have blocked silently, with the agent never
+  seeing *why*. Fixed in `cli.py`: on a block, the reason is now also written to stderr
+  (kept the stdout JSON too, for interactive/programmatic callers).
+- Matcher-value syntax confirmed NOT to reliably support combining values in one string for
+  session-source matchers (pipe-syntax is only documented for tool-name matchers elsewhere)
+  — so SessionStart registers two separate block entries (`startup`, `resume`), not one
+  combined matcher string, avoiding undocumented syntax.
+- **Design finding that changed the PreCompact plan:** PreCompact's block/exit-2 path gives
+  **no stderr feedback to Claude** (unlike Stop) — blocking compaction to force a journal
+  write would strand the agent with no explanation of why it's stuck. So PreCompact does
+  **not** block; it runs a non-blocking, always-`|| true` `dream --mode light --apply`
+  (best-effort local consolidation checkpoint) instead of attempting journal enforcement a
+  second way. SessionStart's `compact` matcher was deliberately left unused (only
+  `startup`/`resume`) so a mid-session compaction doesn't reset the guard-journal window.
 
-Follow `installer.py`'s existing safe-write pattern exactly: backup before write,
-non-destructive merge (never clobber existing hooks), `ConfigParseError` on unparseable
-config, `--dry-run` prints the diff, `--uninstall` removes cleanly.
+**Step 2 — the writer** (matches the table below, all in `.claude/settings.json`):
 
-**Step 3 — prove it:** e2e test in the mold of `tests/test_hooks_e2e.py` (real settings
-file, real CLI invocations), plus a **real-session smoke test before release** — the
-field-test lesson stands: both critical bugs lived in layers the suite doesn't reach.
+| Hook | Matcher(s) | Command | Purpose |
+|---|---|---|---|
+| SessionStart | `startup`, `resume` | `ai-memory session-start --hook-format claude-code` | marks session start + injects a short `additionalContext` reminder |
+| Stop | `""` (always) | `ai-memory guard-journal` | exits 2 + stderr reason — blocks an unjournaled session end |
+| PreCompact | `manual`, `auto` | `ai-memory dream --mode light --apply \|\| true` | non-blocking consolidation checkpoint before context is compacted |
+
+Every command carries a trailing `# memory-fabric-managed` shell-comment marker (JSON has
+no comment syntax, so this is the update/remove identification tag — same spirit as
+`installer.py`'s TOML sentinel markers). Merge logic updates/removes only entries carrying
+that marker; any hook a user added by hand to the same event+matcher is left untouched.
+`--dry-run` prints a unified diff without writing; `--uninstall` removes managed entries
+and drops now-empty matcher blocks/events, never touching unrelated settings.json content;
+malformed existing JSON is backed up and the write aborted (mirrors `installer.py`'s
+`_install_json`/`ConfigParseError` pattern exactly, reusing its `_backup_file`/
+`_unified_diff` helpers directly rather than duplicating them). CLI: `ai-memory install
+--client claude-code --with-hooks` (also `--dry-run`/`--uninstall`); `--client all
+--with-hooks` is explicitly out of scope for now (warns plainly) since hooks are still a
+single-client feature.
+
+**Step 3 — prove it:** 10 tests in `tests/test_client_hooks.py` — fresh install produces
+all three events with the right matchers, byte-stable no-op re-install, preserves unrelated
+settings.json content and a user's own hand-added Stop hook, dry-run writes nothing,
+uninstall removes only managed entries (and correctly drops SessionStart/PreCompact
+entirely while leaving Stop with the user's surviving entry), clean no-op uninstall,
+malformed-JSON backup-and-abort, unsupported-client plain reporting, and two CLI-level
+tests. Plus a real end-to-end smoke test: ran the actual generated `Stop` and `PreCompact`
+command strings through `sh -c` (not just calling the Python functions directly) —
+confirmed the Stop command exits 2 with the reason on stderr and the PreCompact command
+runs a real light dream and exits 0.
 
 **Exit:** fresh install on a real Claude Code session → session start is marked, ending
-without a journal is blocked with the guard's reason, journal write unblocks, existing
-user hooks in settings.json are untouched.
+without a journal is blocked with the guard's reason **on stderr**, journal write unblocks,
+existing user hooks in settings.json are untouched. Met.
 
 ---
 
