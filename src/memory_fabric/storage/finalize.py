@@ -26,6 +26,7 @@ from memory_fabric.storage._shared import (
     _iter_markdown_files,
     _jaccard_similar,
     _path_to_store_path,
+    _should_skip_diff_path,
     _validate_store_path,
 )
 from memory_fabric.storage.consolidation import (
@@ -86,42 +87,6 @@ def _parse_llm_json_response(llm_response: str) -> dict[str, Any]:
     if resp_data is None:
         resp_data = json.loads(cleaned_resp)
     return resp_data
-
-
-# Files whose diffs are noise, not knowledge: dependency lockfiles, vendored
-# trees, build output, minified assets. Skipped so real signal survives the budget.
-_DIFF_SKIP_BASENAMES = frozenset(
-    {
-        "package-lock.json",
-        "yarn.lock",
-        "pnpm-lock.yaml",
-        "poetry.lock",
-        "Cargo.lock",
-        "go.sum",
-        "composer.lock",
-        "Gemfile.lock",
-        "uv.lock",
-    }
-)
-_DIFF_SKIP_SUFFIXES = (".min.js", ".min.css", ".map", ".snap", ".lock")
-_DIFF_SKIP_DIRS = (
-    "node_modules/",
-    "dist/",
-    "build/",
-    "vendor/",
-    ".venv/",
-    "__pycache__/",
-)
-
-
-def _should_skip_diff_path(path: str) -> bool:
-    p = path.replace("\\", "/")
-    base = p.rsplit("/", 1)[-1]
-    if base in _DIFF_SKIP_BASENAMES:
-        return True
-    if p.endswith(_DIFF_SKIP_SUFFIXES):
-        return True
-    return any(seg in p for seg in _DIFF_SKIP_DIRS)
 
 
 def _summarize_diff(diff_text: str, per_file: int = 1500, total_cap: int = 6000) -> str:

@@ -4,7 +4,7 @@
 > one command in VS Code, Claude (Code + Desktop), Codex, Antigravity, Cursor, Windsurf,
 > Gemini CLI, Cline, and anything MCP-compatible.
 
-Last updated: 2026-07-14 · Current version: 0.8.1 ([live on PyPI](https://pypi.org/project/memory-fabric/)) · Tests: 288 passing (+73 subtests, +1 skipped on Windows by design) · Coverage: 85.9% (gate: 82%) · Lint: ruff (E4,E7,E9,F,I,B,UP,SIM,RUF,BLE001,S110,S112) + mypy clean · No `src/` file >25 KB except 4 tracked borderline files · Phase 0 exit criteria met · Phase 2.2 migration tooling shipped
+Last updated: 2026-07-16 · Current version: 0.8.1 ([live on PyPI](https://pypi.org/project/memory-fabric/)) · Tests: 334 passing (+93 subtests, +1 skipped on Windows by design) · Coverage: 85.9% (gate: 82%) · Lint: ruff (E4,E7,E9,F,I,B,UP,SIM,RUF,BLE001,S110,S112) + mypy clean · No `src/` file >25 KB except 4 tracked borderline files · Phase 0 exit criteria met · Phase 2.2 migration tooling shipped · Phase 3 capture reliability (filter, roll-up, multi-client hooks) shipped
 
 ---
 
@@ -560,38 +560,65 @@ before `dream`, so every commit is recorded with no agent cooperation.
 
 ### 5.2 Enforcement via client hooks (instructions become mechanisms)
 
-Primitives shipped 2026-07-07; the client-side settings.json writer is the remaining work.
+**Implemented 2026-07-16** (`client_hooks.py`, new; see `ROADMAP_CAPTURE_HOOKS.md` for the
+full design record). Primitives shipped 2026-07-07; the client-side hook writer landed for
+three clients, each with its schema verified independently rather than assumed.
 
 - [x] **Session marker plumbing.** `write_session_journal` touches
       `.ai-memory/private/last_journal_at`; `ai-memory session-start` writes
       `session_started_at`. Pure Python, no transcript parsing.
 - [x] **Stop-hook primitive.** `ai-memory guard-journal` exits 2 (blocking) with a reason
       when no journal was written since session start, exit 0 otherwise; fails open when
-      there is no session marker. This is the command a Stop hook calls.
-- [ ] **Claude Code settings.json writer.** `ai-memory install --client claude-code
-      --with-hooks` wires SessionStart (inject context), Stop (`guard-journal`), and
-      PreCompact (journal checkpoint) into the client's settings. **Needs the live
-      Claude Code hook schema verified against current docs + a real-session smoke test
-      before shipping** — deferred rather than guessed.
-- [ ] **SessionStart context injection** and **PreCompact checkpoint** wiring (depend on
-      the settings.json writer above).
-- [ ] **Client capability survey.** Cursor hooks (beta), Codex `notify`, Gemini CLI:
-      per-client enforcement matrix in the docs.
+      there is no session marker. This is the command a Stop hook calls. **Hardened
+      2026-07-16**: the reason is now also written to stderr, not just stdout — every
+      client verified (Claude Code, Gemini CLI, Codex) reads the exit-2 feedback from
+      stderr exclusively, so the original stdout-only version would have blocked silently.
+- [x] **Client-side hook writer**, generalized rather than Claude-Code-specific:
+      `ai-memory install --client <claude-code|gemini-cli|codex> --with-hooks` wires
+      SessionStart (mark + inject context), Stop (`guard-journal`), and a pre-compaction
+      checkpoint into each client's own hook config. `client_hooks.py`'s `HOOK_ADAPTERS`
+      registry holds one real adapter per client rather than a shared format engine, since
+      the schemas genuinely differ (confirmed, not assumed — Codex's turned out
+      structurally identical to Claude Code's matcher-block shape once verified straight
+      from its Rust source, since every doc URL 403'd; Gemini CLI's lifecycle hooks are
+      flat lists with no matcher at all, verified against its official docs). A client
+      absent from the registry reports `supported: false` plainly.
+- [x] **SessionStart context injection** and **pre-compaction checkpoint** wiring — done
+      as part of the writer above. PreCompact/PreCompress never blocks on any of the three
+      clients verified: each schema either gives no model-facing feedback on block
+      (Claude Code, Codex) or is documented advisory-only (Gemini CLI's PreCompress), so
+      the checkpoint is a non-blocking `dream --mode light --apply` rather than an attempt
+      to enforce journaling a second way through a channel that can't explain itself.
+- [x] **Client capability survey.** Six clients researched against current docs (primary
+      where fetchable, source code for Codex since its docs 403'd everywhere): **shipped**
+      for Claude Code, Gemini CLI, Codex CLI. **Held**: Cursor (hooks exist and Stop/
+      PreCompact look solid, but SessionStart context injection has an open upstream bug
+      per two forum threads — verify the fix lands before building), VS Code Copilot Hooks
+      (functionally solid, modeled on Claude Code's own schema, but explicitly labeled
+      Preview). **Not viable yet**: Windsurf (no session-lifecycle or Stop-equivalent hook
+      exists at all — only per-action pre/post hooks), Cline (`TaskComplete`'s `cancel`
+      aborts the task rather than requesting a correction, with an open bug report of
+      getting stuck, and no compaction-signal hook). Full per-client detail in
+      `ROADMAP_CAPTURE_HOOKS.md` §2.1.
 
 ### 5.3 Prove capture actually happens
 
 - [x] Local capture stats in `ai-memory status` (`capture` block): last journal, commit
       captures, episodic files, memories total + last-7-days. Local only — the
       no-telemetry guarantee stands.
-- [ ] Capture-rate metric in the coding-memory benchmark (Phase 5): % of scripted
-      sessions whose knowledge survives into the next session, instructions-only vs
-      hooks-enabled.
+- [x] **Capture-rate metric.** `scripts/capture_rate_benchmark.py` (2026-07-16): 20
+      scripted sessions per mode, a fully non-cooperative simulated agent that never
+      voluntarily journals. Measured: **0% of sessions journaled with no enforcement,
+      100% with the Stop hook wired in**; commit capture holds at 100% in both modes,
+      since it runs off the git post-commit hook, not the client-side session hooks. This
+      is a mechanism proof (the enforcement primitive can't be silently skipped), not a
+      statistical study of real agent compliance — that remains Phase 5's separate, larger
+      benchmark work. Regression-guarded in `tests/test_capture_rate_benchmark.py`.
 
 Exit criteria: with hooks enabled, a fully non-compliant agent still produces (a) an
 episodic record per commit and (b) a session journal per session, and `ai-memory status`
-shows both. **(a) + the status surface are implemented and tested on `main`; (b) lands
-with the settings.json writer (next release).** Passive capture (5.1) has no dependency
-on the v1.0 gate.
+shows both. **Met and measured 2026-07-16** — see the capture-rate metric above. Passive
+capture (5.1) has no dependency on the v1.0 gate.
 
 ## 6. Phase 3.5 — Git-native trust (the moat only a file-first, git-native design can dig)
 
@@ -730,7 +757,7 @@ Claims without numbers don't win "best in the world."
 | GitHub stars | 500 | 5k |
 | Benchmark | published LongMemEval score | top-3 on own coding-memory benchmark, cited by others |
 | Clients verified in CI | 4 | 9+ |
-| Capture rate (hooks on) | episodic record per commit, no agent cooperation | 100% of benchmark sessions journaled with a non-compliant agent |
+| Capture rate (hooks on) | **Met 2026-07-16**: episodic record per commit (100%), no agent cooperation | 100% of benchmark sessions journaled with a non-compliant agent — **measured at 100% in `scripts/capture_rate_benchmark.py`; real-world multi-client rollout is the 12-month target** |
 
 ## 11. Suggested execution order
 

@@ -46,6 +46,31 @@ def local_server_binary() -> Path | None:
     return sibling if sibling.exists() else None
 
 
+def resolve_cli_binary() -> tuple[str, str | None]:
+    """Resolve the ``ai-memory`` CLI that a git hook or a client lifecycle hook
+    (Claude Code SessionStart/Stop/PreCompact, etc.) should invoke.
+
+    Hooks run in whatever shell git or the client spawns, where the project venv
+    is usually NOT activated — a bare ``ai-memory`` dies silently (or runs an
+    unrelated global copy). Prefer the binary sitting next to the interpreter
+    that is executing install/init, i.e. the installation the user actually
+    asked to hook up. Shared by ``storage/lifecycle.py`` (git hooks) and
+    ``client_hooks.py`` (client-side lifecycle hooks) so both resolve the same
+    binary the same way.
+    """
+    exe_name = "ai-memory.exe" if os.name == "nt" else "ai-memory"
+    sibling = Path(sys.executable).with_name(exe_name)
+    if sibling.exists():
+        return sibling.as_posix(), None
+    on_path = shutil.which("ai-memory")
+    if on_path:
+        return Path(on_path).as_posix(), None
+    return "ai-memory", (
+        "Could not resolve an absolute path for the ai-memory CLI; hooks will rely on "
+        "PATH lookup and may be skipped in shells where memory-fabric is not available."
+    )
+
+
 def build_entry(use_uvx: bool, server_command: str | None = None) -> dict[str, Any]:
     """Server entry for client configs, version-aligned with the running CLI.
 

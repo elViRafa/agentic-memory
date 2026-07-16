@@ -1,8 +1,9 @@
 """Low-level primitives shared by every storage submodule.
 
 Path/section resolution, frontmatter schema migration, markdown file discovery,
-token estimation, and near-duplicate detection. No submodule-specific logic lives
-here — if only one submodule needs it, it belongs in that submodule instead.
+token estimation, near-duplicate detection, and noise-path detection. No
+submodule-specific logic lives here — if only one submodule needs it, it belongs
+in that submodule instead.
 """
 
 from __future__ import annotations
@@ -33,6 +34,42 @@ CURRENT_SCHEMA_VERSION = "1.3"
 # Lines with overlap ratio >= this threshold are treated as duplicates.
 # Set via MEMORY_FABRIC_DEDUP_THRESHOLD env var (float 0.0-1.0, default 0.85).
 _DEDUP_THRESHOLD_DEFAULT = 0.85
+
+# Files whose diffs are noise, not knowledge: dependency lockfiles, vendored
+# trees, build output, minified assets. Shared by finalize's diff budget and
+# capture's commit filter so the two notions of "noise" cannot drift apart.
+_DIFF_SKIP_BASENAMES = frozenset(
+    {
+        "package-lock.json",
+        "yarn.lock",
+        "pnpm-lock.yaml",
+        "poetry.lock",
+        "Cargo.lock",
+        "go.sum",
+        "composer.lock",
+        "Gemfile.lock",
+        "uv.lock",
+    }
+)
+_DIFF_SKIP_SUFFIXES = (".min.js", ".min.css", ".map", ".snap", ".lock")
+_DIFF_SKIP_DIRS = (
+    "node_modules/",
+    "dist/",
+    "build/",
+    "vendor/",
+    ".venv/",
+    "__pycache__/",
+)
+
+
+def _should_skip_diff_path(path: str) -> bool:
+    p = path.replace("\\", "/")
+    base = p.rsplit("/", 1)[-1]
+    if base in _DIFF_SKIP_BASENAMES:
+        return True
+    if p.endswith(_DIFF_SKIP_SUFFIXES):
+        return True
+    return any(seg in p for seg in _DIFF_SKIP_DIRS)
 
 
 def _validate_store_path(store_path: str) -> list[str]:

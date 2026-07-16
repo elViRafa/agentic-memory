@@ -22,6 +22,7 @@ from memory_fabric.storage._shared import (
 from memory_fabric.storage.consolidation import (
     _consolidate_candidate_memory,
     _create_candidate_store,
+    _roll_up_episodic_commits,
 )
 from memory_fabric.storage.finalize import (
     _get_git_diff,
@@ -91,6 +92,13 @@ async def dream(
     candidate_root = _create_candidate_store(memory_dir, snapshot)
 
     warnings: list[str] = []
+
+    # Deep dream only: fold aged daily episodic/commits/ files into weekly
+    # summaries before anything else touches the candidate, so the roll-up
+    # itself is covered by the same maps/consolidation/apply pass.
+    if mode == "deep":
+        rollup = _roll_up_episodic_commits(candidate_root)
+        warnings.extend(rollup["warnings"])
 
     # Store-first model: fold hand edits on generated maps into the store and
     # rebuild the maps BEFORE assembling the payload, so folded content is
@@ -233,6 +241,15 @@ def prepare_dream_payload(cwd: str, mode: str = "light") -> dict[str, Any]:
     snapshot = create_snapshot(cwd)
     candidate_root = _create_candidate_store(memory_dir, snapshot)
 
+    payload_warnings: list[str] = []
+
+    # Deep dream only: fold aged daily episodic/commits/ files into weekly
+    # summaries before anything else touches the candidate — see dream()'s
+    # matching call for the rationale.
+    if mode == "deep":
+        rollup = _roll_up_episodic_commits(candidate_root)
+        payload_warnings.extend(rollup["warnings"])
+
     # Store-first model: fold hand edits on generated maps into the store and
     # rebuild the maps before assembling the payload, so folded content is
     # consolidated in this very Dream instead of one cycle later.
@@ -248,7 +265,6 @@ def prepare_dream_payload(cwd: str, mode: str = "light") -> dict[str, Any]:
 
     # Read files into payload (generated maps are derived views — the LLM must
     # not rewrite them, and they must not perturb the consolidation hash)
-    payload_warnings: list[str] = []
     sections_data = {}
     for path in _iter_markdown_files(candidate_root):
         if path.name == "index.md" or _is_ignored_local_memory_path(candidate_root, path):

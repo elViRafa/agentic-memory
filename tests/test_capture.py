@@ -3,6 +3,8 @@ enforcement primitives, capture stats, extraction prompt, and the diff budget.""
 
 from __future__ import annotations
 
+import contextlib
+import io
 import shutil
 import subprocess
 import tempfile
@@ -20,7 +22,7 @@ from memory_fabric.storage import (
     write_memory_store,
     write_session_journal,
 )
-from memory_fabric.storage.capture import mark_journal_written
+from memory_fabric.storage.capture import _capture_skip_reason, mark_journal_written
 from memory_fabric.storage.finalize import (
     _should_skip_diff_path,
     _summarize_diff,
@@ -106,6 +108,141 @@ class PassiveCaptureTests(unittest.TestCase):
             self.assertTrue(any("Not a git repository" in w for w in result["warnings"]))
 
 
+class CaptureFilterRuleTests(unittest.TestCase):
+    """One case per `_capture_skip_reason` rule — pure unit tests, no git needed."""
+
+    def test_merge_by_parent_count(self) -> None:
+        reason = _capture_skip_reason("anything at all", "Dev", ["src/app.py"], parent_count=2)
+        self.assertEqual(reason, "merge commit")
+
+    def test_merge_by_subject_prefix(self) -> None:
+        for subject in (
+            "Merge branch 'feature' into main",
+            "Merge pull request #42 from org/feature",
+            "Merge remote-tracking branch 'origin/main'",
+        ):
+            with self.subTest(subject=subject):
+                reason = _capture_skip_reason(subject, "Dev", ["src/app.py"], parent_count=1)
+                self.assertEqual(reason, "merge commit")
+
+    def test_bot_author(self) -> None:
+        for author in ("dependabot[bot]", "renovate[bot]", "github-actions[bot]"):
+            with self.subTest(author=author):
+                reason = _capture_skip_reason(
+                    "feat: bump requests to 2.32", author, ["src/app.py"], parent_count=1
+                )
+                self.assertEqual(reason, f"bot author ({author})")
+
+    def test_skippable_conventional_commit_prefixes(self) -> None:
+        for subject in (
+            "chore: tidy imports",
+            "chore(deps): weekly update",
+            "style: reformat with ruff",
+            "ci: cache uv downloads",
+            "ci(release)!: new tag scheme",
+            "build(deps): bump requests from 2.31 to 2.32",
+            "build(deps-dev): bump pytest",
+        ):
+            with self.subTest(subject=subject):
+                reason = _capture_skip_reason(subject, "Dev", ["src/app.py"], parent_count=1)
+                self.assertEqual(reason, "skippable conventional-commit prefix")
+
+    def test_lockfile_only_commit(self) -> None:
+        reason = _capture_skip_reason(
+            "update deps", "Dev", ["uv.lock", "frontend/package-lock.json"], parent_count=1
+        )
+        self.assertEqual(reason, "only lockfiles/generated files changed")
+
+    def test_relevant_commits_are_not_skipped(self) -> None:
+        for subject, files in (
+            ("feat: add auth login module", ["src/auth.py"]),
+            ("fix: guard against empty payload", ["src/server.py", "uv.lock"]),
+            ("build: switch to hatchling", ["pyproject.toml"]),
+            ("refactor!: split storage core", ["src/storage.py"]),
+            ("Merged the two auth paths into one", ["src/auth.py"]),
+            ("update deps", []),
+        ):
+            with self.subTest(subject=subject):
+                self.assertIsNone(_capture_skip_reason(subject, "Dev", files, parent_count=1))
+
+
+@unittest.skipUnless(_GIT, "git is required for passive-capture tests")
+class CaptureFilterIntegrationTests(unittest.TestCase):
+    def test_real_merge_commit_is_skipped_audibly(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            _init_repo(temp)
+            initialize_memory_fabric(temp)
+            _commit(temp, "base.py", "base\n", "feat: base work")
+            _run_git(temp, "checkout", "-b", "feature")
+            _commit(temp, "feature.py", "feature\n", "feat: feature work")
+            _run_git(temp, "checkout", "-")
+            _commit(temp, "main.py", "main\n", "feat: mainline work")
+            _run_git(temp, "merge", "--no-ff", "-m", "knowledge-rich merge message", "feature")
+
+            result = capture_commit(temp)
+
+            self.assertFalse(result["captured"])
+            self.assertEqual(result["skipped_reason"], "merge commit")
+            self.assertTrue(result["commit"])
+            self.assertTrue(any("capture filter" in w for w in result["warnings"]))
+            self.assertEqual(capture_stats(temp)["commits_skipped"], 1)
+            # No episodic record was written for the merge itself.
+            store_root = Path(temp) / ".ai-memory" / "memory-store" / "episodic" / "commits"
+            self.assertFalse(list(store_root.glob("*.md")) if store_root.exists() else [])
+
+    def test_bot_commit_is_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            _init_repo(temp)
+            initialize_memory_fabric(temp)
+            (Path(temp) / "deps.txt").write_text("requests==2.32\n", encoding="utf-8")
+            _run_git(temp, "add", "deps.txt")
+            _run_git(
+                temp,
+                "-c",
+                "user.name=dependabot[bot]",
+                "-c",
+                "user.email=bot@example.com",
+                "commit",
+                "-m",
+                "feat: bump requests",
+            )
+
+            result = capture_commit(temp)
+
+            self.assertFalse(result["captured"])
+            self.assertIn("bot author", result["skipped_reason"])
+
+    def test_no_filter_captures_everything_and_stays_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            _init_repo(temp)
+            initialize_memory_fabric(temp)
+            _commit(temp, "x.py", "x\n", "chore: tidy imports")
+
+            filtered = capture_commit(temp)
+            self.assertFalse(filtered["captured"])
+            self.assertEqual(filtered["skipped_reason"], "skippable conventional-commit prefix")
+
+            unfiltered = capture_commit(temp, apply_filter=False)
+            self.assertTrue(unfiltered["captured"])
+            self.assertIsNone(unfiltered["skipped_reason"])
+
+            # Idempotency is unchanged: a second unfiltered run is a dup, not a rewrite.
+            again = capture_commit(temp, apply_filter=False)
+            self.assertFalse(again["captured"])
+            self.assertTrue(any("already captured" in w for w in again["warnings"]))
+
+    def test_skip_counter_accumulates(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            _init_repo(temp)
+            initialize_memory_fabric(temp)
+            _commit(temp, "a.py", "a\n", "chore: first noise")
+            capture_commit(temp)
+            _commit(temp, "b.py", "b\n", "ci: second noise")
+            capture_commit(temp)
+
+            self.assertEqual(capture_stats(temp)["commits_skipped"], 2)
+
+
 class SessionGuardTests(unittest.TestCase):
     def test_guard_fails_open_without_session_marker(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -143,6 +280,44 @@ class SessionGuardTests(unittest.TestCase):
             self.assertTrue((Path(temp) / ".ai-memory" / "private" / "last_journal_at").exists())
 
 
+class GuardJournalCliTests(unittest.TestCase):
+    """A Claude Code Stop hook reads the block reason from stderr on a plain
+    exit 2, not stdout (docs: https://code.claude.com/docs/en/hooks-guide.md
+    - "Exit 2: ... Write a reason to stderr, and Claude receives it as
+    feedback"). `ai-memory guard-journal` must write the reason there, not
+    just in the JSON result it prints to stdout.
+    """
+
+    def test_blocked_guard_writes_reason_to_stderr_and_exits_2(self) -> None:
+        from memory_fabric.cli import main
+
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            mark_session_start(temp)
+
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                exit_code = main(["--cwd", temp, "guard-journal"])
+
+            self.assertEqual(exit_code, 2)
+            self.assertIn("write_session_journal_tool", stderr.getvalue())
+
+    def test_unblocked_guard_writes_nothing_to_stderr_and_exits_0(self) -> None:
+        from memory_fabric.cli import main
+
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            mark_session_start(temp)
+            write_session_journal(temp, summary="Did work.")
+
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                exit_code = main(["--cwd", temp, "guard-journal"])
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(stderr.getvalue(), "")
+
+
 class CaptureStatsTests(unittest.TestCase):
     def test_stats_reflect_writes(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -163,6 +338,7 @@ class CaptureStatsTests(unittest.TestCase):
             self.assertIn("capture", result)
             self.assertIn("memories_total", result["capture"])
             self.assertIn("commit_captures", result["capture"])
+            self.assertIn("commits_skipped", result["capture"])
 
 
 class DiffBudgetTests(unittest.TestCase):
