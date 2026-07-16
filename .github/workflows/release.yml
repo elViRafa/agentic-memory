@@ -4,10 +4,59 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch: {}
 
 jobs:
+  tag:
+    name: Resolve / create release tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Resolve version from package
+        id: resolve
+        run: |
+          VERSION=$(python -c "import sys; sys.path.insert(0, 'src'); from memory_fabric.version import __version__; print(__version__)")
+          if [ "${{ github.event_name }}" = "push" ]; then
+            TAG_VERSION="${GITHUB_REF_NAME#v}"
+            if [ "$TAG_VERSION" != "$VERSION" ]; then
+              echo "::error::Tag ${GITHUB_REF_NAME} does not match package version $VERSION"
+              exit 1
+            fi
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+      # A manual run has no tag yet — the version comes straight from version.py (the
+      # project's single source of truth, per test_version_truth.py) and this step creates
+      # and pushes the matching tag using the job's own contents:write token, since the
+      # session that dispatches this workflow may not have direct git-push access itself.
+      - name: Create and push tag (manual dispatch only)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          TAG="${{ steps.resolve.outputs.tag }}"
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "::error::Tag $TAG already exists on origin — refusing to move it. Bump the version first."
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+
   test:
     name: Test before release
+    needs: tag
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -30,7 +79,7 @@ jobs:
 
   build:
     name: Build distribution
-    needs: test
+    needs: [test, tag]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -48,11 +97,10 @@ jobs:
 
       - name: Check version matches tag
         run: |
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
           PKG_VERSION=$(python -c "import sys; sys.path.insert(0, 'src'); from memory_fabric.version import __version__; print(__version__)")
-          echo "Tag version: $TAG_VERSION"
+          echo "Tag version: ${{ needs.tag.outputs.version }}"
           echo "Package version: $PKG_VERSION"
-          test "$TAG_VERSION" = "$PKG_VERSION"
+          test "${{ needs.tag.outputs.version }}" = "$PKG_VERSION"
 
       - name: Upload distributions
         uses: actions/upload-artifact@v4
@@ -79,7 +127,7 @@ jobs:
 
   build-mcpb:
     name: Build MCPB bundle
-    needs: test
+    needs: [test, tag]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -91,12 +139,12 @@ jobs:
 
       - name: Sync manifest version to release tag
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${{ needs.tag.outputs.version }}"
           jq --arg v "$VERSION" '.version = $v' mcpb/manifest.json > mcpb/manifest.tmp
           mv mcpb/manifest.tmp mcpb/manifest.json
 
       - name: Pack .mcpb bundle
-        run: npx -y @anthropic-ai/mcpb pack mcpb/ "memory-fabric-${GITHUB_REF_NAME#v}.mcpb"
+        run: npx -y @anthropic-ai/mcpb pack mcpb/ "memory-fabric-${{ needs.tag.outputs.version }}.mcpb"
 
       - name: Upload .mcpb artifact
         uses: actions/upload-artifact@v4
@@ -106,7 +154,7 @@ jobs:
 
   registry-publish:
     name: Publish to MCP Registry
-    needs: publish
+    needs: [publish, tag]
     runs-on: ubuntu-latest
     permissions:
       id-token: write  # required for MCP Registry GitHub OIDC auth — no token stored.
@@ -120,7 +168,7 @@ jobs:
 
       - name: Sync server.json version to release tag
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${{ needs.tag.outputs.version }}"
           jq --arg v "$VERSION" '.version = $v | .packages[0].version = $v' server.json > server.json.tmp
           mv server.json.tmp server.json
 
@@ -132,7 +180,7 @@ jobs:
 
   github-release:
     name: Create GitHub Release
-    needs: [publish, build-mcpb]
+    needs: [publish, build-mcpb, tag]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -154,4 +202,4 @@ jobs:
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" dist/* --generate-notes
+        run: gh release create "${{ needs.tag.outputs.tag }}" dist/* --generate-notes
