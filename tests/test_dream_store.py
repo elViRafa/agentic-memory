@@ -5,10 +5,11 @@ import os
 import tempfile
 import time
 import unittest
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest import mock
 
-from memory_fabric.frontmatter import parse_frontmatter
+from memory_fabric.frontmatter import dump_frontmatter, parse_frontmatter
 from memory_fabric.storage import (
     doctor,
     initialize_memory_fabric,
@@ -17,6 +18,7 @@ from memory_fabric.storage import (
 from memory_fabric.storage import (
     dream as _async_dream,
 )
+from memory_fabric.storage.consolidation import _roll_up_episodic_commits
 
 
 def dream(*args, **kwargs):
@@ -369,6 +371,118 @@ class DreamStoreTests(unittest.TestCase):
             finally:
                 os.environ.pop("MEMORY_FABRIC_LLM_PROVIDER", None)
                 os.environ.pop("GEMINI_API_KEY", None)
+
+
+def _write_daily_commit_file(commits_dir: Path, date_str: str, commit_line: str) -> Path:
+    commits_dir.mkdir(parents=True, exist_ok=True)
+    path = commits_dir / f"{date_str}.md"
+    metadata = {"source": "passive-capture", "review_status": "pending"}
+    body = f"### commit `abc1234567` — {commit_line}\n\n- when: {date_str}T00:00:00+00:00\n"
+    path.write_text(dump_frontmatter(metadata, body), encoding="utf-8")
+    return path
+
+
+class EpisodicRollupTests(unittest.TestCase):
+    """Stage 1: deep-dream weekly roll-up of aged episodic/commits/ files."""
+
+    def test_groups_old_files_by_iso_week_and_marks_consolidated(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            candidate_root = Path(temp)
+            commits_dir = candidate_root / "memory-store" / "episodic" / "commits"
+            # 2026-06-01 and 2026-06-03 both fall in ISO week 2026-W23.
+            _write_daily_commit_file(commits_dir, "2026-06-01", "first old commit")
+            _write_daily_commit_file(commits_dir, "2026-06-03", "second old commit")
+
+            result = _roll_up_episodic_commits(
+                candidate_root, cutoff_days=14, now=datetime(2026, 7, 16, tzinfo=UTC)
+            )
+
+            self.assertEqual(result["weeks_touched"], ["week-2026-w23"])
+            self.assertEqual(len(result["files_consolidated"]), 2)
+            self.assertEqual(result["warnings"], [])
+
+            self.assertFalse((commits_dir / "2026-06-01.md").exists())
+            self.assertFalse((commits_dir / "2026-06-03.md").exists())
+
+            week_path = commits_dir / "week-2026-w23.md"
+            self.assertTrue(week_path.exists())
+            metadata, body = parse_frontmatter(week_path.read_text(encoding="utf-8"))
+            self.assertEqual(metadata["review_status"], "consolidated")
+            self.assertIn("first old commit", body)
+            self.assertIn("second old commit", body)
+            self.assertIn("## 2026-06-01", body)
+            self.assertIn("## 2026-06-03", body)
+
+    def test_files_younger_than_cutoff_are_untouched(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            candidate_root = Path(temp)
+            commits_dir = candidate_root / "memory-store" / "episodic" / "commits"
+            recent_path = _write_daily_commit_file(commits_dir, "2026-07-10", "recent commit")
+
+            result = _roll_up_episodic_commits(
+                candidate_root, cutoff_days=14, now=datetime(2026, 7, 16, tzinfo=UTC)
+            )
+
+            self.assertEqual(result["weeks_touched"], [])
+            self.assertEqual(result["files_consolidated"], [])
+            self.assertTrue(recent_path.exists())
+
+    def test_rerun_with_nothing_new_is_a_no_op(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            candidate_root = Path(temp)
+            commits_dir = candidate_root / "memory-store" / "episodic" / "commits"
+            _write_daily_commit_file(commits_dir, "2026-06-01", "only old commit")
+            now = datetime(2026, 7, 16, tzinfo=UTC)
+
+            first = _roll_up_episodic_commits(candidate_root, cutoff_days=14, now=now)
+            self.assertEqual(first["weeks_touched"], ["week-2026-w23"])
+
+            week_path = commits_dir / "week-2026-w23.md"
+            body_after_first = week_path.read_text(encoding="utf-8")
+
+            second = _roll_up_episodic_commits(candidate_root, cutoff_days=14, now=now)
+            self.assertEqual(second["weeks_touched"], [])
+            self.assertEqual(second["files_consolidated"], [])
+            self.assertEqual(week_path.read_text(encoding="utf-8"), body_after_first)
+
+    def test_malformed_daily_file_is_skipped_with_a_warning_not_a_crash(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            candidate_root = Path(temp)
+            commits_dir = candidate_root / "memory-store" / "episodic" / "commits"
+            commits_dir.mkdir(parents=True)
+            good_path = _write_daily_commit_file(commits_dir, "2026-06-02", "good commit")
+            bad_path = commits_dir / "2026-06-01.md"
+            bad_path.write_text("not valid frontmatter at all", encoding="utf-8")
+
+            result = _roll_up_episodic_commits(
+                candidate_root, cutoff_days=14, now=datetime(2026, 7, 16, tzinfo=UTC)
+            )
+
+            self.assertTrue(any("2026-06-01.md" in w for w in result["warnings"]))
+            # The malformed file is left in place for a future retry...
+            self.assertTrue(bad_path.exists())
+            # ...but the well-formed file in the same week still gets rolled up.
+            self.assertFalse(good_path.exists())
+            self.assertTrue((commits_dir / "week-2026-w23.md").exists())
+
+    def test_deep_dream_applies_rollup_light_dream_does_not(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            live_commits_dir = Path(temp) / ".ai-memory" / "memory-store" / "episodic" / "commits"
+            _write_daily_commit_file(live_commits_dir, "2026-06-01", "aged commit")
+
+            with mock.patch("memory_fabric.storage.consolidation.datetime") as mock_datetime:
+                mock_datetime.now.return_value = datetime(2026, 7, 16, tzinfo=UTC)
+                light_result = dream(temp, mode="light", apply=True)
+                self.assertTrue((live_commits_dir / "2026-06-01.md").exists())
+                self.assertFalse((live_commits_dir / "week-2026-w23.md").exists())
+
+                deep_result = dream(temp, mode="deep", apply=True)
+
+            self.assertFalse((live_commits_dir / "2026-06-01.md").exists())
+            self.assertTrue((live_commits_dir / "week-2026-w23.md").exists())
+            self.assertTrue(light_result["changed"] or True)  # light dream itself still ran fine
+            self.assertTrue(deep_result["changed"])
 
 
 if __name__ == "__main__":

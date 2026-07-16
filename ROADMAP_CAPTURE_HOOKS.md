@@ -5,7 +5,7 @@
 > because enforcement amplifies volume — once hooks guarantee a record per commit and a
 > journal per session, every noise commit becomes permanent noise. Cut the noise first.
 
-Status: Stage 0 done (2026-07-16) · Created: 2026-07-16 · Total estimate: ~5–8 days of focused work
+Status: Stages 0–1 done (2026-07-16) · Created: 2026-07-16 · Total estimate: ~5–8 days of focused work
 
 **Global exit criterion:** a 100% non-cooperative agent still produces a clean episodic
 record per *relevant* commit plus a session journal per session, without inflating
@@ -54,9 +54,23 @@ produces no episodic entry, a visible `skipped_reason`, and a stats counter incr
 
 ---
 
-## Stage 1 — Episodic roll-up in Dreaming (~1–2 days)
+## Stage 1 — Episodic roll-up in Dreaming (~1–2 days) — ✅ done 2026-07-16
 
 **Files:** `src/memory_fabric/storage/consolidation.py`, `storage/dream.py`
+
+> Shipped as planned. `_roll_up_episodic_commits(candidate_root, cutoff_days=14, now=None)`
+> lives in `consolidation.py` next to the other candidate-store mechanics; `dream()` and
+> `prepare_dream_payload()` both call it right after `_create_candidate_store`, gated on
+> `mode == "deep"` — before `regenerate_maps`, so folded content is reflected in the same
+> run's maps/index/consolidated_memory.md. Weekly files are named
+> `episodic/commits/week-<iso-year>-w<ww>.md` (ISO calendar week) and daily files are
+> deleted only after their content is successfully appended, so a parse failure leaves the
+> daily file in place for a future retry instead of losing it. A snapshot of the whole
+> store already precedes candidate creation (existing infra), so no separate snapshot step
+> was needed. Verified end-to-end via the real CLI: `ai-memory capture` → `ai-memory dream
+> --mode deep --apply` correctly rolled a dated daily file into a weekly summary with
+> `review_status: consolidated` and removed the daily file; a `--mode light` dream in
+> between left it untouched, confirming the roll-up is deep-only.
 
 No filter catches everything; residual accumulation in `episodic/commits/` needs a real
 destination — today `review_status: pending` is intention with no consumer.

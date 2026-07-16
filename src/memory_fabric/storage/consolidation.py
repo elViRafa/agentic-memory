@@ -9,7 +9,9 @@ import difflib
 import re
 import shutil
 import tempfile
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from memory_fabric.contracts import DreamConsolidation, DreamRewriteTask
 from memory_fabric.frontmatter import FrontmatterError, dump_frontmatter, parse_frontmatter
@@ -288,6 +290,112 @@ def _create_candidate_store(memory_dir: Path, snapshot: str) -> Path:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(path, target)
     return candidate_root
+
+
+# Daily passive-capture files are named after the commit's author date
+# (capture.py), so a plain date pattern identifies them; anything else already
+# under episodic/commits/ (e.g. a prior week-*.md summary) is left alone.
+_EPISODIC_COMMITS_DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})\.md$")
+
+# Default age, in days, at which a daily commit-capture file becomes eligible
+# for weekly roll-up in deep Dreaming. No filter at capture time catches every
+# noise commit, and passive capture otherwise leaves an ever-growing pile of
+# `review_status: pending` daily files with no consumer — this gives that
+# residual accumulation a real destination.
+_EPISODIC_ROLLUP_CUTOFF_DAYS = 14
+
+
+def _roll_up_episodic_commits(
+    candidate_root: Path,
+    cutoff_days: int = _EPISODIC_ROLLUP_CUTOFF_DAYS,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Fold daily `episodic/commits/<date>.md` files older than `cutoff_days`
+    into weekly `episodic/commits/week-<iso-year>-w<ww>.md` summaries, marked
+    `review_status: consolidated`. Deep dream only (called from `dream()` /
+    `prepare_dream_payload()` before the candidate is otherwise processed).
+
+    Idempotent and lossless-by-default: a daily file's content is appended to
+    its week's summary and the daily file is deleted only once that append
+    succeeds; a re-run with nothing newly eligible finds no daily files left
+    and is a no-op. A snapshot of the live store already precedes this (the
+    caller creates it before building the candidate), so this never operates
+    on the only copy of the content.
+    """
+    commits_dir = candidate_root / "memory-store" / "episodic" / "commits"
+    warnings: list[str] = []
+    if not commits_dir.exists():
+        return {"weeks_touched": [], "files_consolidated": [], "warnings": warnings}
+
+    today = (now or datetime.now(UTC)).date()
+    cutoff = today - timedelta(days=cutoff_days)
+
+    groups: dict[tuple[int, int], list[tuple[date, Path]]] = {}
+    for path in sorted(commits_dir.glob("*.md")):
+        match = _EPISODIC_COMMITS_DATE_RE.match(path.name)
+        if not match:
+            continue
+        file_date = date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+        if file_date >= cutoff:
+            continue
+        iso_year, iso_week, _ = file_date.isocalendar()
+        groups.setdefault((iso_year, iso_week), []).append((file_date, path))
+
+    weeks_touched: set[str] = set()
+    files_consolidated: list[str] = []
+
+    for (iso_year, iso_week), entries in groups.items():
+        entries.sort(key=lambda entry: entry[0])
+        week_slug = f"week-{iso_year}-w{iso_week:02d}"
+        week_path = commits_dir / f"{week_slug}.md"
+
+        if week_path.exists():
+            try:
+                metadata, body = parse_frontmatter(week_path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, FrontmatterError) as exc:
+                warnings.append(
+                    f"Skipped rolling up into {week_path.relative_to(candidate_root)}: {exc}"
+                )
+                continue
+        else:
+            metadata = {
+                "store_path": f"episodic/commits/{week_slug}",
+                "title": f"Commit Log — Week {iso_year}-W{iso_week:02d}",
+                "summary": f"Consolidated commit history for ISO week {iso_year}-W{iso_week:02d}.",
+                "priority": "low",
+                "tags": ["episodic", "passive-capture", "consolidated"],
+                "source": "passive-capture",
+            }
+            body = ""
+
+        rolled_up_any = False
+        for file_date, day_path in entries:
+            try:
+                _day_meta, day_body = parse_frontmatter(day_path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, FrontmatterError) as exc:
+                warnings.append(
+                    f"Skipped {day_path.relative_to(candidate_root)} during episodic roll-up: {exc}"
+                )
+                continue
+            if day_body.strip():
+                body = body.rstrip() + f"\n\n## {file_date.isoformat()}\n\n{day_body.strip()}\n"
+            day_path.unlink()
+            files_consolidated.append(str(day_path.relative_to(candidate_root)))
+            rolled_up_any = True
+
+        if not rolled_up_any:
+            continue
+
+        metadata["review_status"] = "consolidated"
+        metadata["last_updated"] = now_iso()
+        week_path.write_text(dump_frontmatter(metadata, body.strip() + "\n"), encoding="utf-8")
+        weeks_touched.add(week_slug)
+
+    return {
+        "weeks_touched": sorted(weeks_touched),
+        "files_consolidated": sorted(files_consolidated),
+        "warnings": warnings,
+    }
 
 
 def _consolidate_candidate_memory(candidate_root: Path) -> DreamConsolidation:
