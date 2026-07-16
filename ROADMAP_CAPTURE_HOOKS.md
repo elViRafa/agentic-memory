@@ -5,7 +5,7 @@
 > because enforcement amplifies volume — once hooks guarantee a record per commit and a
 > journal per session, every noise commit becomes permanent noise. Cut the noise first.
 
-Status: Stages 0–2 done (2026-07-16) · Created: 2026-07-16 · Total estimate: ~5–8 days of focused work
+Status: Stages 0–2 done, 2 clients (claude-code + gemini-cli) (2026-07-16) · Created: 2026-07-16 · Total estimate: ~5–8 days of focused work
 
 **Global exit criterion:** a 100% non-cooperative agent still produces a clean episodic
 record per *relevant* commit plus a session journal per session, without inflating
@@ -174,6 +174,73 @@ runs a real light dream and exits 0.
 **Exit:** fresh install on a real Claude Code session → session start is marked, ending
 without a journal is blocked with the guard's reason **on stderr**, journal write unblocks,
 existing user hooks in settings.json are untouched. Met.
+
+### 2.1 Extending beyond Claude Code — client capability survey (2026-07-16)
+
+The generalized `HOOK_ADAPTERS` registry (above) exists precisely so this doesn't require
+touching the dispatcher — each entry below is "register one more adapter" or "not possible
+yet," never a rewrite. Researched against current official docs (primary-source-verified
+where fetchable; secondary-corroborated where a doc domain 403'd the fetch — flagged per
+client):
+
+| Client | Mechanism | SessionStart-equivalent | Stop-equivalent (real block) | Compaction signal | Verdict |
+|---|---|---|---|---|---|
+| **Gemini CLI** | Hooks (`SessionStart`/`AfterAgent`/`PreCompress`) | ✅ works | ✅ exit 2 + stderr, same contract as ours | ⚠️ advisory-only (matches our own PreCompact) | **Implemented** — see below. Primary docs verified directly. |
+| **Codex CLI** | Hooks framework (distinct from the older `notify`) | ✅ works | ✅ exit 2 + stderr, or `decision: block` | ✅ **can actually block** compaction (`continue: false`) — stronger than ours | Worth building next; docs 403'd on direct fetch, secondary-sourced only |
+| **Cursor** | Agent Hooks (`hooks.json`) | ⚠️ documented but **open upstream bug**: `additional_context` reportedly not reaching the agent (2 forum threads) | ✅ solid | ⚠️ advisory-only | Hold — verify the injection bug is fixed first |
+| **VS Code + Copilot** | Agent Hooks | ✅ works, modeled on Claude Code's schema | ✅ exit 2 + stderr (same channel we already learned about the hard way) | ❓ blocking semantics unconfirmed | Hold — feature is explicitly labeled Preview |
+| **Windsurf** | Cascade Hooks | ❌ no session-lifecycle hook exists at all — only per-action pre/post hooks | ❌ none | ❌ none | Not viable — missing mechanism entirely |
+| **Cline** | Hooks (`TaskStart`/`TaskComplete`) | ✅ works | ⚠️ `cancel` aborts the task rather than requesting a correction; open bug report of getting stuck | ❌ none | Not viable yet — wrong enforcement primitive, no compaction hook |
+
+**Implemented: gemini-cli adapter**, following straight from the highest-confidence
+finding. `client_hooks.py` gained `_install_gemini_cli_hooks` writing
+`.gemini/settings.json`, verified directly against `geminicli.com/docs/hooks/reference.md`
+and `.../hooks/index.md` (fetched as raw GitHub markdown, not training-data recall):
+
+- **Structurally different from Claude Code, confirmed before writing merge logic**:
+  lifecycle hooks (`SessionStart`/`SessionEnd`/`Notification`/`PreCompress`) are **not**
+  matcher-based on Gemini CLI — only tool hooks (`BeforeTool`/`AfterTool`) use `matcher` —
+  so each event's array holds hook-definition objects directly
+  (`{"type": "command", "command": ...}`), not the `{"matcher": ..., "hooks": [...]}` block
+  wrapper Claude Code uses. This needed its own merge/remove functions
+  (`_merge_gemini_cli_managed_hooks`/`_remove_gemini_cli_managed_hooks`), not a reuse of the
+  claude-code ones — confirming the "no shared format engine" call made when this registry
+  was first designed.
+- **`AfterAgent` (the Stop-analog) needed zero changes to `guard-journal`**: its docs state
+  exit code 2 "rejects the response and triggers an automatic retry turn using stderr as
+  the feedback prompt" — the identical plain-exit-2-plus-stderr contract already
+  implemented for Claude Code's Stop, reused unchanged.
+- **`PreCompress` is confirmed "Advisory Only... cannot block or modify the compression
+  process"** — the same constraint accepted for Claude Code's PreCompact, so it gets the
+  same non-blocking `dream --mode light --apply || true` checkpoint, unchanged in design.
+- One flagged-not-guessed gap: the docs don't show a complete `SessionStart` stdout
+  example, so whether `hookSpecificOutput.hookEventName` is required alongside
+  `additionalContext` is unverified — included anyway (harmless if the field is ignored,
+  and Gemini CLI's schema is explicitly modeled on Claude Code's), and noted in the code
+  comment rather than silently assumed.
+- Refactored `client_hooks.py` to extract the truly shared JSON safe-write scaffolding
+  (`_read_config_or_backup` / `_finalize_hook_write` — read+parse+backup-on-malformed-JSON,
+  and dry-run-diff+write-if-changed) so a third adapter doesn't triple this logic; the
+  merge/remove logic itself stays adapter-specific since the shapes genuinely differ.
+- **Tests**: 8 new cases mirroring the claude-code suite (fresh install produces the flat
+  no-matcher shape, byte-stable reinstall, preserves unrelated settings.json content and a
+  user's own `AfterAgent` hook, dry-run, uninstall removes only managed entries, clean no-op
+  uninstall, malformed-JSON backup-and-abort) plus a CLI-level `session-start --hook-format
+  gemini-cli` test. **One CLI-level test deliberately not written**: unlike claude-code
+  (`fmt="cli"`, mockable subprocess), gemini-cli's MCP-config install is `fmt="json"` at
+  **global** scope (`~/.gemini/...`) with no `home`/`env` override exposed through `main()`
+  — a `main()`-driven test would write to the real machine's actual global config, the same
+  class of hazard the claude-code test avoids by mocking `subprocess.run`. Covered instead
+  by direct `install_hooks()` tests (project-scoped, safe) plus the project-scoped
+  `session-start` CLI test.
+- **Real end-to-end smoke test**: ran the actual generated `AfterAgent` and `PreCompress`
+  command strings through `sh -c` — confirmed exit 2 + stderr reason and a real light dream
+  exiting 0, same verification standard as the claude-code adapter.
+
+**Not implemented this round**: Codex CLI (next candidate — high ceiling, PreCompact can
+truly block there, but the docs I could verify came from secondary sources only; do the
+same direct-fetch verification pass before writing its merge logic). Cursor/VS
+Code/Windsurf/Cline held per the table above.
 
 ---
 
