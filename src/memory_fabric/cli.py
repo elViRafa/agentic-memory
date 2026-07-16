@@ -109,7 +109,9 @@ def main(argv: list[str] | None = None) -> int:
             _print_result(status(cwd), args.json)
             return 0
         if args.command == "capture":
-            capture_result = capture_commit(cwd, commit=args.commit)
+            capture_result = capture_commit(
+                cwd, commit=args.commit, apply_filter=not args.no_filter
+            )
             _print_result(capture_result, args.json)
             return 0
         if args.command == "session-start":
@@ -455,6 +457,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     capture_parser.add_argument(
         "--commit", default="HEAD", help="Commit to capture (default: HEAD)"
+    )
+    capture_parser.add_argument(
+        "--no-filter",
+        action="store_true",
+        help="Also capture noise commits (merges, [bot] authors, chore:/style:/ci:/"
+        "build(deps) prefixes, lockfile-only changes) that are skipped by default",
     )
     subparsers.add_parser(
         "session-start", help="Mark session start (for client SessionStart hooks)"

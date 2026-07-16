@@ -19,6 +19,7 @@ All pure standard library. Everything degrades gracefully outside a git repo.
 from __future__ import annotations
 
 import contextlib
+import re
 import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -27,6 +28,7 @@ from typing import Any
 from memory_fabric.frontmatter import FrontmatterError, dump_frontmatter, parse_frontmatter
 from memory_fabric.paths import local_memory_dir, memory_store_dir
 from memory_fabric.security import redact_secrets
+from memory_fabric.storage._shared import _should_skip_diff_path
 from memory_fabric.storage.store import write_memory_store
 
 # Provenance store path for passively captured commits. Kept separate from
@@ -36,6 +38,36 @@ _COMMITS_PREFIX = "episodic/commits"
 
 _SESSION_START_MARKER = "session_started_at"
 _LAST_JOURNAL_MARKER = "last_journal_at"
+_SKIPPED_COUNT_MARKER = "capture_skipped_count"
+
+# Capture filter (opt out with `ai-memory capture --no-filter`): once client
+# hooks guarantee a record per commit, every noise commit becomes permanent
+# noise in episodic/, so merges, bot commits, skippable conventional-commit
+# prefixes, and lockfile-only commits are skipped — audibly, never silently.
+_MERGE_SUBJECT_PREFIXES = (
+    "Merge branch ",
+    "Merge pull request ",
+    "Merge remote-tracking branch ",
+)
+# chore:, style:, ci: with optional (scope) and optional `!`; plus dependabot's
+# build(deps): / build(deps-dev): — but not every build: commit, which can
+# carry real knowledge.
+_SKIPPABLE_SUBJECT_RE = re.compile(r"^(?:(?:chore|style|ci)(?:\([^)]*\))?!?:|build\(deps)", re.I)
+
+
+def _capture_skip_reason(
+    subject: str, author: str, files: list[str], parent_count: int
+) -> str | None:
+    """Return why this commit should not be captured, or None to capture it."""
+    if parent_count > 1 or subject.startswith(_MERGE_SUBJECT_PREFIXES):
+        return "merge commit"
+    if author.endswith("[bot]"):
+        return f"bot author ({author})"
+    if _SKIPPABLE_SUBJECT_RE.match(subject):
+        return "skippable conventional-commit prefix"
+    if files and all(_should_skip_diff_path(f) for f in files):
+        return "only lockfiles/generated files changed"
+    return None
 
 
 def _git(cwd: str, *args: str, timeout: float = 5.0) -> str | None:
@@ -73,19 +105,26 @@ def _now_iso() -> str:
 # ---------------------------------------------------------------------------
 
 
-def capture_commit(cwd: str, commit: str = "HEAD") -> dict[str, Any]:
+def capture_commit(cwd: str, commit: str = "HEAD", apply_filter: bool = True) -> dict[str, Any]:
     """Record a single commit as episodic memory. Idempotent per commit hash.
 
+    ``apply_filter=True`` (the default) skips noise commits — merges, ``[bot]``
+    authors, skippable conventional-commit prefixes, lockfile-only changes —
+    reporting ``skipped_reason`` and counting the skip in ``capture_stats``;
+    pass ``apply_filter=False`` (CLI ``--no-filter``) to capture everything.
+
     Returns a dict with ``captured`` (whether a new record was written),
-    ``commit`` (short hash), ``store_path``, ``redactions``, and ``warnings``.
-    Never raises for expected conditions (not a repo, no commits, dup) — those
-    are reported via ``warnings`` so the git hook can run ``|| true``.
+    ``commit`` (short hash), ``store_path``, ``skipped_reason``, ``redactions``,
+    and ``warnings``. Never raises for expected conditions (not a repo, no
+    commits, dup) — those are reported via ``warnings`` so the git hook can run
+    ``|| true``.
     """
     result: dict[str, Any] = {
         "changed": False,
         "captured": False,
         "commit": None,
         "store_path": None,
+        "skipped_reason": None,
         "redactions": 0,
         "warnings": [],
     }
@@ -100,11 +139,12 @@ def capture_commit(cwd: str, commit: str = "HEAD") -> dict[str, Any]:
         return result
     short_hash = full_hash[:10]
 
-    # subject / author-date (strict ISO) / author-name, one per line.
-    meta = (_git(cwd, "show", "-s", "--format=%s%n%aI%n%an", full_hash) or "").splitlines()
+    # subject / author-date (strict ISO) / author-name / parent hashes, one per line.
+    meta = (_git(cwd, "show", "-s", "--format=%s%n%aI%n%an%n%P", full_hash) or "").splitlines()
     subject = meta[0].strip() if len(meta) > 0 and meta[0].strip() else "(no subject)"
     author_date = meta[1].strip() if len(meta) > 1 else ""
     author = meta[2].strip() if len(meta) > 2 else ""
+    parent_count = len(meta[3].split()) if len(meta) > 3 else 0
 
     numstat = _git(cwd, "show", "--numstat", "--format=", full_hash) or ""
     files = [
@@ -112,6 +152,19 @@ def capture_commit(cwd: str, commit: str = "HEAD") -> dict[str, Any]:
         for line in numstat.splitlines()
         if line.strip() and "\t" in line
     ]
+
+    if apply_filter:
+        skip_reason = _capture_skip_reason(subject, author, files, parent_count)
+        if skip_reason:
+            _increment_skipped_count(cwd)
+            result["commit"] = short_hash
+            result["skipped_reason"] = skip_reason
+            result["warnings"].append(
+                f"Commit {short_hash} skipped by capture filter ({skip_reason}); "
+                "use --no-filter to capture it anyway."
+            )
+            return result
+
     stat = (_git(cwd, "show", "--stat", "--format=", full_hash) or "").strip()
 
     date_str = (author_date[:10] if len(author_date) >= 10 else "") or datetime.now(UTC).strftime(
@@ -203,6 +256,22 @@ def _read_marker(path: Path) -> str | None:
         return text or None
     except (OSError, UnicodeDecodeError):
         return None
+
+
+def _read_skipped_count(priv: Path) -> int:
+    raw = _read_marker(priv / _SKIPPED_COUNT_MARKER)
+    try:
+        return int(raw) if raw else 0
+    except ValueError:
+        return 0
+
+
+def _increment_skipped_count(cwd: str) -> None:
+    """Count a filtered-out commit so `ai-memory status` shows filter activity."""
+    with contextlib.suppress(OSError):
+        priv = _private_dir(cwd)
+        count = _read_skipped_count(priv) + 1
+        (priv / _SKIPPED_COUNT_MARKER).write_text(f"{count}\n", encoding="utf-8")
 
 
 def mark_session_start(cwd: str) -> dict[str, Any]:
@@ -305,6 +374,7 @@ def capture_stats(cwd: str) -> dict[str, Any]:
         "last_journal_at": _read_marker(priv / _LAST_JOURNAL_MARKER),
         "session_started_at": _read_marker(priv / _SESSION_START_MARKER),
         "commit_captures": commit_captures,
+        "commits_skipped": _read_skipped_count(priv),
         "episodic_files": journals,
         "memories_total": memories_total,
         "memories_last_7d": memories_last_7d,

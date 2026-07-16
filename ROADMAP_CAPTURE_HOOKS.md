@@ -5,7 +5,7 @@
 > because enforcement amplifies volume — once hooks guarantee a record per commit and a
 > journal per session, every noise commit becomes permanent noise. Cut the noise first.
 
-Status: planned · Created: 2026-07-16 · Total estimate: ~5–8 days of focused work
+Status: Stage 0 done (2026-07-16) · Created: 2026-07-16 · Total estimate: ~5–8 days of focused work
 
 **Global exit criterion:** a 100% non-cooperative agent still produces a clean episodic
 record per *relevant* commit plus a session journal per session, without inflating
@@ -13,9 +13,16 @@ record per *relevant* commit plus a session journal per session, without inflati
 
 ---
 
-## Stage 0 — Capture filter (~1 day)
+## Stage 0 — Capture filter (~1 day) — ✅ done 2026-07-16
 
 **File:** `src/memory_fabric/storage/capture.py`
+
+> Shipped as planned, with two implementation notes: the elision list was hoisted
+> into `storage/_shared.py` (finalize re-imports it, so its existing test imports
+> still hold), and merge detection uses parent count (`%P`) in addition to the
+> subject prefixes — a squash-merge is caught by subject, a custom-message true
+> merge by parent count. Skips are counted in a `private/capture_skipped_count`
+> marker surfaced as `commits_skipped` in `capture_stats` / `ai-memory status`.
 
 The passive capture path (`capture_commit`) currently records *every* commit. Add
 `_should_capture(subject, author, files)` called at the top of `capture_commit`, skipping:
