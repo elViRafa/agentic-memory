@@ -370,7 +370,8 @@ quietly rotting.
 Agent instruction files get an agent to *read* memory reliably at session start, but
 writes are less consistent — a long session can compress away the instructions, and some
 clients never load a rules file at all. Two mechanisms close that gap without depending
-on any agent's cooperation:
+on any agent's cooperation — **commit, and the project brain updates itself; end a
+session without a journal, and the Stop hook blocks it.**
 
 **Passive capture.** With `ai-memory init --install-hooks`, every commit is recorded as
 episodic memory automatically:
@@ -384,14 +385,37 @@ Each capture writes to `memory-store/episodic/commits/<date>.md` with
 `source: passive-capture` and `review_status: pending` frontmatter — reviewable, and
 distinct from agent-written journal entries. It's idempotent per commit hash, needs no
 LLM, and is the raw material the next `ai-memory dream` consolidates or extracts facts
-from.
+from. Noise commits (merges, `[bot]` authors, `chore:`/`style:`/`ci:`/`build(deps)`
+prefixes, lockfile-only changes) are skipped by default — audibly, with a
+`skipped_reason` and a `--no-filter` opt-out, never silently — and `ai-memory dream
+--mode deep` folds commit records older than 14 days into weekly summaries so
+`episodic/commits/` never grows unbounded. See [`ROADMAP_CAPTURE_HOOKS.md`](ROADMAP_CAPTURE_HOOKS.md)
+for the full design.
 
 **Session-end enforcement.** `ai-memory session-start` marks when a session began;
-`ai-memory guard-journal` exits non-zero if `write_session_journal_tool` hasn't been
-called since — the primitive a client's Stop hook can use to actually enforce "journal
-before you finish," instead of just asking nicely in a rules file. `ai-memory status`
-reports local capture stats (last journal, commit captures, memories written in the last
-7 days) so you can see whether capture is actually happening.
+`ai-memory guard-journal` exits non-zero (reason on stderr) if `write_session_journal_tool`
+hasn't been called since. `ai-memory install --client <claude-code|gemini-cli|codex>
+--with-hooks` wires this in automatically — SessionStart marks the session and injects a
+short context reminder, Stop blocks ending the session until the journal exists, and a
+pre-compaction event runs a non-blocking local consolidation checkpoint. `ai-memory
+status` reports local capture stats (last journal, commit captures, memories written in
+the last 7 days) so you can see whether capture is actually happening.
+
+**Proof, not just a claim.** `scripts/capture_rate_benchmark.py` scripts a fully
+non-cooperative simulated agent — one that never calls `write_session_journal_tool` on its
+own — through 20 sessions in each mode:
+
+| Mode | Sessions journaled | Commit capture rate |
+|---|---|---|
+| Instructions-only (no hooks) | 0 / 20 (0%) | 20 / 20 (100%) |
+| Hooks enabled (`guard-journal` enforced) | 20 / 20 (100%) | 20 / 20 (100%) |
+
+Passive commit capture holds at 100% either way, since it runs off the git post-commit
+hook, not the client-side session hooks. Session journaling goes from 0% to 100% only once
+the Stop hook is wired in — a mechanism proof (the enforcement primitive cannot be silently
+skipped), not a statistical study of real-world agent compliance, which is separate,
+larger benchmark work (see `ROADMAP.md` Phase 5). Reproduce it yourself:
+`python scripts/capture_rate_benchmark.py --sessions 20`.
 
 **Failure memory.** The highest-signal category for a coding agent — "I hit this exact
 error before, here's what fixed it":

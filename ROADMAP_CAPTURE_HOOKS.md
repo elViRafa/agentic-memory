@@ -5,11 +5,13 @@
 > because enforcement amplifies volume — once hooks guarantee a record per commit and a
 > journal per session, every noise commit becomes permanent noise. Cut the noise first.
 
-Status: Stages 0–2 done, 3 clients (claude-code + gemini-cli + codex) (2026-07-16) · Created: 2026-07-16 · Total estimate: ~5–8 days of focused work
+Status: All 4 stages done — 3 hook clients (claude-code + gemini-cli + codex), capture-rate proof measured (2026-07-16) · Created: 2026-07-16 · Total estimate: ~5–8 days of focused work
 
 **Global exit criterion:** a 100% non-cooperative agent still produces a clean episodic
 record per *relevant* commit plus a session journal per session, without inflating
 `episodic/` with merge/bot/lockfile noise — and `ai-memory status` proves it locally.
+**Met and measured** — see Stage 3's capture-rate benchmark (0% → 100% session journaling,
+100% commit capture throughout).
 
 ---
 
@@ -308,13 +310,33 @@ held per the table above pending upstream fixes or better verification.
 
 ---
 
-## Stage 3 — Close the proof loop (post-ship)
+## Stage 3 — Close the proof loop (post-ship) — ✅ done 2026-07-16
 
-- **Capture-rate metric:** scripted sessions, instructions-only vs hooks-enabled — % of
-  sessions whose knowledge survives into the next session. Feeds directly into ROADMAP.md
-  Phase 5 (§8) and becomes the launch number for the §10 capture-rate metric row.
-- **Demo/README:** "commit → the project brain updates itself; session without a journal
-  → blocked." The two-line pitch that makes enforcement legible.
+- **Capture-rate metric:** `scripts/capture_rate_benchmark.py` scripts a fully
+  non-cooperative simulated agent (never voluntarily calls
+  `write_session_journal_tool`) through 20 sessions per mode:
+
+  | Mode | Sessions journaled | Commit capture rate |
+  |---|---|---|
+  | Instructions-only (no hooks) | 0 / 20 (0%) | 20 / 20 (100%) |
+  | Hooks enabled (`guard-journal` enforced) | 20 / 20 (100%) | 20 / 20 (100%) |
+
+  Commit capture is unconditional in both modes (it runs off the git post-commit hook —
+  Stage 0/1 — not the client-side session hooks from Stage 2); session journaling goes
+  from 0% to 100% only once the Stop hook is wired in. This is a **mechanism proof** — it
+  demonstrates the enforcement primitive (`guard_journal`, checked and re-checked exactly
+  the way a real Stop hook would) cannot be silently bypassed by a caller that never
+  intends to comply — not a statistical study of real-world agent behavior, which stays
+  Phase 5's separate, larger benchmark work (ROADMAP.md §8). Regression-guarded in
+  `tests/test_capture_rate_benchmark.py` (3 tests) so the number can't silently drift.
+  Feeds directly into ROADMAP.md Phase 5 (§8) and is now the measured number in the §10
+  capture-rate metric row and the §5.3 exit criteria.
+- **Demo/README:** done — README's Capture Reliability section now opens with "commit →
+  the project brain updates itself; end a session without a journal, and the Stop hook
+  blocks it," followed by the benchmark table above and the reproduction command.
+
+**Exit:** the capture-rate number is measured, reproducible, and regression-guarded, not
+just an aspirational bullet — met.
 
 ---
 

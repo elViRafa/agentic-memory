@@ -8,6 +8,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Capture filter** (`storage/capture.py`) — `capture_commit` skips noise commits by
+  default (merges, `[bot]` authors, `chore:`/`style:`/`ci:`/`build(deps)` prefixes,
+  lockfile-only changes), audibly: a `skipped_reason`, a warning, and a
+  `commits_skipped` counter in `ai-memory status`, never a silent no-op.
+  `ai-memory capture --no-filter` opts back into capturing everything.
+- **Episodic roll-up** (`storage/consolidation.py`) — `ai-memory dream --mode deep` folds
+  `episodic/commits/` daily files older than 14 days into weekly
+  `week-<iso-year>-w<ww>.md` summaries (`review_status: consolidated`), so passive
+  capture's residual accumulation has a real destination instead of growing forever.
+- **Client lifecycle-hooks writer** (`client_hooks.py`, new) — `ai-memory install
+  --client <claude-code|gemini-cli|codex> --with-hooks` wires SessionStart (marks the
+  session, injects a short context reminder), Stop (`guard-journal`, blocking), and a
+  pre-compaction checkpoint (non-blocking `dream --mode light --apply`) into each
+  client's own hook config. Each client's schema was verified directly (official docs
+  for Gemini CLI, source code for Codex CLI since its docs 403'd on every fetch) rather
+  than assumed from Claude Code's shape, even where they turned out to match. Found and
+  fixed along the way: `guard-journal` was printing its block reason to stdout only, but
+  every client reads the exit-2 feedback from stderr exclusively.
+- **Capture-rate benchmark** (`scripts/capture_rate_benchmark.py`) — scripts a
+  non-cooperative simulated agent through 20 sessions per mode: 0% session-journal rate
+  with no enforcement, 100% with the Stop hook wired in, commit capture steady at 100%
+  either way (it's unconditional on the git hook, not the client-side session hooks).
+  Regression-guarded in `tests/test_capture_rate_benchmark.py`.
+
+See [`ROADMAP_CAPTURE_HOOKS.md`](ROADMAP_CAPTURE_HOOKS.md) for the full design record.
+
 ## [0.8.1] — 2026-07-14
 
 > `v0.8.0` was tagged and pushed but never published: its release CI caught a
