@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Launch-prep community files (ROADMAP Phase 6):** `LICENSE` (MIT — the file was
+  missing even though `pyproject.toml` and the README declared MIT), `CONTRIBUTING.md`,
+  `SECURITY.md`, GitHub issue templates and a pull-request template, a `DEMO.md`
+  storyboard for the 90-second cross-tool demo, and an explicit "no telemetry"
+  guarantee in the README, `SECURITY.md`, and `CONTRIBUTING.md`.
+
 ## [1.0.0] — 2026-07-17
 
 > Store-first model finalized. This release removes the hand-write path for

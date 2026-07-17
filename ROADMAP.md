@@ -757,16 +757,27 @@ Claims without numbers don't win "best in the world."
 
 ## 9. Phase 6 — Ecosystem & growth
 
+Launch-prep pass 2026-07-17: in-repo deliverables landed; the outward-facing steps
+(recording the demo video, posting the launch sequence) are owner actions and
+depend on the v1.0.0 tag going live.
+
 - [ ] **Docs site** (mkdocs-material on GitHub Pages): quickstart per client, concepts
-      (Tiers, Dreaming, store), MCP tool reference, benchmark methodology.
-- [ ] **90-second demo** (GIF in README + video): init → agent writes memory in Claude
-      Code → same memory read from VS Code and Codex. The cross-tool moment is the hook.
+      (Tiers, Dreaming, store), MCP tool reference, benchmark methodology. Still open —
+      the README is comprehensive enough to launch on; a dedicated site is a follow-up.
+- [~] **90-second demo** — script/storyboard shipped (`DEMO.md`): the cross-tool moment
+      (init → agent writes memory in Claude Code → same memory read from VS Code/Codex →
+      commit auto-captures). Recording the GIF + video is the remaining owner step.
 - [ ] **Launch sequence**: PyPI + registry live → Show HN → r/ClaudeAI, r/cursor,
-      X/Twitter dev threads → submit to awesome-mcp-servers lists.
-- [ ] **Community hygiene**: CONTRIBUTING.md, issue/PR templates, CHANGELOG (keep-a-changelog),
-      semver discipline, GitHub Releases automated from tags.
-- [ ] **Telemetry: none.** Make "no telemetry, no account, no cloud" a stated guarantee —
-      it is a differentiator in this category.
+      X/Twitter dev threads → submit to awesome-mcp-servers lists. Owner action; gated on
+      the v1.0.0 tag/publish.
+- [x] **Community hygiene** — done 2026-07-17: `LICENSE` (MIT — the file was missing
+      though pyproject/README declared it), `CONTRIBUTING.md`, `SECURITY.md`, issue
+      templates (`bug_report`, `feature_request`, `config.yml`) and
+      `pull_request_template.md`, CHANGELOG (keep-a-changelog, already in place), semver
+      discipline (documented in CONTRIBUTING), and GitHub Releases automated from tags
+      (`release.yml`, already in place).
+- [x] **Telemetry: none** — done 2026-07-17: stated as an explicit guarantee in the
+      README ("Privacy — no telemetry"), `SECURITY.md`, and `CONTRIBUTING.md`.
 
 ## 10. Success metrics
 
