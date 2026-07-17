@@ -4,7 +4,7 @@
 > one command in VS Code, Claude (Code + Desktop), Codex, Antigravity, Cursor, Windsurf,
 > Gemini CLI, Cline, and anything MCP-compatible.
 
-Last updated: 2026-07-17 · Current version: 1.0.0 (prepared; last published 0.8.2 on [PyPI](https://pypi.org/project/memory-fabric/)) · Tests: 339 passing (+97 subtests, +1 skipped on Windows by design) · Coverage: 85.9% (gate: 82%) · Lint: ruff (E4,E7,E9,F,I,B,UP,SIM,RUF,BLE001,S110,S112) + mypy clean · No `src/` file >25 KB except 4 tracked borderline files · Phase 0 exit criteria met · Phase 2.2 migration tooling shipped · Phase 2.3 store-first cutover shipped (flat fact-writes removed) · Phase 3 capture reliability (filter, roll-up, multi-client hooks) shipped
+Last updated: 2026-07-17 · Current version: 1.0.0 ([live on PyPI](https://pypi.org/project/memory-fabric/)) · Tests: 339 passing (+97 subtests, +1 skipped on Windows by design) · Coverage: 85.9% (gate: 82%) · Lint: ruff (E4,E7,E9,F,I,B,UP,SIM,RUF,BLE001,S110,S112) + mypy clean · No `src/` file >25 KB except 4 tracked borderline files · Phase 0 exit criteria met · Phase 2.2 migration tooling shipped · Phase 2.3 store-first cutover shipped (flat fact-writes removed) · Phase 3 capture reliability (filter, roll-up, multi-client hooks) shipped
 
 ---
 

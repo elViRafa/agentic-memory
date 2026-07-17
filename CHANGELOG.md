@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] — 2026-07-17
+
+> Store-first model finalized. This release removes the hand-write path for
+> fact/map sections — **breaking** for any client that wrote facts to flat root
+> sections; migrate that content with `ai-memory migrate`.
+
 ### Added
 
 - **Launch-prep community files (ROADMAP Phase 6):** `LICENSE` (MIT — the file was
@@ -15,13 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SECURITY.md`, GitHub issue templates and a pull-request template, a `DEMO.md`
   storyboard for the 90-second cross-tool demo, and an explicit "no telemetry"
   guarantee in the README, `SECURITY.md`, and `CONTRIBUTING.md`.
-
-## [1.0.0] — 2026-07-17
-
-> Store-first model finalized. This release removes the hand-write path for
-> fact/map sections — **breaking** for any client that wrote facts to flat root
-> sections; migrate that content with `ai-memory migrate`. Version bumped and
-> prepared for release; publish to PyPI happens on the release tag.
+- **`ai-memory doctor` flags legacy hand-written root sections.** A map-category
+  file without `generated: true` frontmatter (pre-migration hand-written content)
+  now produces a warning pointing to `ai-memory migrate`. Clean on a fresh `init`
+  and on a migrated store.
 
 ### Changed
 
@@ -37,13 +40,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tool boundary, its only production caller. **Breaking for any client or agent
   that wrote facts to flat map sections** — migrate that content with
   `ai-memory migrate` and write new facts with `write_memory_store_tool`.
-
-### Added
-
-- **`ai-memory doctor` flags legacy hand-written root sections.** A map-category
-  file without `generated: true` frontmatter (pre-migration hand-written content)
-  now produces a warning pointing to `ai-memory migrate`. Clean on a fresh `init`
-  and on a migrated store.
 
 ### Fixed
 
