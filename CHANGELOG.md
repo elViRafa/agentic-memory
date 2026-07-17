@@ -8,6 +8,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Post-commit hook no longer traps the working tree in a capture loop**
+  (`storage/capture.py`, issue #5). The post-commit hook writes an episodic
+  record for each commit, which dirties the tree; committing that memory used to
+  be captured in turn, re-dirtying the tree, so no follow-up commit ever reached
+  a clean state and a push stayed blocked behind it. `capture_commit` now skips
+  commits whose files are entirely under `.ai-memory/` (`skipped_reason:
+  "memory-store bookkeeping commit"`), so a single commit of the captured memory
+  reaches a clean tree. Commits that mix code and memory changes are still
+  captured — only pure memory-bookkeeping commits are skipped.
+
 ## [0.8.2] — 2026-07-16
 
 ### Added

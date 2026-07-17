@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from memory_fabric.frontmatter import FrontmatterError, dump_frontmatter, parse_frontmatter
-from memory_fabric.paths import local_memory_dir, memory_store_dir
+from memory_fabric.paths import LOCAL_MEMORY_DIR, local_memory_dir, memory_store_dir
 from memory_fabric.security import redact_secrets
 from memory_fabric.storage._shared import _should_skip_diff_path
 from memory_fabric.storage.store import write_memory_store
@@ -54,6 +54,18 @@ _MERGE_SUBJECT_PREFIXES = (
 # carry real knowledge.
 _SKIPPABLE_SUBJECT_RE = re.compile(r"^(?:(?:chore|style|ci)(?:\([^)]*\))?!?:|build\(deps)", re.I)
 
+# A commit that touches nothing but the memory directory is the memory system's
+# own bookkeeping, not new project knowledge. Capturing it would write a fresh
+# episodic record, re-dirtying the tree; the user then commits that, which
+# triggers another capture — an endless commit loop that blocks a clean push
+# (issue #5). Skipping memory-only commits breaks the recursion so a single
+# follow-up commit reaches a clean tree.
+_MEMORY_DIR_PREFIX = f"{LOCAL_MEMORY_DIR}/"
+
+
+def _is_memory_only_path(path: str) -> bool:
+    return path.replace("\\", "/").startswith(_MEMORY_DIR_PREFIX)
+
 
 def _capture_skip_reason(
     subject: str, author: str, files: list[str], parent_count: int
@@ -65,6 +77,8 @@ def _capture_skip_reason(
         return f"bot author ({author})"
     if _SKIPPABLE_SUBJECT_RE.match(subject):
         return "skippable conventional-commit prefix"
+    if files and all(_is_memory_only_path(f) for f in files):
+        return "memory-store bookkeeping commit"
     if files and all(_should_skip_diff_path(f) for f in files):
         return "only lockfiles/generated files changed"
     return None

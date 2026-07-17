@@ -153,6 +153,21 @@ class CaptureFilterRuleTests(unittest.TestCase):
         )
         self.assertEqual(reason, "only lockfiles/generated files changed")
 
+    def test_memory_only_commit_is_skipped(self) -> None:
+        # issue #5: committing the memory the post-commit hook wrote must not
+        # trigger another capture, or the tree never comes clean.
+        for files in (
+            [".ai-memory/memory-store/episodic/commits/2026-07-17.md"],
+            [
+                ".ai-memory/memory-store/index.md",
+                ".ai-memory/memory-store/episodic/commits/2026-07-17.md",
+            ],
+            [".ai-memory\\memory-store\\index.md"],  # windows path separators
+        ):
+            with self.subTest(files=files):
+                reason = _capture_skip_reason("save memory", "Dev", files, parent_count=1)
+                self.assertEqual(reason, "memory-store bookkeeping commit")
+
     def test_relevant_commits_are_not_skipped(self) -> None:
         for subject, files in (
             ("feat: add auth login module", ["src/auth.py"]),
@@ -160,6 +175,8 @@ class CaptureFilterRuleTests(unittest.TestCase):
             ("build: switch to hatchling", ["pyproject.toml"]),
             ("refactor!: split storage core", ["src/storage.py"]),
             ("Merged the two auth paths into one", ["src/auth.py"]),
+            # code + memory together carries real knowledge — not memory-only.
+            ("feat: add auth and record decision", ["src/auth.py", ".ai-memory/decisions.md"]),
             ("update deps", []),
         ):
             with self.subTest(subject=subject):
@@ -211,6 +228,32 @@ class CaptureFilterIntegrationTests(unittest.TestCase):
 
             self.assertFalse(result["captured"])
             self.assertIn("bot author", result["skipped_reason"])
+
+    def test_committing_captured_memory_does_not_recapture(self) -> None:
+        # issue #5: the post-commit hook writes memory that dirties the tree.
+        # Committing that memory must not itself be captured, or the tree never
+        # comes clean and a push is blocked behind an endless commit loop.
+        with tempfile.TemporaryDirectory() as temp:
+            _init_repo(temp)
+            initialize_memory_fabric(temp)
+            # Baseline: the scaffold + agent-rule files are already committed,
+            # as they are once a project has run init — the loop is about the
+            # memory the hook writes *after* that.
+            _run_git(temp, "add", "-A")
+            _run_git(temp, "commit", "-m", "chore: scaffold memory fabric")
+
+            _commit(temp, "src.py", "print('hi')\n", "feat: real work")
+            first = capture_commit(temp)
+            self.assertTrue(first["captured"])
+
+            # Simulate the user committing the memory the capture just wrote —
+            # now the only new paths are under .ai-memory/.
+            _run_git(temp, "add", "-A")
+            _run_git(temp, "commit", "-m", "save project memory")
+
+            memory_commit = capture_commit(temp)
+            self.assertFalse(memory_commit["captured"])
+            self.assertEqual(memory_commit["skipped_reason"], "memory-store bookkeeping commit")
 
     def test_no_filter_captures_everything_and_stays_idempotent(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
