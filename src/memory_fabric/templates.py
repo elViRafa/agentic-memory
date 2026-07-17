@@ -77,6 +77,17 @@ STORE_CATEGORY_SCAFFOLD: tuple[str, ...] = tuple(
     )
 )
 
+# Root map sections that are generated views over memory-store/<category>/,
+# rebuilt by Dreaming. Derived from SECTION_TEMPLATES so it can't drift. Under
+# the store-first model (v1.0) these have no supported flat write path — a file
+# at one of these names without `generated: true` is legacy hand-written content
+# that `ai-memory doctor` flags for migration.
+GENERATED_MAP_SECTIONS: frozenset[str] = frozenset(
+    name
+    for name, template in SECTION_TEMPLATES.items()
+    if template.get("frontmatter", {}).get("generated")
+)
+
 LOCAL_GITIGNORE = """*.patch
 *.tmp
 *.log
@@ -115,8 +126,8 @@ Use `write_memory_store_tool` to register standalone memories.
 - **Parameters:** `cwd`, `store_path`, `content`, `title` (optional), `tags` (optional), `priority` (`high`/`medium`/`low`), `mode` (`replace`/`append`).
 
 ### 3. Root Maps Are Generated — Never Write Them
-Root map files (`index`, `architecture`, `decisions`, `debt`, `schemas`) are **generated views** over `memory-store/`, rebuilt by Dreaming; hand edits get folded back into the store as `map-notes-pending-review` entries. Do NOT update them with `write_local_memory_tool` — that path is deprecated for facts and will be removed in v1.0. Write granular facts with `write_memory_store_tool`, then run `dream_tool` to refresh the maps.
-**Exception:** the steering sections `framework-rules` and `ubiquitous-language` are hand-curated and always loaded into context; update those with `write_local_memory_tool(cwd, section, content)`.
+Root map files (`index`, `architecture`, `decisions`, `debt`, `schemas`) are **generated views** over `memory-store/`, rebuilt by Dreaming. Writing them with `write_local_memory_tool` is rejected (store-first model): the tool now writes only steering sections. Write granular facts with `write_memory_store_tool`, then run `dream_tool` to refresh the maps.
+**Exception:** the steering sections `framework-rules` and `ubiquitous-language` are hand-curated and always loaded into context; update those with `write_local_memory_tool(cwd, section, content)` — this is the tool's only remaining use.
 
 ### 4. Security & Maintenance
 - **Security:** Do NOT store credentials, tokens, or passwords.

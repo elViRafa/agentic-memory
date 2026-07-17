@@ -243,6 +243,13 @@ class ToolContractTests(unittest.TestCase):
                 )
                 self.assertIn("does not exist", error_text(bad))
 
+                # store-first (v1.0): writing a generated map section is rejected.
+                rejected = await session.call_tool(
+                    "write_local_memory_tool",
+                    {"cwd": tmp, "section": "architecture", "content": "a hand-written fact"},
+                )
+                self.assertIn("no longer supported", error_text(rejected))
+
     @async_test
     async def test_propose_memory_patch_tool(self) -> None:
         with _tmp_project() as tmp:

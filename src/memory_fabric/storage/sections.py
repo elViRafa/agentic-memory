@@ -11,6 +11,7 @@ from memory_fabric.paths import local_memory_dir
 from memory_fabric.security import redact_secrets
 from memory_fabric.storage._shared import (
     STEERING_SECTIONS,
+    _is_steering_file,
     _jaccard_similar,
     _section_path,
     estimate_tokens,
@@ -23,6 +24,43 @@ _STORE_FIRST_DEPRECATION = (
     "and hand-written flat sections are being phased out. Write facts with "
     "write_memory_store_tool instead; write_local_memory will be removed in v1.0."
 )
+
+
+def _content_declares_steering(content: str) -> bool:
+    """True if `content`'s own frontmatter declares `role: steering`."""
+    if not content.lstrip().startswith("---"):
+        return False
+    try:
+        metadata, _body = parse_frontmatter(content)
+    except FrontmatterError:
+        return False
+    return str(metadata.get("role") or "").strip().lower() == "steering"
+
+
+def flat_write_rejection(cwd: str, section: str, content: str) -> str | None:
+    """Return why a flat write to `section` is not permitted, or None to allow it.
+
+    Store-first (v1.0): the flat write path is narrowed to the steering/directive
+    tier. The root map sections are generated views over ``memory-store/`` and
+    must be written through ``write_memory_store_tool`` (then rebuilt by
+    Dreaming), so a fact written to a flat map file can no longer rot the map.
+    A section stays writable here only when it is steering — one of the canonical
+    ``STEERING_SECTIONS``, content that declares ``role: steering``, or an
+    existing on-disk file already marked steering.
+    """
+    if section in STEERING_SECTIONS or _content_declares_steering(content):
+        return None
+    existing = _section_path(cwd, section)
+    if existing.exists() and _is_steering_file(existing):
+        return None
+    return (
+        f"Writing the flat section `{section}` is no longer supported (store-first "
+        "model, v1.0): root map sections are generated views over memory-store/. "
+        f"Write facts with write_memory_store_tool, then run dream_tool to rebuild "
+        f"the `{section}` map. To convert legacy hand-written sections, run "
+        "`ai-memory migrate`. Only steering sections (framework-rules, "
+        "ubiquitous-language, or content with `role: steering`) remain writable here."
+    )
 
 
 def read_section(cwd: str, section: str, max_tokens: int = 8000) -> MemorySection:

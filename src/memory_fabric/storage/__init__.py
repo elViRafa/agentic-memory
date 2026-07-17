@@ -106,6 +106,9 @@ from memory_fabric.storage.migrate import (
 from memory_fabric.storage.patch import propose_memory_patch as propose_memory_patch
 from memory_fabric.storage.search import keyword_search as keyword_search
 from memory_fabric.storage.sections import (
+    flat_write_rejection as flat_write_rejection,
+)
+from memory_fabric.storage.sections import (
     read_section as read_section,
 )
 from memory_fabric.storage.sections import (

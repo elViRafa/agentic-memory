@@ -21,6 +21,7 @@ from memory_fabric.storage._shared import (
     estimate_tokens,
 )
 from memory_fabric.templates import (
+    GENERATED_MAP_SECTIONS,
     LOCAL_GITIGNORE,
     SECTION_TEMPLATES,
     STORE_CATEGORY_SCAFFOLD,
@@ -518,6 +519,7 @@ def doctor(cwd: str, check_network: bool = False) -> DoctorResult:
             except Exception as exc:  # noqa: BLE001 - reported via errors, not swallowed.
                 errors.append(f"Failed to check memory-store index consistency: {exc}")
 
+    _check_legacy_flat_sections(memory_dir, warnings)
     _check_hook_health(cwd, warnings)
     _check_install_drift(warnings)
     _check_llm_provider(warnings, check_network=check_network)
@@ -533,6 +535,32 @@ def doctor(cwd: str, check_network: bool = False) -> DoctorResult:
         "warnings": warnings,
         "checked_files": checked_files,
     }
+
+
+def _check_legacy_flat_sections(memory_dir: Path, warnings: list[str]) -> None:
+    """Flag root map sections that are hand-written rather than generated.
+
+    Store-first (v1.0): the map sections are generated views over
+    ``memory-store/<category>/``, rebuilt by Dreaming, and no longer have a
+    supported flat write path. A file at one of those names without
+    ``generated: true`` frontmatter is legacy hand-written content from before
+    the store-first migration — point the user at ``ai-memory migrate``, which
+    splits it into the store and rewrites the flat file as a generated map.
+    """
+    for section in sorted(GENERATED_MAP_SECTIONS):
+        path = memory_dir / f"{section}.md"
+        if not path.exists():
+            continue
+        try:
+            metadata, _body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, FrontmatterError):
+            continue  # unreadable files are already reported by the per-file loop
+        if not metadata.get("generated"):
+            warnings.append(
+                f"`{section}.md` is a hand-written root section, but under the store-first "
+                f"model it must be a generated map over memory-store/{section}/. Run "
+                "`ai-memory migrate` to split its content into the store and regenerate the map."
+            )
 
 
 def _check_install_drift(warnings: list[str]) -> None:

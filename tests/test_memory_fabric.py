@@ -22,6 +22,7 @@ from memory_fabric.paths import get_global_root
 from memory_fabric.storage import (
     create_snapshot,
     doctor,
+    flat_write_rejection,
     initialize_memory_fabric,
     keyword_search,
     read_combined_context,
@@ -754,6 +755,27 @@ class MemoryFabricTests(unittest.TestCase):
                 )
             )
 
+    def test_doctor_flags_legacy_hand_written_map_section(self) -> None:
+        # store-first (v1.0): a map section without `generated: true` is legacy
+        # hand-written content and doctor must point it at `ai-memory migrate`.
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            self.assertFalse(
+                any("hand-written root section" in w for w in doctor(temp)["warnings"])
+            )
+
+            arch = Path(temp) / ".ai-memory" / "architecture.md"
+            metadata, _body = parse_frontmatter(arch.read_text(encoding="utf-8"))
+            metadata.pop("generated", None)
+            metadata.pop("generated_from", None)
+            from memory_fabric.frontmatter import dump_frontmatter
+
+            arch.write_text(dump_frontmatter(metadata, "# hand-written\n"), encoding="utf-8")
+
+            warnings = doctor(temp)["warnings"]
+            self.assertTrue(any("hand-written root section" in w for w in warnings))
+            self.assertTrue(any("ai-memory migrate" in w for w in warnings))
+
     def test_dream_ingests_git_diff_and_scans_secrets_and_marks_stale(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             initialize_memory_fabric(temp)
@@ -859,6 +881,24 @@ class MemoryFabricTests(unittest.TestCase):
                 self.assertIn("Rule details local.", updated_content)
             finally:
                 os.environ.pop("MEMORY_FABRIC_HOME", None)
+
+    def test_flat_write_rejection_narrows_to_steering_tier(self) -> None:
+        # store-first (v1.0): the flat write path allows only steering sections.
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            # Steering sections are still writable.
+            for section in ("framework-rules", "ubiquitous-language"):
+                self.assertIsNone(flat_write_rejection(temp, section, "a directive"))
+            # Content that declares itself steering opts a custom section in.
+            self.assertIsNone(
+                flat_write_rejection(temp, "house-style", "---\nrole: steering\n---\nUse tabs.")
+            )
+            # Generated map sections and arbitrary fact sections are rejected.
+            for section in ("architecture", "decisions", "debt", "schemas", "loose-notes"):
+                reason = flat_write_rejection(temp, section, "a fact")
+                self.assertIsNotNone(reason)
+                self.assertIn("no longer supported", reason)
+                self.assertIn("write_memory_store_tool", reason)
 
     def test_write_local_memory_extracts_frontmatter_from_input(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

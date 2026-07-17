@@ -8,6 +8,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Store-first flat write path narrowed to the directive tier (ROADMAP Phase 2.3,
+  v1.0).** `write_local_memory_tool` now rejects writes to the generated root map
+  sections (`index`, `architecture`, `decisions`, `debt`, `schemas`) and to
+  arbitrary fact sections, pointing the caller at `write_memory_store_tool` (then
+  `dream_tool` to rebuild the maps). Only steering sections — `framework-rules`,
+  `ubiquitous-language`, or content/files declaring `role: steering` — remain
+  writable through this tool. This closes the last hand-write path that let
+  generated maps rot. The internal `write_local_memory` engine is unchanged (map
+  regeneration and `ai-memory migrate` still use it); enforcement is at the MCP
+  tool boundary, its only production caller. **Breaking for any client or agent
+  that wrote facts to flat map sections** — migrate that content with
+  `ai-memory migrate` and write new facts with `write_memory_store_tool`.
+
+### Added
+
+- **`ai-memory doctor` flags legacy hand-written root sections.** A map-category
+  file without `generated: true` frontmatter (pre-migration hand-written content)
+  now produces a warning pointing to `ai-memory migrate`. Clean on a fresh `init`
+  and on a migrated store.
+
 ### Fixed
 
 - **Post-commit hook no longer traps the working tree in a capture loop**

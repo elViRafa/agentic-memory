@@ -26,6 +26,7 @@ from memory_fabric.storage import (
     apply_dream_results,
     delete_memory_store,
     dream,
+    flat_write_rejection,
     initialize_memory_fabric,
     keyword_search,
     list_memory_store,
@@ -158,28 +159,31 @@ if FastMCP is not None:
     def write_local_memory_tool(
         cwd: str, section: str, content: str, mode: str = "append"
     ) -> WriteResult:
-        """Write or append content to a flat memory section file.
+        """Write or append content to a flat steering/directive section file.
 
-        **Deprecated for facts (store-first model):** root map sections
-        (`index`, `architecture`, `decisions`, `debt`, `schemas`) are generated
-        views over `memory-store/` and are rebuilt by Dreaming — hand edits get
-        folded back into the store for review.  Write facts with
-        ``write_memory_store_tool`` instead; this write path is planned for
-        removal in v1.0.  The tool remains the right way to update the
-        hand-curated steering sections (``framework-rules``,
-        ``ubiquitous-language``), which are always loaded into context.
+        **Store-first (v1.0):** this tool now writes only the hand-curated
+        steering sections (``framework-rules``, ``ubiquitous-language``, or any
+        content that declares ``role: steering``), which are always loaded into
+        context.  The root map sections (``index``, ``architecture``,
+        ``decisions``, ``debt``, ``schemas``) are generated views over
+        ``memory-store/`` and are rebuilt by Dreaming — a write to one of them is
+        rejected with a pointer to ``write_memory_store_tool``.  Write facts with
+        ``write_memory_store_tool`` and run ``dream_tool`` to refresh the maps.
 
         Duplicate lines are automatically filtered out when appending.
         Secrets detected in ``content`` are redacted before writing.
 
         Args:
             cwd:     Absolute path to the project root.
-            section: Target section name without `.md` (e.g. ``"framework-rules"``).
+            section: Target steering section without `.md` (e.g. ``"framework-rules"``).
             content: Markdown content to write.
             mode:    ``"append"`` (default) adds content after existing text;
                      ``"replace"`` overwrites the section body entirely.
         """
         safe = _safe_cwd(cwd)
+        rejection = flat_write_rejection(safe, section=section, content=content)
+        if rejection:
+            raise ValueError(rejection)
         return write_local_memory(safe, section=section, content=content, mode=mode)  # type: ignore[arg-type]
 
     @mcp.tool()
