@@ -37,9 +37,11 @@ Memory is stored as human-readable Markdown with YAML frontmatter. No vector dat
 
 ## Status
 
-**v0.8.2 — [live on PyPI](https://pypi.org/project/memory-fabric/).**
-Core CLI and MCP tools work end-to-end. See [`ROADMAP.md`](ROADMAP.md) for what shipped,
-what's in progress, and what's next.
+**v1.0.0 — store-first memory model finalized (flat fact-writes removed).**
+Release prepared; not yet published — the current PyPI release is
+[0.8.2](https://pypi.org/project/memory-fabric/). Core CLI and MCP tools work
+end-to-end. See [`ROADMAP.md`](ROADMAP.md) for what shipped, what's in progress,
+and what's next.
 
 ---
 

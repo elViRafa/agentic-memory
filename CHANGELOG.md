@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0] — 2026-07-17
+
+> Store-first model finalized. This release removes the hand-write path for
+> fact/map sections — **breaking** for any client that wrote facts to flat root
+> sections; migrate that content with `ai-memory migrate`. Version bumped and
+> prepared for release; publish to PyPI happens on the release tag.
+
 ### Changed
 
 - **Store-first flat write path narrowed to the directive tier (ROADMAP Phase 2.3,
