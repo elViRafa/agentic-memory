@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **CLI demo GIF** (`docs/demo-cli.gif`), rendered from a real `ai-memory` session
+  (init → write a memory → commit auto-captures → status) and embedded in the README.
+
 ## [1.0.0] — 2026-07-17
 
 > Store-first model finalized. This release removes the hand-write path for

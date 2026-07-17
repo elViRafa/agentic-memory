@@ -1,8 +1,14 @@
 # 90-Second Demo Script
 
 The one moment that sells Memory Fabric: **an agent writes a memory in one tool,
-and a different tool reads it back.** This is the storyboard for the README GIF
-and the launch video. Target runtime ~90 seconds.
+and a different tool reads it back.** This is the storyboard for the launch video.
+Target runtime ~90 seconds.
+
+> **Status:** the CLI + self-capture portion (Shots 1 and 4 below) is already
+> captured as a terminal GIF at [`docs/demo-cli.gif`](docs/demo-cli.gif) and
+> embedded in the README. The cross-tool GUI moment (Shots 2–3) needs a real
+> screen recording of the actual IDE agents — that's the remaining step, scripted
+> below.
 
 Record at 1280×720 or larger, terminal font ≥ 16pt, light or dark but consistent.
 Keep each shot tight — no idle typing. Pre-stage a small demo repo (a couple of

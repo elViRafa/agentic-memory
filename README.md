@@ -44,6 +44,18 @@ shipped, what's in progress, and what's next.
 
 ---
 
+## Demo
+
+![Memory Fabric CLI demo — init, write a memory, and a commit captures itself](docs/demo-cli.gif)
+
+The CLI and self-capture flow: initialize a project, write a memory as a plain
+Markdown file in your repo, and watch a `git commit` record itself as episodic
+memory with no agent cooperation. The cross-tool moment — an agent writes memory
+in one tool and a different tool reads it back — is storyboarded in
+[`DEMO.md`](DEMO.md) for the full video.
+
+---
+
 ## Privacy — no telemetry
 
 Memory Fabric collects **nothing**. No telemetry, no account, no cloud, no
