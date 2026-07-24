@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import shutil
@@ -13,26 +14,43 @@ from memory_fabric.clients import resolve_cli_binary
 from memory_fabric.contracts import DoctorResult, InitResult, StatusResult
 from memory_fabric.frontmatter import FrontmatterError, parse_frontmatter
 from memory_fabric.paths import global_memory_dir, local_memory_dir, memory_store_dir, project_root
+from memory_fabric.security import redact_secrets
 from memory_fabric.storage._shared import (
     _is_ignored_local_memory_path,
+    _is_steering_file,
     _is_store_path,
     _iter_markdown_files,
     _path_to_store_path,
+    _read_memory_path,
+    _steering_context_enabled,
+    _steering_sync_enabled,
     estimate_tokens,
 )
 from memory_fabric.templates import (
+    DIRECTIVES_BLOCK_END,
+    DIRECTIVES_BLOCK_START,
     GENERATED_MAP_SECTIONS,
+    INSTRUCTIONS_BLOCK_END,
+    INSTRUCTIONS_BLOCK_START,
     LOCAL_GITIGNORE,
     SECTION_TEMPLATES,
     STORE_CATEGORY_SCAFFOLD,
     build_agents_md,
+    build_agents_md_instructions,
+    build_agents_rule_directives,
     build_agents_rule_dreaming,
     build_agents_rule_memory,
     build_claude_md,
+    build_combined_instructions,
     build_copilot_md,
+    build_cursor_directives,
     build_cursor_rule,
     build_memory_file,
+    build_project_directives_block,
+    build_windsurf_directives,
     build_windsurf_rule,
+    order_directive_sections,
+    wrap_managed_block,
 )
 from memory_fabric.version import __version__
 
@@ -234,7 +252,7 @@ def initialize_memory_fabric(
                 [
                     '  echo "Syncing Memory Fabric Agent Rules..."',
                     '  "$MEMORY_FABRIC_BIN" sync-agents || echo "memory-fabric: sync-agents failed (non-fatal)" >&2',
-                    "  git add .agents/rules/ .cursor/rules/memory-fabric.mdc .windsurf/rules/memory-fabric.md CLAUDE.md .github/copilot-instructions.md 2>/dev/null || true",
+                    "  git add -A .agents/rules/ .cursor/rules/ .windsurf/rules/ AGENTS.md CLAUDE.md .github/copilot-instructions.md 2>/dev/null || true",
                 ],
             )
             _install_hook_block(
@@ -272,25 +290,115 @@ def initialize_memory_fabric(
     }
 
 
-def sync_agent_rules(cwd: str) -> dict[str, Any]:
-    """Regenerate all agent instruction files from canonical templates.
+# Fabric headings written by pre-v1.1 syncs (no managed markers). Kept as a
+# one-time upgrade fallback in sync (CLAUDE.md/copilot only) and as doctor's
+# stale-legacy-block detector for content sync must no longer rewrite.
+_LEGACY_FABRIC_BLOCK_RE = re.compile(
+    r"(^|\n)(?:# Agent Instructions — Memory Fabric|"
+    r"## Memory Fabric — Semantic Store Agent Instructions).*$",
+    re.DOTALL,
+)
+_FABRIC_HEADING_RE = re.compile(
+    r"^#{1,6}\s+(?:Memory Fabric — |Agent Instructions — Memory Fabric)", re.MULTILINE
+)
 
-    This does NOT read from AGENTS.md. Instead, it regenerates all platform-specific
-    files directly from the canonical templates in templates.py, guaranteeing
-    consistency. AGENTS.md itself is left untouched so users can add project-specific
-    context to it without fear of it leaking into IDE rule files.
+
+def _splice_marker_block(text: str, start: str, end: str, inner: str | None) -> str:
+    """Replace/append/remove a marker-managed block, touching nothing outside it.
+
+    ``inner`` is the block's new content (markers added here); ``None`` removes
+    the block entirely. Appends add exactly one blank-line separator, and
+    removal strips that same separator so a later re-append round-trips.
+    """
+    pattern = re.compile(re.escape(start) + r".*?" + re.escape(end), re.DOTALL)
+    match = pattern.search(text)
+    if inner is not None:
+        block = wrap_managed_block(start, inner, end)
+        if match:
+            return text[: match.start()] + block + text[match.end() :]
+        if not text.strip():
+            return block + "\n"
+        separator = "\n" if text.endswith("\n") else "\n\n"
+        return text + separator + block + "\n"
+    if not match:
+        return text
+    before, after = text[: match.start()], text[match.end() :]
+    if after.startswith("\n"):
+        after = after[1:]
+    if before.endswith("\n\n"):
+        before = before[:-1]
+    return before + after
+
+
+def _collect_sync_directives(memory_dir: Path) -> list[tuple[str, str]]:
+    """`(section, body)` pairs for every steering section with `sync: true`
+    (the default), in deterministic composition order, frontmatter stripped."""
+    if not memory_dir.exists():
+        return []
+    by_name: dict[str, str] = {}
+    for path in sorted(memory_dir.glob("*.md")):
+        if _is_ignored_local_memory_path(memory_dir, path) or not _is_steering_file(path):
+            continue
+        if not _steering_sync_enabled(path):
+            continue
+        section, _metadata, body, read_warning = _read_memory_path(path)
+        if read_warning:
+            continue
+        by_name[section] = body.strip()
+    return [(name, by_name[name]) for name in order_directive_sections(list(by_name))]
+
+
+def _refresh_instructions_block(text: str, inner: str) -> str:
+    """Refresh the fabric-protocol content of a shared instruction file.
+
+    Marker-managed block present → replace its content. Otherwise, a legacy
+    (pre-v1.1) heading-to-EOF fabric block is wrapped in markers once — after
+    which everything outside the markers is permanently the user's. Files with
+    no fabric content at all are returned unchanged (sync never introduces the
+    protocol into a file the user kept clean of it).
+    """
+    if INSTRUCTIONS_BLOCK_START in text and INSTRUCTIONS_BLOCK_END in text:
+        return _splice_marker_block(text, INSTRUCTIONS_BLOCK_START, INSTRUCTIONS_BLOCK_END, inner)
+    block = wrap_managed_block(INSTRUCTIONS_BLOCK_START, inner, INSTRUCTIONS_BLOCK_END)
+    new_text, upgrades = _LEGACY_FABRIC_BLOCK_RE.subn(lambda m: m.group(1) + block, text, count=1)
+    if upgrades:
+        return new_text.rstrip("\n") + "\n"
+    return text
+
+
+def sync_agent_rules(cwd: str, check: bool = False) -> dict[str, Any]:
+    """Regenerate all agent instruction files from canonical templates, and
+    compose `sync: true` steering directives into per-tool files.
+
+    Shared user files (AGENTS.md, CLAUDE.md, .github/copilot-instructions.md)
+    are only ever modified inside Memory Fabric's managed marker blocks; user
+    content outside the markers is preserved byte-for-byte.
+
+    With ``check=True`` nothing is written: the result reports every path whose
+    content would change (`would_change`) and ``success`` is True only when the
+    tree is clean — the CI drift gate behind `ai-memory sync-agents --check`.
     """
     root = project_root(cwd)
-    synced_files: list[str] = []
+    memory_dir = local_memory_dir(root)
+    changed_paths: list[str] = []
 
     def _write_if_different(path: Path, content: str) -> None:
         if path.exists():
             existing = path.read_text(encoding="utf-8")
             if existing == content:
                 return
+        changed_paths.append(str(path))
+        if check:
+            return
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
-        synced_files.append(str(path))
+
+    def _remove_if_present(path: Path) -> None:
+        if not path.exists():
+            return
+        changed_paths.append(str(path))
+        if not check:
+            path.unlink()
 
     # Generic IDE rules
     _write_if_different(root / ".agents" / "rules" / "memory-store.md", build_agents_rule_memory())
@@ -302,40 +410,81 @@ def sync_agent_rules(cwd: str) -> dict[str, Any]:
     # Windsurf
     _write_if_different(root / ".windsurf" / "rules" / "memory-fabric.md", build_windsurf_rule())
 
-    # Claude Code — only update if Memory Fabric content already exists (don't create)
-    claude_md = root / "CLAUDE.md"
-    if claude_md.exists():
-        existing = claude_md.read_text(encoding="utf-8")
-        if "Memory Fabric" in existing:
-            new_content = re.sub(
-                r"(?:# Agent Instructions — Memory Fabric|## Memory Fabric — Semantic Store Agent Instructions).*$",
-                build_claude_md().strip(),
-                existing,
-                flags=re.DOTALL,
-            )
-            if new_content != existing:
-                claude_md.write_text(new_content, encoding="utf-8")
-                synced_files.append(str(claude_md))
+    # Project directives (v1.1): compose every `sync: true` steering section
+    # into one document, distributed as full files per tool. With no syncable
+    # directive left, the generated files are torn down cleanly.
+    directive_sections = _collect_sync_directives(memory_dir)
+    directives_synced = [name for name, _body in directive_sections]
+    directive_targets = {
+        root / ".agents" / "rules" / "project-directives.md": build_agents_rule_directives,
+        root / ".cursor" / "rules" / "project-directives.mdc": build_cursor_directives,
+        root / ".windsurf" / "rules" / "project-directives.md": build_windsurf_directives,
+    }
+    directives_block: str | None = None
+    if directive_sections:
+        directives_block = build_project_directives_block(directive_sections)
+        for target, builder in directive_targets.items():
+            _write_if_different(target, builder(directives_block))
+    else:
+        for target in directive_targets:
+            _remove_if_present(target)
 
-    # GitHub Copilot — only update if Memory Fabric content already exists
-    copilot_md = root / ".github" / "copilot-instructions.md"
-    if copilot_md.exists():
-        existing = copilot_md.read_text(encoding="utf-8")
-        if "Memory Fabric" in existing:
-            new_content = re.sub(
-                r"(?:# Agent Instructions — Memory Fabric|## Memory Fabric — Semantic Store Agent Instructions).*$",
-                build_copilot_md().strip(),
-                existing,
-                flags=re.DOTALL,
+    # Shared user files: refresh the instructions block inside its markers
+    # (with a one-time legacy-heading upgrade for CLAUDE.md/copilot), then
+    # replace/append/remove the project-directives block. Nothing outside the
+    # marker pairs is ever modified.
+    shared_files: list[tuple[Path, str]] = [
+        (root / "AGENTS.md", build_agents_md_instructions()),
+        (root / "CLAUDE.md", build_combined_instructions()),
+        (root / ".github" / "copilot-instructions.md", build_combined_instructions()),
+    ]
+    for path, instructions_inner in shared_files:
+        if path.exists():
+            old_text = path.read_text(encoding="utf-8")
+            new_text = old_text
+            if path.name == "AGENTS.md":
+                # AGENTS.md is the user's file: refresh only an existing marker
+                # block, never legacy-upgrade (doctor flags stale blocks instead).
+                if INSTRUCTIONS_BLOCK_START in new_text and INSTRUCTIONS_BLOCK_END in new_text:
+                    new_text = _splice_marker_block(
+                        new_text,
+                        INSTRUCTIONS_BLOCK_START,
+                        INSTRUCTIONS_BLOCK_END,
+                        instructions_inner,
+                    )
+            elif "Memory Fabric" in new_text:
+                new_text = _refresh_instructions_block(new_text, instructions_inner)
+            new_text = _splice_marker_block(
+                new_text, DIRECTIVES_BLOCK_START, DIRECTIVES_BLOCK_END, directives_block
             )
-            if new_content != existing:
-                copilot_md.write_text(new_content, encoding="utf-8")
-                synced_files.append(str(copilot_md))
+            if new_text != old_text:
+                _write_if_different(path, new_text)
+        elif directives_block is not None:
+            # No file yet: create it holding just the directives block so
+            # AGENTS.md-only readers still receive the project directives.
+            _write_if_different(
+                path,
+                wrap_managed_block(DIRECTIVES_BLOCK_START, directives_block, DIRECTIVES_BLOCK_END)
+                + "\n",
+            )
 
+    if check:
+        clean = not changed_paths
+        return {
+            "success": clean,
+            "message": (
+                "Agent files are in sync."
+                if clean
+                else f"{len(changed_paths)} file(s) out of sync — run `ai-memory sync-agents`."
+            ),
+            "would_change": changed_paths,
+            "directives_synced": directives_synced,
+        }
     return {
         "success": True,
-        "message": f"Synchronized {len(synced_files)} file(s).",
-        "synced_files": synced_files,
+        "message": f"Synchronized {len(changed_paths)} file(s).",
+        "synced_files": changed_paths,
+        "directives_synced": directives_synced,
     }
 
 
@@ -435,6 +584,13 @@ def doctor(cwd: str, check_network: bool = False) -> DoctorResult:
             errors.append(f"{path}: priority must be high, medium, or low")
         if not isinstance(metadata.get("tags"), list):
             errors.append(f"{path}: tags must be an inline list")
+        # v1.1 routing keys: optional, but strictly boolean when present.
+        for routing_key in ("sync", "context"):
+            if routing_key in metadata and not isinstance(metadata[routing_key], bool):
+                errors.append(
+                    f"{path}: `{routing_key}` must be a boolean (true/false), "
+                    f"got: {metadata[routing_key]!r}"
+                )
 
     index_path = memory_dir / "index.md"
     if not index_path.exists():
@@ -520,6 +676,9 @@ def doctor(cwd: str, check_network: bool = False) -> DoctorResult:
                 errors.append(f"Failed to check memory-store index consistency: {exc}")
 
     _check_legacy_flat_sections(memory_dir, warnings)
+    _check_directive_budget(memory_dir, warnings)
+    _check_steering_secrets(memory_dir, warnings)
+    _check_stale_fabric_blocks(cwd, warnings)
     _check_hook_health(cwd, warnings)
     _check_install_drift(warnings)
     _check_llm_provider(warnings, check_network=check_network)
@@ -560,6 +719,121 @@ def _check_legacy_flat_sections(memory_dir: Path, warnings: list[str]) -> None:
                 f"`{section}.md` is a hand-written root section, but under the store-first "
                 f"model it must be a generated map over memory-store/{section}/. Run "
                 "`ai-memory migrate` to split its content into the store and regenerate the map."
+            )
+
+
+_DIRECTIVE_BUDGET_DEFAULT = 3000
+
+
+def _steering_files(memory_dir: Path) -> list[Path]:
+    return [
+        path
+        for path in sorted(memory_dir.glob("*.md"))
+        if not _is_ignored_local_memory_path(memory_dir, path) and _is_steering_file(path)
+    ]
+
+
+def _check_directive_budget(memory_dir: Path, warnings: list[str]) -> None:
+    """Warn when the always-loaded context surface outgrows its budget.
+
+    The surface is the global Tier 0 file plus every `context: true` steering
+    section — all of it injected in full into every session, exempt from the
+    normal token budget, so nothing else pushes back on its growth. The
+    `sync: true` block is sized separately in the message: synced directives
+    live in per-tool files, not in MCP context, so they don't count against
+    this budget.
+    """
+    threshold = _DIRECTIVE_BUDGET_DEFAULT
+    try:
+        env_threshold = int(os.environ.get("MEMORY_FABRIC_DIRECTIVE_BUDGET", ""))
+        if env_threshold > 0:
+            threshold = env_threshold
+    except (ValueError, TypeError):
+        pass
+
+    context_tokens = 0
+    sync_tokens = 0
+    tier0 = global_memory_dir() / "directives.md"
+    if tier0.exists():
+        # An unreadable Tier 0 file just drops out of the size estimate.
+        with contextlib.suppress(OSError, UnicodeDecodeError):
+            context_tokens += estimate_tokens(tier0.read_text(encoding="utf-8"))
+    for path in _steering_files(memory_dir):
+        try:
+            tokens = estimate_tokens(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError):
+            continue
+        if _steering_context_enabled(path):
+            context_tokens += tokens
+        if _steering_sync_enabled(path):
+            sync_tokens += tokens
+
+    if context_tokens > threshold:
+        warnings.append(
+            f"Always-loaded context surface is ~{context_tokens} tokens (budget: {threshold}; "
+            f"override via MEMORY_FABRIC_DIRECTIVE_BUDGET). Every session pays this in full — "
+            f"trim the global Tier 0 file or set `context: false` on long steering sections "
+            f"(synced directives reach file-reading agents anyway; the `sync: true` block is "
+            f"~{sync_tokens} tokens and costs no context)."
+        )
+
+
+def _check_steering_secrets(memory_dir: Path, warnings: list[str]) -> None:
+    """Detect-only secret scan over hand-curated steering files.
+
+    Hand edits bypass the write path's redaction, so doctor re-runs the same
+    detector here — warning only, never rewriting the file.
+    """
+    for path in _steering_files(memory_dir):
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        _redacted, matches = redact_secrets(text)
+        if matches:
+            warnings.append(
+                f"{path}: {matches} potential secret(s) detected in this hand-curated steering "
+                "file (hand edits bypass write-path redaction). Remove them and rotate any real "
+                "credentials — doctor never rewrites files."
+            )
+
+
+def _check_stale_fabric_blocks(cwd: str, warnings: list[str]) -> None:
+    """Flag fabric headings living outside managed marker blocks.
+
+    Pre-v1.1 syncs wrote heading-to-EOF blocks into the shared user files with
+    no markers. Sync now only rewrites inside its markers, so an unmarked
+    fabric block will drift stale forever — the user must delete it once
+    (CLAUDE.md/copilot get auto-upgraded by sync; AGENTS.md never does, by
+    design, so this is the only signal for it).
+    """
+    root = project_root(cwd)
+    marker_block_res = [
+        re.compile(
+            re.escape(start) + r".*?" + re.escape(end),
+            re.DOTALL,
+        )
+        for start, end in (
+            (INSTRUCTIONS_BLOCK_START, INSTRUCTIONS_BLOCK_END),
+            (DIRECTIVES_BLOCK_START, DIRECTIVES_BLOCK_END),
+        )
+    ]
+    for relative in ("AGENTS.md", "CLAUDE.md", ".github/copilot-instructions.md"):
+        path = root / relative
+        if not path.exists():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        outside = text
+        for pattern in marker_block_res:
+            outside = pattern.sub("", outside)
+        if _FABRIC_HEADING_RE.search(outside):
+            warnings.append(
+                f"{relative} contains a Memory Fabric block outside the managed markers "
+                "(stale content from a pre-1.1 sync). Delete that block by hand and re-run "
+                "`ai-memory sync-agents` — sync only rewrites content inside its markers."
             )
 
 

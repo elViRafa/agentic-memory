@@ -142,6 +142,16 @@ def write_local_memory(
             except FrontmatterError:
                 pass  # content merely starts with "---"; treat it as plain body text
 
+        # Routing keys on steering sections (v1.1) are strictly boolean; reject
+        # early so a typo like `sync: yes` fails the write instead of silently
+        # falling back to the default routing until doctor happens to run.
+        for routing_key in ("sync", "context"):
+            if routing_key in metadata and not isinstance(metadata[routing_key], bool):
+                raise ValueError(
+                    f"Frontmatter key `{routing_key}` must be a boolean (true/false); "
+                    f"got: {metadata[routing_key]!r}"
+                )
+
         redacted, redactions = redact_secrets(input_body)
         warnings = ["Detected and redacted secrets before writing memory."] if redactions else []
         if recovery_warning:

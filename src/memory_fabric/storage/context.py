@@ -21,6 +21,7 @@ from memory_fabric.storage._shared import (
     _path_to_store_path,
     _read_memory_path,
     _safe_parse_for_sort,
+    _steering_context_enabled,
     estimate_tokens,
 )
 
@@ -239,13 +240,20 @@ def read_combined_context(
 
 
 def _steering_section_files(memory_dir: Path) -> list[Path]:
-    """Root section files marked as steering directives (always loaded in full)."""
+    """Root steering section files routed into context (always loaded in full).
+
+    Steering files with an effective ``context: false`` flag are excluded
+    entirely: they are distributed through `sync-agents` per-tool files
+    instead, and never compete for the token budget either.
+    """
     if not memory_dir.exists():
         return []
     return [
         path
         for path in sorted(memory_dir.glob("*.md"))
-        if not _is_ignored_local_memory_path(memory_dir, path) and _is_steering_file(path)
+        if not _is_ignored_local_memory_path(memory_dir, path)
+        and _is_steering_file(path)
+        and _steering_context_enabled(path)
     ]
 
 

@@ -28,6 +28,7 @@ from memory_fabric.storage._shared import (
     _path_to_store_path,
     _read_memory_path,
     _safe_parse_for_sort,
+    _steering_context_enabled,
     _write_markdown_if_changed,
 )
 from memory_fabric.templates import build_empty_section, now_iso
@@ -94,10 +95,15 @@ def _compile_consolidated_memory(memory_dir: Path) -> str:
         and not _is_store_path(memory_dir, path)
         and not _is_steering_file(path)
     ]
+    # Mirror read_combined_context's routing: `context: false` steering files
+    # are distributed via sync-agents, so the compiled cache must omit them
+    # too or the cache fast path would leak them back into context.
     steering_files = [
         path
         for path in sorted(memory_dir.glob("*.md"))
-        if not _is_ignored_local_memory_path(memory_dir, path) and _is_steering_file(path)
+        if not _is_ignored_local_memory_path(memory_dir, path)
+        and _is_steering_file(path)
+        and _steering_context_enabled(path)
     ]
     store_root = memory_dir / "memory-store"
     store_files = (
