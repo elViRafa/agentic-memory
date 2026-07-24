@@ -37,7 +37,7 @@ Memory is stored as human-readable Markdown with YAML frontmatter. No vector dat
 
 ## Status
 
-**v1.1.0 — project directives: hand-curated steering distributed to every agent vendor.
+**v1.1.1 — project directives: hand-curated steering distributed to every agent vendor.
 [Live on PyPI](https://pypi.org/project/memory-fabric/).**
 Core CLI and MCP tools work end-to-end. See [`ROADMAP.md`](ROADMAP.md) for what
 shipped, what's in progress, and what's next.
