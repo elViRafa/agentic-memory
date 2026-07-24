@@ -163,10 +163,17 @@ def _run_git(cwd: str, *args: str) -> str:
 @unittest.skipUnless(_GIT, "git is required for merge-driver integration tests")
 class EndToEndGitMergeTests(unittest.TestCase):
     def test_two_branches_appending_different_facts_merge_cleanly(self) -> None:
-        with tempfile.TemporaryDirectory() as temp:
+        # ignore_cleanup_errors: git may still be finishing work inside .git/objects
+        # when the context manager tears the tree down, which surfaced on macOS CI as
+        # "OSError: [Errno 66] Directory not empty: 'objects'". gc.auto=0 below removes
+        # the usual cause; this keeps a lost race from failing an otherwise green test.
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp:
             _run_git(temp, "init", "-q")
             _run_git(temp, "config", "user.email", "t@t.com")
             _run_git(temp, "config", "user.name", "T")
+            # Keep git from forking a background `gc --auto` that writes objects
+            # concurrently with the temp-dir cleanup.
+            _run_git(temp, "config", "gc.auto", "0")
 
             initialize_memory_fabric(temp)
             write_memory_store(temp, "decisions/shared", "Shared baseline fact.", title="Shared")
