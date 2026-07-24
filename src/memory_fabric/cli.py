@@ -279,7 +279,7 @@ def main(argv: list[str] | None = None) -> int:
             _print_result(query_result, args.json)
             return 0
         if args.command == "sync-agents":
-            sync_result = sync_agent_rules(cwd)
+            sync_result = sync_agent_rules(cwd, check=args.check)
             _print_result(sync_result, args.json)
             return 0 if sync_result.get("success") else 1
         if args.command == "sync-global":
@@ -624,9 +624,14 @@ def build_parser() -> argparse.ArgumentParser:
     query_parser.add_argument("query")
     query_parser.add_argument("--max-results", type=int, default=10)
 
-    subparsers.add_parser(
+    sync_agents_parser = subparsers.add_parser(
         "sync-agents",
-        help="Synchronize agent instruction files using AGENTS.md as the source of truth",
+        help="Regenerate per-tool agent instruction files and project directives",
+    )
+    sync_agents_parser.add_argument(
+        "--check",
+        action="store_true",
+        help="CI drift gate: write nothing, exit 1 if any generated file would change",
     )
     subparsers.add_parser("sync-global", help="Preview local-to-global promotion")
 
