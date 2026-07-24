@@ -59,7 +59,12 @@ class IsolatedProjectTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self._temp_ctx = tempfile.TemporaryDirectory()
         self._home_ctx = tempfile.TemporaryDirectory()
-        self.temp = self._temp_ctx.name
+        # sync_agent_rules resolves cwd internally, so the paths it reports back
+        # are canonical. Resolve the temp root here too, or comparing against it
+        # breaks on macOS runners (/var -> /private/var) and on Windows runners
+        # whose account name needs an 8.3 short-name alias (RUNNER~1 vs
+        # runneradmin) — see the same note in tests/test_migrate.py.
+        self.temp = str(Path(self._temp_ctx.name).resolve())
         os.environ["MEMORY_FABRIC_HOME"] = self._home_ctx.name
         initialize_memory_fabric(self.temp)
 

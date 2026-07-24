@@ -175,6 +175,7 @@ def initialize_memory_fabric(cwd: str) -> InitResult:
     frontmatter, and generate .ai-memory/.gitignore for transient artifacts.
     """
 
+
 @mcp.tool()
 def read_combined_context(cwd: str, max_tokens: int = 4000) -> ContextBundle:
     """
@@ -183,11 +184,13 @@ def read_combined_context(cwd: str, max_tokens: int = 4000) -> ContextBundle:
     and an omission notice instead of partial broken Markdown.
     """
 
+
 @mcp.tool()
 def read_section(cwd: str, section: str, max_tokens: int = 8000) -> MemorySection:
     """
     Return one memory section by stable section name, respecting token limits.
     """
+
 
 @mcp.tool()
 def keyword_search(cwd: str, query: str, max_results: int = 10) -> list[SearchResult]:
@@ -195,6 +198,7 @@ def keyword_search(cwd: str, query: str, max_results: int = 10) -> list[SearchRe
     Search global and local memory with ripgrep when available, falling back to
     pure Python text matching when rg is missing.
     """
+
 
 @mcp.tool()
 def write_local_memory(
@@ -207,6 +211,7 @@ def write_local_memory(
     Append to or replace a project memory section after validation,
     sanitization, and file locking.
     """
+
 
 @mcp.tool()
 def propose_memory_patch(cwd: str, instructions: str) -> PatchPreview:
@@ -226,6 +231,7 @@ class InitResult(TypedDict):
     files_created: list[str]
     warnings: list[str]
 
+
 class ContextBundle(TypedDict):
     text: str
     included_sections: list[str]
@@ -233,6 +239,7 @@ class ContextBundle(TypedDict):
     token_budget: int
     estimated_tokens: int
     warnings: list[str]
+
 
 class MemorySection(TypedDict):
     section: str
@@ -242,17 +249,20 @@ class MemorySection(TypedDict):
     truncated: bool
     warnings: list[str]
 
+
 class SearchResult(TypedDict):
     section: str
     path: str
     line: int
     snippet: str
 
+
 class WriteResult(TypedDict):
     changed: bool
     path: str
     redactions: int
     warnings: list[str]
+
 
 class PatchPreview(TypedDict):
     patch: str
