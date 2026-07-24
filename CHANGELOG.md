@@ -8,6 +8,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.1] — 2026-07-24
+
+First published release of the 1.1 line. 1.1.0 was tagged but never
+published — its release run failed on a test that compared a raw temporary
+path against the canonical one storage returns, so every macOS and Windows
+job failed and the publish steps were skipped. The tag could not be moved,
+so the fixed tree ships as 1.1.1. **The user-facing feature set is exactly
+the 1.1.0 entry below**; nothing was added or removed.
+
+### Fixed
+
+- **Path canonicalization in the `sync-agents` test suite.** The suite
+  compared `would_change` paths against an unresolved `tempfile` root, which
+  only matches where the temp root has no alias — it broke on macOS
+  (`/var` → `/private/var`) and Windows (8.3 short name `RUNNER~1` vs
+  `runneradmin`). The temp root is now resolved once in the shared `setUp`.
+- **`ruff format` compliance for Markdown code blocks.** ruff 0.16 formats
+  Python blocks embedded in `.md` files, so the repo-wide format check began
+  failing on fenced examples in `plan.md`. Reformatted; no content change.
+- **Temp-directory teardown race in the merge-driver integration test.** Git
+  could still be writing `.git/objects` when the temp tree was removed,
+  surfacing on macOS as `OSError: [Errno 66] Directory not empty`. Auto-gc is
+  disabled in the test repo and a lost cleanup race no longer fails the test.
+
+No source changes — `src/` is byte-identical to 1.1.0 apart from the version
+string.
+
 ## [1.1.0] — 2026-07-24
 
 > Project directives: user-created, hand-curated development guidelines that
