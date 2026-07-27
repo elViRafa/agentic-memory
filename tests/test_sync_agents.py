@@ -19,7 +19,9 @@ from memory_fabric.storage import (
 from memory_fabric.templates import (
     DIRECTIVES_BLOCK_END,
     DIRECTIVES_BLOCK_START,
+    GRACEFUL_DEGRADATION_RULE,
     INSTRUCTIONS_BLOCK_START,
+    MEMORY_INSTRUCTIONS,
 )
 
 
@@ -124,6 +126,130 @@ class SyncCompositionTests(IsolatedProjectTestCase):
         self.assertTrue(first["synced_files"])
         second = sync_agent_rules(self.temp)
         self.assertEqual(second["synced_files"], [])
+
+
+class GracefulDegradationClauseTests(IsolatedProjectTestCase):
+    """v1.1.2: the memory protocol must carry its own opt-out.
+
+    Field report: on a machine without the MCP server configured, an agent hit
+    "MANDATORY STARTUP … No exceptions", could not comply, declared the whole
+    file inapplicable, and fell back to its native memory — taking the project
+    directives in the same file down with it. Every artifact that embeds the
+    protocol has to carry the escape hatch, or the one the agent happens to
+    read is the one that lacks it.
+    """
+
+    # Every generated file whose content embeds MEMORY_INSTRUCTIONS.
+    PROTOCOL_ARTIFACTS = (
+        "AGENTS.md",
+        "CLAUDE.md",
+        ".github/copilot-instructions.md",
+        ".agents/rules/memory-store.md",
+        ".cursor/rules/memory-fabric.mdc",
+        ".windsurf/rules/memory-fabric.md",
+    )
+
+    def test_clause_is_rule_zero_of_the_critical_rules(self) -> None:
+        heading = "🚨 **CRITICAL RULES - READ FIRST** 🚨\n"
+        self.assertIn(heading + GRACEFUL_DEGRADATION_RULE, MEMORY_INSTRUCTIONS)
+        # Says all three things: skip the protocol, don't substitute, directives stand.
+        self.assertIn("skip this memory protocol entirely", GRACEFUL_DEGRADATION_RULE)
+        self.assertIn("do NOT substitute another memory system", GRACEFUL_DEGRADATION_RULE)
+        self.assertIn("never excuse ignoring project rules", GRACEFUL_DEGRADATION_RULE)
+        # The startup rule's "No exceptions" is what the agent fixated on; it
+        # has to name rule 0 rather than leave the two rules to be adjudicated.
+        self.assertIn("No exceptions — other than rule 0 above", MEMORY_INSTRUCTIONS)
+
+    def test_every_artifact_written_by_init_carries_the_clause(self) -> None:
+        for relative in self.PROTOCOL_ARTIFACTS:
+            path = Path(self.temp) / relative
+            self.assertTrue(path.exists(), f"{relative} not scaffolded by init")
+            self.assertIn(GRACEFUL_DEGRADATION_RULE, path.read_text(encoding="utf-8"), relative)
+
+    def test_every_artifact_still_carries_the_clause_after_sync(self) -> None:
+        _write_directive(self.temp, "dev-guidelines", "# Dev\n\nRule.\n")
+        sync_agent_rules(self.temp)
+        for relative in self.PROTOCOL_ARTIFACTS:
+            self.assertIn(
+                GRACEFUL_DEGRADATION_RULE,
+                (Path(self.temp) / relative).read_text(encoding="utf-8"),
+                relative,
+            )
+
+    def test_stale_pre_1_1_2_block_is_refreshed_with_the_clause(self) -> None:
+        """A file synced by 1.1.1 has a marker block without rule 0; the next
+        sync must replace it rather than leave the old protocol in place."""
+        claude_md = Path(self.temp) / "CLAUDE.md"
+        stale = claude_md.read_text(encoding="utf-8").replace(GRACEFUL_DEGRADATION_RULE, "")
+        claude_md.write_text(stale, encoding="utf-8")
+        self.assertNotIn(GRACEFUL_DEGRADATION_RULE, stale)
+
+        result = sync_agent_rules(self.temp)
+        self.assertIn(str(claude_md), result["synced_files"])
+        self.assertIn(GRACEFUL_DEGRADATION_RULE, claude_md.read_text(encoding="utf-8"))
+
+
+class BlockOrderTests(IsolatedProjectTestCase):
+    """v1.1.2: project directives lead the shared files.
+
+    An agent that skips the memory protocol (no MCP tools) has already read the
+    project rules by the time it gets there.
+    """
+
+    SHARED_FILES = ("AGENTS.md", "CLAUDE.md", ".github/copilot-instructions.md")
+
+    def test_new_directives_block_is_inserted_above_the_instructions_block(self) -> None:
+        _write_directive(self.temp, "dev-guidelines", "# Dev\n\nRule.\n")
+        sync_agent_rules(self.temp)
+        for relative in self.SHARED_FILES:
+            text = (Path(self.temp) / relative).read_text(encoding="utf-8")
+            self.assertLess(
+                text.index(DIRECTIVES_BLOCK_START), text.index(INSTRUCTIONS_BLOCK_START), relative
+            )
+
+    def test_existing_block_order_is_never_rearranged(self) -> None:
+        """Files already carrying both blocks keep the layout their user has."""
+        agents_md = Path(self.temp) / "AGENTS.md"
+        instructions_first = agents_md.read_text(encoding="utf-8").rstrip("\n")
+        agents_md.write_text(
+            instructions_first
+            + "\n\n"
+            + DIRECTIVES_BLOCK_START
+            + "\nstale directives\n"
+            + DIRECTIVES_BLOCK_END
+            + "\n",
+            encoding="utf-8",
+        )
+        _write_directive(self.temp, "dev-guidelines", "# Dev\n\nRule.\n")
+        sync_agent_rules(self.temp)
+
+        text = agents_md.read_text(encoding="utf-8")
+        self.assertLess(text.index(INSTRUCTIONS_BLOCK_START), text.index(DIRECTIVES_BLOCK_START))
+        self.assertIn("Rule.", text)
+        self.assertNotIn("stale directives", text)
+
+    def test_insert_then_remove_round_trips_byte_for_byte(self) -> None:
+        """Prepending a block and later tearing it down must restore the file
+        exactly — the blank-line separator is added and removed on the same side."""
+        for relative in self.SHARED_FILES:
+            path = Path(self.temp) / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            user_top = f"# {relative}\n\nHand-written intro.\n\n"
+            baseline = user_top + path.read_text(encoding="utf-8") if path.exists() else user_top
+            path.write_text(baseline, encoding="utf-8")
+
+            _write_directive(self.temp, "dev-guidelines", "# Dev\n\nRule.\n")
+            sync_agent_rules(self.temp)
+            self.assertIn(DIRECTIVES_BLOCK_START, path.read_text(encoding="utf-8"), relative)
+
+            _write_directive(self.temp, "dev-guidelines", "# Dev\n\nRule.\n", sync=False)
+            _disable_builtin_sync(self.temp)
+            sync_agent_rules(self.temp)
+            self.assertEqual(path.read_text(encoding="utf-8"), baseline, relative)
+
+            # Restore syncable built-ins for the next file in the loop.
+            for name in ("framework-rules", "ubiquitous-language"):
+                _write_directive(self.temp, name, f"# {name}\n")
 
 
 class MarkerBlockTests(IsolatedProjectTestCase):

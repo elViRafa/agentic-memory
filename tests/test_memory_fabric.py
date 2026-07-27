@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -200,6 +201,41 @@ class MemoryFabricTests(unittest.TestCase):
                 self.assertGreater(snap["files"], 0)
                 self.assertGreater(snap["size_bytes"], 0)
                 self.assertIn("created", snap)
+
+    def test_cli_accepts_json_flag_before_or_after_the_subcommand(self) -> None:
+        """v1.1.2: `--json` used to parse only in the global position.
+
+        The trailing form must produce JSON, the global form must keep working
+        (a `store_true` default on the subparser would silently reset it), and
+        neither form may leak into a run that asked for plain output.
+        """
+        import contextlib
+        import io
+        import json as _json
+
+        from memory_fabric.cli import main
+
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+
+            def _run(argv: list[str]) -> str:
+                buffer = io.StringIO()
+                with contextlib.redirect_stdout(buffer):
+                    self.assertEqual(main(argv), 0)
+                return buffer.getvalue()
+
+            for argv in (
+                ["--cwd", temp, "--json", "doctor", "--offline"],
+                ["--cwd", temp, "doctor", "--offline", "--json"],
+            ):
+                payload = _json.loads(_run(argv))
+                self.assertIn("checked_files", payload, argv)
+
+            plain = _run(["--cwd", temp, "doctor", "--offline"])
+            self.assertTrue(plain.startswith("ok: "), plain[:40])
+
+            # Nested subcommands take it too (`ai-memory store list --json`).
+            self.assertIn("entries", _json.loads(_run(["--cwd", temp, "store", "list", "--json"])))
 
     def test_cli_rollback_list_and_missing_to(self) -> None:
         from memory_fabric.cli import main
@@ -770,11 +806,88 @@ class MemoryFabricTests(unittest.TestCase):
             metadata.pop("generated_from", None)
             from memory_fabric.frontmatter import dump_frontmatter
 
-            arch.write_text(dump_frontmatter(metadata, "# hand-written\n"), encoding="utf-8")
+            arch.write_text(
+                dump_frontmatter(metadata, "# hand-written\n\nA fact recorded by hand.\n"),
+                encoding="utf-8",
+            )
 
             warnings = doctor(temp)["warnings"]
             self.assertTrue(any("hand-written root section" in w for w in warnings))
             self.assertTrue(any("ai-memory migrate" in w for w in warnings))
+
+    def test_doctor_does_not_flag_an_empty_legacy_map_stub(self) -> None:
+        """v1.1.2: an unstamped map with nothing in it is not a migration task.
+
+        `ai-memory migrate` skips empty bodies and init starter templates, so
+        warning about them was a nag no command could ever clear (reported for
+        `decisions.md` with an empty `memory-store/decisions/`). Only bodies
+        migrate would actually extract from are flagged.
+        """
+        from memory_fabric.frontmatter import dump_frontmatter
+
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            decisions = Path(temp) / ".ai-memory" / "decisions.md"
+            metadata, starter_body = parse_frontmatter(decisions.read_text(encoding="utf-8"))
+            metadata.pop("generated", None)
+
+            for body in ("", "\n\n", "# Decisions Map\n", starter_body):
+                decisions.write_text(dump_frontmatter(metadata, body), encoding="utf-8")
+                warnings = doctor(temp)["warnings"]
+                self.assertFalse(
+                    [w for w in warnings if "hand-written root section" in w],
+                    f"empty stub flagged for body={body!r}",
+                )
+
+    @unittest.skipUnless(shutil.which("git"), "git is required for the gitignore check")
+    def test_doctor_warns_when_generated_agent_files_are_gitignored(self) -> None:
+        """The generated files are the whole delivery mechanism: ignored and
+        untracked, sync-agents keeps succeeding while nobody else ever sees the
+        protocol or the project directives."""
+        import subprocess
+
+        with tempfile.TemporaryDirectory() as temp:
+            subprocess.run(["git", "init"], cwd=temp, check=True, capture_output=True)
+            initialize_memory_fabric(temp)
+
+            self.assertFalse(
+                [w for w in doctor(temp)["warnings"] if "gitignored" in w],
+                "clean repo must not warn",
+            )
+
+            (Path(temp) / ".gitignore").write_text("AGENTS.md\n.cursor/\n", encoding="utf-8")
+            warnings = [w for w in doctor(temp)["warnings"] if "gitignored" in w]
+            self.assertEqual(len(warnings), 1, warnings)
+            self.assertIn("AGENTS.md", warnings[0])
+            self.assertIn(".cursor/rules/memory-fabric.mdc", warnings[0])
+            self.assertNotIn("CLAUDE.md", warnings[0])
+
+            # A force-added file is delivered despite the pattern: not a warning.
+            subprocess.run(
+                ["git", "add", "-f", "AGENTS.md"], cwd=temp, check=True, capture_output=True
+            )
+            warnings = [w for w in doctor(temp)["warnings"] if "gitignored" in w]
+            self.assertEqual(len(warnings), 1, warnings)
+            self.assertNotIn("AGENTS.md", warnings[0])
+
+    def test_doctor_gitignore_check_is_silent_outside_a_git_repo(self) -> None:
+        import subprocess
+
+        with tempfile.TemporaryDirectory() as temp:
+            if shutil.which("git"):
+                inside = subprocess.run(
+                    ["git", "rev-parse", "--is-inside-work-tree"],
+                    cwd=temp,
+                    capture_output=True,
+                    text=True,
+                )
+                # A runner whose TMPDIR sits inside a checkout would make this
+                # a git repo after all, and the check would (correctly) fire.
+                if inside.returncode == 0:
+                    self.skipTest("temp directory is inside a git work tree")
+            initialize_memory_fabric(temp)
+            (Path(temp) / ".gitignore").write_text("AGENTS.md\n", encoding="utf-8")
+            self.assertFalse([w for w in doctor(temp)["warnings"] if "gitignored" in w])
 
     def test_dream_ingests_git_diff_and_scans_secrets_and_marks_stale(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

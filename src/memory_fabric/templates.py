@@ -118,12 +118,31 @@ Thumbs.db
 # All platform-specific files are generated from these two blocks.
 # ---------------------------------------------------------------------------
 
-MEMORY_INSTRUCTIONS = """## Memory Fabric — Semantic Store Agent Instructions
+# Rule 0 of the protocol, kept as a named constant so every generated artifact
+# embeds byte-identical text and tests can assert on one source of truth.
+#
+# Field report (consumer project, v1.1.1): on a machine where the memory-fabric
+# MCP server was not configured, an agent read the "MANDATORY STARTUP … No
+# exceptions" rule, could not comply, concluded the whole instruction file was
+# inapplicable, and fell back to its own native memory — silently dropping the
+# project directives that live in the same file. The protocol needs an explicit
+# exit that does not take the surrounding project rules down with it.
+GRACEFUL_DEGRADATION_RULE = (
+    "0. **If the memory-fabric MCP tools are NOT available in this session, skip this memory "
+    "protocol entirely** — do NOT substitute another memory system for it. Any Project "
+    "Directives block (in this file, or in a generated `project-directives` rule file) still "
+    "applies in full; missing MCP tools never excuse ignoring project rules.\n"
+)
+
+MEMORY_INSTRUCTIONS = (
+    """## Memory Fabric — Semantic Store Agent Instructions
 
 🚨 **CRITICAL RULES - READ FIRST** 🚨
-1. **NEVER use the native VS Code Copilot `memory` tool.** You MUST ONLY use the `memory-fabric` MCP tools (like `write_memory_store_tool`). The native `memory` tool writes to VS Code workspace storage, bypassing this project's memory system.
+"""
+    + GRACEFUL_DEGRADATION_RULE
+    + """1. **NEVER use the native VS Code Copilot `memory` tool.** You MUST ONLY use the `memory-fabric` MCP tools (like `write_memory_store_tool`). The native `memory` tool writes to VS Code workspace storage, bypassing this project's memory system.
 2. **NEVER use raw file system tools** (like `create_file`, `write_to_file`, `bash`, etc.) to read or write files inside the `.ai-memory/` directory. Doing so bypasses secret scanning, token budgeting, and the Dreaming system. (Sole exception: hand-curated `role: steering` directive files — see the project directives exception in section 3.)
-3. **MANDATORY STARTUP:** You MUST call `read_combined_context_tool(cwd="<absolute project root path>")` before doing anything else at the start of a session. No exceptions.
+3. **MANDATORY STARTUP:** You MUST call `read_combined_context_tool(cwd="<absolute project root path>")` before doing anything else at the start of a session. No exceptions — other than rule 0 above, which is the only sanctioned way out of this protocol.
    > **MCP Resources alternative:** If your client supports MCP Resources and has auto-fetched `memory-fabric://context/<encoded-cwd>`, that context is already in your system prompt — skip the tool call.
 4. **NEVER call `dream_tool` as a substitute for saving new knowledge.** Before triggering any Dream tool, you MUST first call `write_memory_store_tool` to persist specific, isolated memories from the current session (e.g., bugs fixed, features built, architecture decisions). Dreaming consolidates existing memory — it does NOT capture new knowledge.
 5. **MANDATORY SESSION END:** Before your final response in a session, you MUST call `write_session_journal_tool` to log what was accomplished. Skip ONLY for trivial Q&A sessions with no code changes, decisions, or debugging.
@@ -161,6 +180,7 @@ Parameters:
 - `files_changed`: List of files created or significantly modified (optional).
 - `session_label`: Short descriptive label, e.g. `"auth-refactor"` (optional).
 """
+)
 
 DREAMING_INSTRUCTIONS = """## Memory Fabric — Dreaming Process Instructions
 
