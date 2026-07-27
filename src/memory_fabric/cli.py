@@ -450,6 +450,24 @@ def main(argv: list[str] | None = None) -> int:
     return 1
 
 
+def _json_flag_parent() -> argparse.ArgumentParser:
+    """Parent parser letting every subcommand accept a trailing `--json`.
+
+    `ai-memory doctor --json` used to be a parse error because `--json` only
+    existed on the top-level parser, which reads as arbitrary to anyone who has
+    used any other CLI. `SUPPRESS` as the default is load-bearing: argparse
+    parses a subcommand into its own namespace and copies every attribute over
+    the outer one, so a plain `store_true` default would reset the global form
+    (`ai-memory --json doctor`) back to False. Suppressed defaults are simply
+    absent from the sub-namespace unless the flag is actually given.
+    """
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument(
+        "--json", action="store_true", default=argparse.SUPPRESS, help="Print JSON output"
+    )
+    return common
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ai-memory", description="Memory Fabric CLI")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -459,8 +477,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--debug-llm", action="store_true", help="Enable LLM prompt and response logging"
     )
 
+    common = _json_flag_parent()
     subparsers = parser.add_subparsers(dest="command", required=True)
-    init_parser = subparsers.add_parser("init", help="Create .ai-memory scaffolding")
+
+    def add_command(name: str, **kwargs: Any) -> argparse.ArgumentParser:
+        """Register a subcommand that also accepts a trailing `--json`."""
+        return subparsers.add_parser(name, parents=[common], **kwargs)
+
+    init_parser = add_command("init", help="Create .ai-memory scaffolding")
     init_parser.add_argument(
         "--install-hooks", action="store_true", help="Install opt-in git hooks"
     )
@@ -472,15 +496,15 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument(
         "--memory-prompt", default=None, help="Steering instructions for agent memory capture"
     )
-    subparsers.add_parser("status", help="Show memory status and capture stats")
-    doctor_parser = subparsers.add_parser("doctor", help="Validate memory files and environment")
+    add_command("status", help="Show memory status and capture stats")
+    doctor_parser = add_command("doctor", help="Validate memory files and environment")
     doctor_parser.add_argument(
         "--offline",
         action="store_true",
         help="Skip the (best-effort, 2s timeout) PyPI version-drift check",
     )
 
-    verify_parser = subparsers.add_parser(
+    verify_parser = add_command(
         "verify", help="Check evidence citations still resolve (self-verifying memory)"
     )
     verify_parser.add_argument(
@@ -489,14 +513,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Report broken evidence without stamping review_status: broken-evidence",
     )
 
-    failure_parser = subparsers.add_parser(
+    failure_parser = add_command(
         "failure", help="Record an error -> fix pair (deduplicated by normalized error text)"
     )
     failure_parser.add_argument("--error", required=True, help="Error message/symptom")
     failure_parser.add_argument("--fix", required=True, help="What fixed it")
     failure_parser.add_argument("--tags", default="", help="Comma-separated extra tags")
 
-    merge_driver_parser = subparsers.add_parser(
+    merge_driver_parser = add_command(
         "merge-driver",
         help="Git merge driver backend (invoked by git itself, not meant for direct use)",
     )
@@ -506,7 +530,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     merge_driver_parser.add_argument("theirs", help="Path to their version (%%B)")
 
-    capture_parser = subparsers.add_parser(
+    capture_parser = add_command(
         "capture", help="Record a commit as episodic memory (passive capture)"
     )
     capture_parser.add_argument(
@@ -518,7 +542,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Also capture noise commits (merges, [bot] authors, chore:/style:/ci:/"
         "build(deps) prefixes, lockfile-only changes) that are skipped by default",
     )
-    session_start_parser = subparsers.add_parser(
+    session_start_parser = add_command(
         "session-start", help="Mark session start (for client SessionStart hooks)"
     )
     session_start_parser.add_argument(
@@ -528,14 +552,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit output in a specific client's hook-envelope format instead of "
         "the plain result (e.g. hookSpecificOutput.additionalContext)",
     )
-    subparsers.add_parser(
+    add_command(
         "guard-journal",
         help="Exit non-zero if no session journal was written (for client Stop hooks)",
     )
 
-    install_parser = subparsers.add_parser(
-        "install", help="Configure an MCP client to use memory-fabric"
-    )
+    install_parser = add_command("install", help="Configure an MCP client to use memory-fabric")
     install_parser.add_argument(
         "--client",
         required=True,
@@ -568,7 +590,7 @@ def build_parser() -> argparse.ArgumentParser:
         "if the chosen client has a supported hook adapter",
     )
 
-    dream_parser = subparsers.add_parser("dream", help="Run local memory maintenance")
+    dream_parser = add_command("dream", help="Run local memory maintenance")
     dream_parser.add_argument("--mode", choices=["light", "deep"], default="light")
     dream_parser.add_argument(
         "--apply", action="store_true", help="Apply candidate changes to live .ai-memory files"
@@ -586,7 +608,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--llm-review", action="store_true", help="Add optional qualitative LLM review notes"
     )
 
-    migrate_parser = subparsers.add_parser(
+    migrate_parser = add_command(
         "migrate",
         help="Split legacy hand-written sections into memory-store entries (store-first)",
     )
@@ -607,7 +629,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Skip LLM naming and use deterministic heading-based names",
     )
 
-    eval_parser = subparsers.add_parser("eval", help="Evaluate memory and Dreaming quality")
+    eval_parser = add_command("eval", help="Evaluate memory and Dreaming quality")
     eval_parser.add_argument(
         "--llm-review", action="store_true", help="Add optional qualitative LLM review notes"
     )
@@ -620,11 +642,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-save", action="store_true", help="Do not save eval reports under .ai-memory/evals"
     )
 
-    query_parser = subparsers.add_parser("query", help="Search memory")
+    query_parser = add_command("query", help="Search memory")
     query_parser.add_argument("query")
     query_parser.add_argument("--max-results", type=int, default=10)
 
-    sync_agents_parser = subparsers.add_parser(
+    sync_agents_parser = add_command(
         "sync-agents",
         help="Regenerate per-tool agent instruction files and project directives",
     )
@@ -633,9 +655,9 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="CI drift gate: write nothing, exit 1 if any generated file would change",
     )
-    subparsers.add_parser("sync-global", help="Preview local-to-global promotion")
+    add_command("sync-global", help="Preview local-to-global promotion")
 
-    rollback_parser = subparsers.add_parser("rollback", help="Restore local memory from a snapshot")
+    rollback_parser = add_command("rollback", help="Restore local memory from a snapshot")
     rollback_parser.add_argument(
         "--to", default=None, help="Snapshot name (run with --list to discover valid names)"
     )
@@ -643,9 +665,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--list", action="store_true", help="List available snapshots and exit"
     )
 
-    clean_parser = subparsers.add_parser(
-        "clean", help="Prune old dream snapshots and candidate stores"
-    )
+    clean_parser = add_command("clean", help="Prune old dream snapshots and candidate stores")
     clean_parser.add_argument(
         "--keep-snapshots",
         type=int,
@@ -662,10 +682,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run", action="store_true", help="Report what would be removed without deleting"
     )
 
-    store_parser = subparsers.add_parser("store", help="Memory store operations")
+    store_parser = add_command("store", help="Memory store operations")
     store_subs = store_parser.add_subparsers(dest="store_action")
 
-    store_write = store_subs.add_parser("write", help="Write a store file")
+    store_write = store_subs.add_parser("write", parents=[common], help="Write a store file")
     store_write.add_argument(
         "store_path", help="Semantic path (e.g. architecture/decisions/auth-service)"
     )
@@ -680,15 +700,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     store_write.add_argument("--mode", choices=["replace", "append"], default="replace")
 
-    store_read = store_subs.add_parser("read", help="Read a store file")
+    store_read = store_subs.add_parser("read", parents=[common], help="Read a store file")
     store_read.add_argument("store_path", help="Semantic path")
 
-    store_list = store_subs.add_parser("list", help="List store files")
+    store_list = store_subs.add_parser("list", parents=[common], help="List store files")
     store_list.add_argument("--prefix", default="", help="Filter by path prefix")
     store_list.add_argument("--tags", default="", help="Comma-separated tags to filter by")
     store_list.add_argument("--max-results", type=int, default=50)
 
-    store_delete = store_subs.add_parser("delete", help="Delete a store file")
+    store_delete = store_subs.add_parser("delete", parents=[common], help="Delete a store file")
     store_delete.add_argument("store_path", help="Semantic path")
 
     return parser

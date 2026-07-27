@@ -8,6 +8,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.2] — 2026-07-27
+
+> Graceful degradation: an agent that cannot reach the MCP tools now has a
+> sanctioned way to skip the memory protocol without discarding the project
+> rules that ship in the same file.
+
+### Fixed
+
+- **The memory protocol now yields cleanly when the MCP server is absent.**
+  Reported from a consumer project running 1.1.1: on a machine where the
+  memory-fabric MCP server was never configured, agents read the generated
+  instruction file, hit *"MANDATORY STARTUP: You MUST call
+  `read_combined_context_tool` … No exceptions"*, could not comply, and
+  fixated on the missing server — one concluded the entire file was
+  inapplicable and fell back to its own native memory, taking the project
+  directives in that same file down with it. `MEMORY_INSTRUCTIONS` now opens
+  with rule 0: if the tools are not available, skip the memory protocol
+  entirely, do **not** substitute another memory system, and keep obeying the
+  Project Directives regardless. It reaches every generated artifact —
+  `AGENTS.md`, `CLAUDE.md`, `.github/copilot-instructions.md`,
+  `.agents/rules/memory-store.md`, `.cursor/rules/memory-fabric.mdc`,
+  `.windsurf/rules/memory-fabric.md` — because they all compose the same
+  constant, and `sync-agents` refreshes marker-managed blocks in place, so
+  files written by 1.1.x pick the clause up on the next sync. The startup
+  rule's "No exceptions" — the exact sentence the agent got stuck on — now
+  names rule 0 as the one sanctioned way out, so the two rules don't have to
+  be adjudicated by the reader.
+- **`doctor` no longer nags about an empty legacy root map.** A map section
+  without `generated: true` was flagged as legacy hand-written content on
+  every run, even when the file was an empty stub or the untouched init
+  starter template (reported for `decisions.md` with an empty
+  `memory-store/decisions/`). `ai-memory migrate` skips exactly those files,
+  so no command could ever clear the warning. Doctor now mirrors migrate's own
+  skip rules and flags only bodies migrate would actually extract from; the
+  next Dream stamps the stub `generated: true` on its own.
+
+### Added
+
+- **`doctor` warns when generated agent files are gitignored.** The generated
+  files are the entire delivery mechanism — ignored and untracked, they are
+  regenerated locally forever while teammates, CI agents, and Copilot on
+  another checkout receive neither the memory protocol nor the project
+  directives, with nothing in the system noticing. `git check-ignore` (index
+  aware, so force-added files are correctly treated as delivered) now reports
+  the affected paths. Silent outside a git repo and when git is unavailable.
+- **Project directives lead the shared user files.** A directives block that
+  is not yet present in `AGENTS.md` / `CLAUDE.md` /
+  `.github/copilot-instructions.md` is inserted *above* the
+  memory-fabric:instructions block, so an agent that legitimately skips the
+  memory protocol has already read the project rules. Blocks that already
+  exist are never relocated — sync keeps rewriting them where the file has
+  them, so existing installs see no reordering.
+
+### Changed
+
+- **`--json` is accepted after the subcommand.** `ai-memory doctor --json` was
+  a parse error; only the global position (`ai-memory --json doctor`) worked.
+  Both forms now work, including nested store commands
+  (`ai-memory store list --json`). The global form is unaffected — the
+  subcommand flag uses a suppressed default so it cannot reset it.
+
+### Notes
+
+- Sync/context routing semantics are untouched.
+- Marker-block round-tripping stays byte-stable for content outside the
+  markers, in both insertion positions: the blank-line separator is stripped
+  from whichever side it was added to, so insert → remove → re-insert restores
+  the file exactly.
+- The clause reads "Any Project Directives block (in this file, or in a
+  generated `project-directives` rule file)" rather than "below", since the
+  directives block now leads the shared files and lives in a separate file for
+  the Cursor/Windsurf/`.agents` rule sets.
+
 ## [1.1.1] — 2026-07-24
 
 First published release of the 1.1 line. 1.1.0 was tagged but never

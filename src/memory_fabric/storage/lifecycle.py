@@ -303,12 +303,21 @@ _FABRIC_HEADING_RE = re.compile(
 )
 
 
-def _splice_marker_block(text: str, start: str, end: str, inner: str | None) -> str:
+def _splice_marker_block(
+    text: str, start: str, end: str, inner: str | None, insert_before: str | None = None
+) -> str:
     """Replace/append/remove a marker-managed block, touching nothing outside it.
 
     ``inner`` is the block's new content (markers added here); ``None`` removes
-    the block entirely. Appends add exactly one blank-line separator, and
-    removal strips that same separator so a later re-append round-trips.
+    the block entirely. A block that is already present is always replaced where
+    it stands — never relocated, so a file a user has arranged by hand keeps its
+    layout. A *new* block is inserted immediately above ``insert_before`` (a
+    marker string) when that marker is present, and appended otherwise.
+
+    Insertion adds exactly one blank-line separator on whichever side the new
+    block was joined, and removal strips that same separator, so
+    append/prepend → remove → re-insert round-trips content outside the markers
+    byte-for-byte.
     """
     pattern = re.compile(re.escape(start) + r".*?" + re.escape(end), re.DOTALL)
     match = pattern.search(text)
@@ -318,15 +327,23 @@ def _splice_marker_block(text: str, start: str, end: str, inner: str | None) -> 
             return text[: match.start()] + block + text[match.end() :]
         if not text.strip():
             return block + "\n"
+        anchor = text.find(insert_before) if insert_before else -1
+        if anchor != -1:
+            return text[:anchor] + block + "\n\n" + text[anchor:]
         separator = "\n" if text.endswith("\n") else "\n\n"
         return text + separator + block + "\n"
     if not match:
         return text
     before, after = text[: match.start()], text[match.end() :]
+    # Drop the newline that terminated the closing marker's line, then the one
+    # blank-line separator insertion added — before the block when it was
+    # appended, after it when it was inserted above another block.
     if after.startswith("\n"):
         after = after[1:]
     if before.endswith("\n\n"):
         before = before[:-1]
+    elif after.startswith("\n"):
+        after = after[1:]
     return before + after
 
 
@@ -433,6 +450,12 @@ def sync_agent_rules(cwd: str, check: bool = False) -> dict[str, Any]:
     # (with a one-time legacy-heading upgrade for CLAUDE.md/copilot), then
     # replace/append/remove the project-directives block. Nothing outside the
     # marker pairs is ever modified.
+    #
+    # A directives block that isn't in the file yet is inserted *above* the
+    # instructions block so project rules lead the file: an agent that skips
+    # the memory protocol (no MCP tools configured) has already read them.
+    # Blocks that already exist stay where the file has them — sync never
+    # reorders a file the user has been living with.
     shared_files: list[tuple[Path, str]] = [
         (root / "AGENTS.md", build_agents_md_instructions()),
         (root / "CLAUDE.md", build_combined_instructions()),
@@ -455,7 +478,11 @@ def sync_agent_rules(cwd: str, check: bool = False) -> dict[str, Any]:
             elif "Memory Fabric" in new_text:
                 new_text = _refresh_instructions_block(new_text, instructions_inner)
             new_text = _splice_marker_block(
-                new_text, DIRECTIVES_BLOCK_START, DIRECTIVES_BLOCK_END, directives_block
+                new_text,
+                DIRECTIVES_BLOCK_START,
+                DIRECTIVES_BLOCK_END,
+                directives_block,
+                insert_before=INSTRUCTIONS_BLOCK_START,
             )
             if new_text != old_text:
                 _write_if_different(path, new_text)
@@ -679,6 +706,7 @@ def doctor(cwd: str, check_network: bool = False) -> DoctorResult:
     _check_directive_budget(memory_dir, warnings)
     _check_steering_secrets(memory_dir, warnings)
     _check_stale_fabric_blocks(cwd, warnings)
+    _check_ignored_agent_files(cwd, warnings)
     _check_hook_health(cwd, warnings)
     _check_install_drift(warnings)
     _check_llm_provider(warnings, check_network=check_network)
@@ -705,21 +733,43 @@ def _check_legacy_flat_sections(memory_dir: Path, warnings: list[str]) -> None:
     ``generated: true`` frontmatter is legacy hand-written content from before
     the store-first migration — point the user at ``ai-memory migrate``, which
     splits it into the store and rewrites the flat file as a generated map.
+
+    An *empty* legacy map (a bare scaffold, or a stub whose store category never
+    received an entry) is exempt: ``migrate`` skips it by the same rule, so
+    warning about it is a permanent nag with no action that clears it. The next
+    Dream regenerates the file and stamps ``generated: true`` on its own.
     """
     for section in sorted(GENERATED_MAP_SECTIONS):
         path = memory_dir / f"{section}.md"
         if not path.exists():
             continue
         try:
-            metadata, _body = parse_frontmatter(path.read_text(encoding="utf-8"))
+            metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, FrontmatterError):
             continue  # unreadable files are already reported by the per-file loop
-        if not metadata.get("generated"):
+        if not metadata.get("generated") and _map_has_migratable_content(section, body):
             warnings.append(
                 f"`{section}.md` is a hand-written root section, but under the store-first "
                 f"model it must be a generated map over memory-store/{section}/. Run "
                 "`ai-memory migrate` to split its content into the store and regenerate the map."
             )
+
+
+def _map_has_migratable_content(section: str, body: str) -> bool:
+    """True when `ai-memory migrate` would extract at least one entry from a map.
+
+    Deliberately mirrors migrate's own skip rules (empty body, init starter
+    placeholder, no non-empty chunk) rather than re-deciding what "has content"
+    means, so doctor can never flag a file migrate refuses to act on. Imported
+    lazily for the same reason the consolidation import in `init` is: keeps
+    lifecycle out of the maps/migrate import chain at module load.
+    """
+    from memory_fabric.storage.maps import _is_starter_placeholder
+    from memory_fabric.storage.migrate import _split_by_headings
+
+    if not body.strip() or _is_starter_placeholder(section, body):
+        return False
+    return any(chunk.strip() for _heading, chunk in _split_by_headings(body))
 
 
 _DIRECTIVE_BUDGET_DEFAULT = 3000
@@ -835,6 +885,56 @@ def _check_stale_fabric_blocks(cwd: str, warnings: list[str]) -> None:
                 "(stale content from a pre-1.1 sync). Delete that block by hand and re-run "
                 "`ai-memory sync-agents` — sync only rewrites content inside its markers."
             )
+
+
+def _check_ignored_agent_files(cwd: str, warnings: list[str]) -> None:
+    """Flag generated agent files the host repo's .gitignore excludes.
+
+    These files are the entire delivery mechanism: a teammate (or a CI agent,
+    or Copilot on someone else's checkout) only ever sees the protocol and the
+    project directives because the files are committed. A broad ignore rule —
+    `AGENTS.md` swept up by a docs pattern, `.cursor/` or `.windsurf/` ignored
+    as editor cruft — means `sync-agents` keeps succeeding while nothing ever
+    reaches anyone else. Nothing else in the system notices, hence this check.
+
+    Force-added files need no special handling: `git check-ignore` consults the
+    index by default (that is what `--no-index` turns off), so a tracked file is
+    never reported even when a pattern matches it — which is the right answer
+    here, since a committed file is delivered regardless of the ignore rule.
+    """
+    root = project_root(cwd)
+    candidates = [
+        "AGENTS.md",
+        "CLAUDE.md",
+        ".github/copilot-instructions.md",
+        ".agents/rules/memory-store.md",
+        ".agents/rules/dreaming.md",
+        ".agents/rules/project-directives.md",
+        ".cursor/rules/memory-fabric.mdc",
+        ".cursor/rules/project-directives.mdc",
+        ".windsurf/rules/memory-fabric.md",
+        ".windsurf/rules/project-directives.md",
+    ]
+    existing = [rel for rel in candidates if (root / rel).exists()]
+    if not existing:
+        return
+
+    from memory_fabric.storage.capture import _git
+
+    # Exit 1 ("nothing ignored"), a non-git directory (exit 128), and a missing
+    # git binary all surface as None here — all three mean "no warning", so the
+    # single call needs no branching around it.
+    ignored_out = _git(str(root), "check-ignore", "--", *existing)
+    undelivered = sorted(
+        {line.strip() for line in (ignored_out or "").splitlines() if line.strip()}
+    )
+    if undelivered:
+        warnings.append(
+            f"Generated agent file(s) are gitignored and untracked: {', '.join(undelivered)}. "
+            "They are regenerated locally but never committed, so teammates and CI agents "
+            "receive neither the memory protocol nor the project directives. Remove the "
+            "ignore rule (or `git add -f` these paths) to restore delivery."
+        )
 
 
 def _check_install_drift(warnings: list[str]) -> None:
