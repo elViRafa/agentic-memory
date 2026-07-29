@@ -4,7 +4,7 @@
 > one command in VS Code, Claude (Code + Desktop), Codex, Antigravity, Cursor, Windsurf,
 > Gemini CLI, Cline, and anything MCP-compatible.
 
-Last updated: 2026-07-27 · Current version: 1.1.2 · Tests: 368 passing (+97 subtests, +1 skipped on Windows by design) · Lint: ruff (E4,E7,E9,F,I,B,UP,SIM,RUF,BLE001,S110,S112) + mypy clean · No `src/` file >25 KB except 4 tracked borderline files · Phase 0 exit criteria met · Phase 2.2 migration tooling shipped · Phase 2.3 store-first cutover shipped (flat fact-writes removed) · Phase 3 capture reliability (filter, roll-up, multi-client hooks) shipped · v1.1 project directives (sync/context routing, managed markers, `sync-agents --check`) shipped · v1.1.2 instruction-template graceful degradation shipped
+Last updated: 2026-07-29 · Current version: 1.2.0 · Tests: 383 passing (+97 subtests, +1 skipped on Windows by design) · Lint: ruff (E4,E7,E9,F,I,B,UP,SIM,RUF,BLE001,S110,S112) + mypy clean · No `src/` file >25 KB except 4 tracked borderline files · Phase 0 exit criteria met · Phase 2.2 migration tooling shipped · Phase 2.3 store-first cutover shipped (flat fact-writes removed) · Phase 3 capture reliability (filter, roll-up, multi-client hooks) shipped · v1.1 project directives (sync/context routing, managed markers, `sync-agents --check`) shipped · v1.1.2 instruction-template graceful degradation shipped · v1.2.0 conflict-free team merges shipped (generated-view union merge, block-level store merge, `resolve-conflicts`)
 
 ---
 

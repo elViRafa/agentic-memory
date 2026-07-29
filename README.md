@@ -37,9 +37,9 @@ Memory is stored as human-readable Markdown with YAML frontmatter. No vector dat
 
 ## Status
 
-**v1.1.2 — graceful degradation: the memory protocol now yields cleanly when the MCP
-server is not configured, without taking project directives down with it.
-[Live on PyPI](https://pypi.org/project/memory-fabric/).**
+**v1.2.0 — conflict-free memory merges for teams: generated views and same-day journals
+no longer collide, and `ai-memory resolve-conflicts` clears a merge that already went
+wrong. [Live on PyPI](https://pypi.org/project/memory-fabric/).**
 Core CLI and MCP tools work end-to-end. See [`ROADMAP.md`](ROADMAP.md) for what
 shipped, what's in progress, and what's next.
 

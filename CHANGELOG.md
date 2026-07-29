@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-07-29
+
 > Memory that survives a team. Reported from a multi-developer project: every
 > merge produced conflicts in `.ai-memory/` — `failures.md`, `index.md`, and the
 > episodic day file both developers had journaled into.
