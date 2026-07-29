@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from memory_fabric.frontmatter import parse_frontmatter
 from memory_fabric.merge_driver import (
@@ -274,6 +275,43 @@ class DerivedViewTests(unittest.TestCase):
             fold_path = memory_root / "memory-store" / "failures" / f"{FOLD_BASENAME}.md"
             self.assertFalse(fold_path.exists(), "merged map was folded into the store as a memory")
             self.assertIn("failures.md", result["maps_written"])
+
+    def test_crlf_merge_output_still_hashes_to_its_own_body(self) -> None:
+        """Caught by the Windows CI jobs. There `Path.write_text` translates
+        `\\n` to `\\r\\n` in the temp files handed to `git merge-file`, git
+        faithfully returns the CRLF it was given, and `parse_frontmatter`
+        normalizes it back out — so hashing the raw merge output left every
+        merged map with a `body_hash` that could not match its own body, the
+        exact state that makes `regenerate_maps` fold the merge into the store.
+
+        The CRLF is introduced by the write, not by the input (bodies are
+        already normalized by the time they reach the union), so reproducing it
+        off Windows means making git's output CRLF directly.
+        """
+        base_body = "# Failures Map\n\n- **Shared** (`failures/shared`, high) — Shared\n"
+        ancestor = _map_fm("failures", "aaa", "2026-07-27T10:00:00+00:00", base_body)
+        ours = _map_fm("failures", "bbb", "2026-07-28T12:00:00+00:00", base_body + "- **Bob**\n")
+        theirs = _map_fm(
+            "failures", "ccc", "2026-07-28T11:00:00+00:00", base_body + "- **Alice**\n"
+        )
+
+        real_run = subprocess.run
+
+        def crlf_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            res = real_run(*args, **kwargs)  # type: ignore[arg-type,call-overload]
+            return subprocess.CompletedProcess(
+                res.args, res.returncode, res.stdout.replace(b"\n", b"\r\n"), res.stderr
+            )
+
+        with mock.patch("memory_fabric.merge_driver.subprocess.run", crlf_run):
+            merged, _ = resolve_conflict(ancestor, ours, theirs)
+
+        self.assertIsNotNone(merged)
+        metadata, body = parse_frontmatter(merged)
+        self.assertEqual(metadata["body_hash"], _body_hash(body))
+        self.assertNotIn("\r", body)
+        self.assertIn("**Bob**", body)
+        self.assertIn("**Alice**", body)
 
     def test_index_is_recognized_as_derived_without_a_path_hint(self) -> None:
         """Clones that registered the driver before it was passed `%P` still get

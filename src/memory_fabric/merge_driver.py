@@ -167,12 +167,20 @@ def _union_merge_bodies(ancestor: str, ours: str, theirs: str) -> str:
     where they actually belong instead of lumping them at the end. Falls back to
     a plain union of lines when git is unavailable (the driver itself is only
     ever invoked by git, but `resolve_unmerged` and the tests are not).
+
+    Always returns LF-only text. The temp files are written as bytes and the
+    result is normalized because `Path.write_text` translates `\\n` to `\\r\\n`
+    on Windows, and git faithfully returns the CRLF it was given — while
+    `parse_frontmatter` normalizes line endings on the way back in. Hashing the
+    un-normalized text would leave every merged map with a `body_hash` that
+    cannot match its own body, which is precisely the state that makes
+    `regenerate_maps` treat the merge as a hand edit and fold it into the store.
     """
     with tempfile.TemporaryDirectory() as temp:
         paths = {}
         for name, text in (("base", ancestor), ("ours", ours), ("theirs", theirs)):
             path = Path(temp) / name
-            path.write_text(text, encoding="utf-8")
+            path.write_bytes(text.encode("utf-8"))
             paths[name] = str(path)
         try:
             res = subprocess.run(
@@ -191,7 +199,7 @@ def _union_merge_bodies(ancestor: str, ours: str, theirs: str) -> str:
         except (OSError, subprocess.SubprocessError):
             res = None
         if res is not None and res.returncode == 0:
-            return res.stdout.decode("utf-8", errors="replace")
+            return res.stdout.decode("utf-8", errors="replace").replace("\r\n", "\n")
 
     ancestor_lines = set(ancestor.splitlines())
     ours_lines = ours.splitlines()
