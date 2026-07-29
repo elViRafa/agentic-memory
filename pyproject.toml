@@ -13,7 +13,14 @@ authors = [{ name = "Memory Fabric Contributors" }]
 dependencies = []
 
 [project.optional-dependencies]
-mcp = ["mcp>=1.0.0"]
+# Pinned below 2.0: the MCP SDK's 2.0.0 removed `mcp.server.fastmcp`, which
+# `server.py` is built on (FastMCP is replaced by `mcp.server.mcpserver`). The
+# open `>=1.0.0` range meant every fresh install silently picked up the new
+# major and left `memory-fabric[mcp]` with a server that cannot start — and it
+# turned CI red on unchanged commits the day 2.0.0 shipped. Porting to the 2.0
+# API is its own piece of work; this pin is the stopgap that keeps installs
+# working, not the destination.
+mcp = ["mcp>=1.0.0,<2"]
 test = ["pytest>=8", "pytest-cov>=5"]
 
 [project.scripts]

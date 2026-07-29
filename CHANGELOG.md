@@ -32,6 +32,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `init --merge-driver` commits `.gitattributes`, and everyone else picks up the
   local half without having to know it exists.
 
+### Fixed
+
+- **`memory-fabric[mcp]` installs a working server again.** The MCP SDK's 2.0.0
+  release removed `mcp.server.fastmcp`, which `server.py` is built on. The
+  dependency was an open `mcp>=1.0.0`, so every fresh install from the day 2.0.0
+  shipped silently resolved to the new major and got an MCP server that could
+  not start — `FastMCP` fell back to `None` and the tools were unavailable. It
+  also turned CI red on unchanged commits, which is how it was found. Pinned to
+  `mcp>=1.0.0,<2`; porting to the 2.0 API is separate work.
+
 ### Changed
 
 - **Generated views never conflict.** The root maps (`generated: true`) and the
