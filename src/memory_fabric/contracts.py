@@ -134,6 +134,29 @@ class DoctorResult(TypedDict):
     checked_files: list[str]
 
 
+class ConflictResolution(TypedDict):
+    """Outcome of resolving the conflicted memory files of an in-progress merge.
+
+    `ok` is False when any file was left for a human (`deferred`), so the CLI can
+    exit non-zero while still having staged everything it could resolve.
+    """
+
+    ok: bool
+    resolved: list[str]
+    deferred: list[str]
+    warnings: list[str]
+
+
+class MergeDriverStatus(TypedDict):
+    """Whether this clone will run the semantic merge driver. `declared` is the
+    shared `.gitattributes` half, `registered` the per-clone git config half;
+    git only calls the driver when both are true."""
+
+    declared: bool
+    registered: bool
+    active: bool
+
+
 class InstallResult(TypedDict):
     client: str
     scope: Literal["global", "project"]

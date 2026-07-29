@@ -481,18 +481,46 @@ it describes — no vector-database or cloud memory product can offer either.
 
 **Semantic merge driver.** Two branches that each append new facts to the same store file
 used to conflict on the shared `last_updated` line even when the actual content additions
-never overlapped. `ai-memory init --merge-driver` registers a custom driver that merges
-pure-append changes cleanly (reconciling frontmatter: tags union, the more urgent
-priority wins, the later timestamp wins) and falls back to git's own textual merge for
+never overlapped. `ai-memory init --merge-driver` registers a custom driver that resolves
+the shapes team memory actually produces, and falls back to git's own textual merge for
 anything it can't safely resolve — never worse than not having it installed.
 
 ```sh
 ai-memory init --merge-driver
 ```
 
+What it merges, in order of preference:
+
+| Change shape | Resolution |
+|---|---|
+| Frontmatter only | Tags union, more urgent priority wins, later `last_updated` wins |
+| Generated views (`index.md`, `failures.md`, and the other root maps) | Union — never a conflict; they're rebuilt from `memory-store/` by the next Dreaming run anyway |
+| Both branches appended new facts | Both kept, near-duplicate lines dropped |
+| Both branches wrote different `##` entries (two agents journaling the same day) | Merged block by block |
+| The same `##` entry rewritten on both sides | Deferred to git's textual merge — a real disagreement, so a human picks |
+
 This writes `.ai-memory/**/*.md merge=memory-fabric` to `.gitattributes` (committed and
 shared) and registers the driver command in local `git config` (per-clone by git's own
-design — re-run this after every fresh clone, or have teammates run it once).
+design).
+
+**Teams: the per-clone half is the part that bites.** `.gitattributes` travels with the
+repo, but the driver command does not — a teammate who clones and merges without
+registering it gets ordinary textual conflicts in `.ai-memory/`, with nothing to explain
+why. Two things close that gap: `ai-memory doctor` warns when a clone declares the driver
+but hasn't registered it, and any `ai-memory init` in such a clone registers it
+automatically.
+
+**Already mid-merge?** You don't have to redo the merge — `resolve-conflicts` applies the
+same resolution to the conflict git already recorded, and stages what it resolves:
+
+```sh
+ai-memory resolve-conflicts
+# resolved: .ai-memory/failures.md, .ai-memory/memory-store/episodic/2026-07-28.md
+git commit
+```
+
+It exits non-zero and leaves the file untouched — conflict markers and all — for anything
+that needs a human, so it's safe to run on a whole conflicted merge.
 
 **Self-verifying citations.** See the `evidence` field above — `ai-memory verify` is the
 command that checks citations still resolve and flags the ones that don't.
@@ -525,6 +553,7 @@ Commands:
   verify          Check evidence citations still resolve (--no-mark for a read-only report)
   failure         Record an error -> fix pair (--error, --fix, --tags)
   merge-driver    Git merge driver backend (invoked by git itself, not for direct use)
+  resolve-conflicts  Resolve conflicted .ai-memory files of an in-progress merge (--all)
   capture         Record a commit as episodic memory (--commit, default HEAD)
   session-start   Mark session start (for client SessionStart hooks)
   guard-journal   Exit non-zero if no session journal was written (for client Stop hooks)

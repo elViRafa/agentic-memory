@@ -17,21 +17,31 @@ conflict markers) otherwise.
 Merge strategy, cheapest-safe-outcome first:
 
 1. Identical sides, or only one side changed the body -> take that side.
-2. Both sides purely *appended* to a shared prefix (the overwhelmingly common
+2. Derived views (``generated: true`` root maps, ``index.md``,
+   ``memory-store/index.md``) -> union merge, never a conflict. These files are
+   rebuilt from ``memory-store/`` on every Dreaming run, so no textual conflict
+   in them is worth a human's attention; the union just keeps them readable
+   until the next rebuild. See ``_merge_derived_view`` for why the merged file
+   is re-stamped rather than left with stale generation hashes.
+3. Both sides purely *appended* to a shared prefix (the overwhelmingly common
    case for memory files: two branches each add new facts/journal entries)
    -> concatenate, deduplicating exact-duplicate lines the same way
    ``write_memory_store``'s append mode already does.
-3. Anything else (both sides edited existing lines, or a body was rewritten
-   rather than extended) -> defer to ``git merge-file`` for git's own
-   standard textual 3-way merge with conflict markers. This never makes
-   things worse than not having the driver installed at all.
+4. Both sides changed different ``##`` blocks, or appended inside the same one
+   (two agents writing separate session entries into the same episodic day
+   file, plus an edit to an older entry) -> merge block by block.
+5. Anything else (both sides rewrote the same block) -> defer to
+   ``git merge-file`` for git's own standard textual 3-way merge with conflict
+   markers. This never makes things worse than not having the driver installed
+   at all.
 
 Frontmatter fields we know how to reconcile safely regardless of path:
 ``tags`` (union), ``priority`` (the more urgent value wins), ``last_updated``
-(the later timestamp wins). A generated map (``generated: true``) that falls
-through to case 3 and ends up with conflict markers in its frontmatter is
-self-healing: the next Dreaming run fails to parse it, treats it as having no
-prior generation state, and fully regenerates it from the store.
+(the later timestamp wins).
+
+``resolve_unmerged`` applies the same resolution to an *in-progress* merge from
+the index stages, so a team hitting conflicts can clear them without having
+registered the driver beforehand (``ai-memory resolve-conflicts``).
 """
 
 from __future__ import annotations
@@ -39,14 +49,29 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
+from memory_fabric.contracts import ConflictResolution, MergeDriverStatus
 from memory_fabric.frontmatter import FrontmatterError, dump_frontmatter, parse_frontmatter
 from memory_fabric.paths import project_root
 from memory_fabric.storage._shared import CURRENT_SCHEMA_VERSION, PRIORITY_ORDER, _jaccard_similar
+from memory_fabric.storage.maps import _body_hash
 
 _IDENTITY_FIELDS = ("section", "store_path")
+
+# `.gitattributes` line that points matched paths at this driver, and the local
+# git config key that maps the driver name to a command. Both must be present
+# for git to actually call us: the first is committed and shared, the second is
+# per-clone by git's own design (a repo cannot ship executable merge commands).
+GITATTRIBUTES_PATTERN = ".ai-memory/**/*.md merge=memory-fabric"
+_ATTRIBUTES_MARKER = "merge=memory-fabric"
+_DRIVER_CONFIG_KEY = "merge.memory-fabric.driver"
+
+# `##`..`######` headings delimit the atomic units of a memory file: one written
+# fact, decision, or session entry per block.
+_HEADING_RE = re.compile(r"^#{2,6}\s+\S")
 
 
 def _dedupe_append(existing_new: str, incoming_new: str) -> str:
@@ -117,8 +142,192 @@ def _merge_frontmatter(ours_meta: dict[str, Any], theirs_meta: dict[str, Any]) -
     return merged
 
 
+def _is_derived_view(metadata: dict[str, Any], path_hint: str | None) -> bool:
+    """True for files Memory Fabric rebuilds from `memory-store/` rather than
+    accepting hand-written content into: the `generated: true` root maps
+    (`architecture.md`, `failures.md`, ...) and the two discovery indexes.
+
+    `index.md` is recognized from frontmatter alone as well as from the path, so
+    clones that registered the driver before it took a `%P` argument still get
+    conflict-free indexes.
+    """
+    if metadata.get("generated"):
+        return True
+    if str(metadata.get("section") or "") == "index":
+        return True
+    if str(metadata.get("store_path") or "") == "index":
+        return True
+    return bool(path_hint) and Path(str(path_hint)).name == "index.md"
+
+
+def _union_merge_bodies(ancestor: str, ours: str, theirs: str) -> str:
+    """Three-way merge that resolves every overlap by keeping both sides.
+
+    Delegates to `git merge-file --union`, which anchors each side's additions
+    where they actually belong instead of lumping them at the end. Falls back to
+    a plain union of lines when git is unavailable (the driver itself is only
+    ever invoked by git, but `resolve_unmerged` and the tests are not).
+    """
+    with tempfile.TemporaryDirectory() as temp:
+        paths = {}
+        for name, text in (("base", ancestor), ("ours", ours), ("theirs", theirs)):
+            path = Path(temp) / name
+            path.write_text(text, encoding="utf-8")
+            paths[name] = str(path)
+        try:
+            res = subprocess.run(
+                [
+                    "git",
+                    "merge-file",
+                    "--union",
+                    "-p",
+                    paths["ours"],
+                    paths["base"],
+                    paths["theirs"],
+                ],
+                capture_output=True,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            res = None
+        if res is not None and res.returncode == 0:
+            return res.stdout.decode("utf-8", errors="replace")
+
+    ancestor_lines = set(ancestor.splitlines())
+    ours_lines = ours.splitlines()
+    seen = set(ours_lines)
+    merged = list(ours_lines)
+    merged.extend(
+        line for line in theirs.splitlines() if line not in seen and line not in ancestor_lines
+    )
+    return "\n".join(merged) + ("\n" if merged else "")
+
+
+def _merge_derived_view(
+    ancestor_body: str,
+    ours_meta: dict[str, Any],
+    ours_body: str,
+    theirs_meta: dict[str, Any],
+    theirs_body: str,
+) -> str:
+    """Union-merge a generated map or index and re-stamp its generation state.
+
+    The re-stamp is not cosmetic. `regenerate_maps` decides whether a map body
+    was hand-edited by comparing it against the recorded `body_hash`, and folds
+    anything that fails that check into `memory-store/` for review. Leaving the
+    pre-merge hash on a merged body would make the next Dreaming run mistake the
+    merge for a human edit and copy the union — duplicated bullets and all —
+    into the store as a permanent memory. So: record the hash of what we
+    actually wrote (not hand-written, nothing to fold) and blank the
+    `store_fingerprint` (stale, so the map is rebuilt from the store rather than
+    skipped as unchanged).
+    """
+    merged_body = _union_merge_bodies(ancestor_body, ours_body, theirs_body)
+    merged_meta = _merge_frontmatter(ours_meta, theirs_meta)
+    if merged_meta.get("generated"):
+        merged_meta["body_hash"] = _body_hash(merged_body)
+        merged_meta["store_fingerprint"] = ""
+    return dump_frontmatter(merged_meta, merged_body)
+
+
+def _split_blocks(body: str) -> list[tuple[str, str]]:
+    """Split a memory body into `(key, text)` blocks, one per `##` heading.
+
+    Content before the first heading is the `""` block. Repeated identical
+    headings get distinct keys so they stay separate units instead of collapsing
+    into one another when the blocks are matched up across branches.
+
+    Block text is stored without trailing blank lines: the blank line before the
+    next heading is separation, not content, and letting it into the comparison
+    would make an untouched block look edited on the branch that appended
+    something after it. Blocks are rejoined with a blank line between them.
+    """
+    blocks: list[tuple[str, str]] = []
+    seen: dict[str, int] = {}
+    key = ""
+    current: list[str] = []
+    for line in body.splitlines(keepends=True):
+        if _HEADING_RE.match(line):
+            blocks.append((key, "".join(current).rstrip("\n")))
+            heading = line.strip()
+            occurrence = seen.get(heading, 0)
+            seen[heading] = occurrence + 1
+            key = heading if occurrence == 0 else f"{heading}\x00{occurrence}"
+            current = [line]
+        else:
+            current.append(line)
+    blocks.append((key, "".join(current).rstrip("\n")))
+    return blocks
+
+
+def _merged_block_order(
+    ours_blocks: list[tuple[str, str]],
+    theirs_blocks: list[tuple[str, str]],
+    ancestor_keys: set[str],
+) -> list[str]:
+    """Ours' block order, with theirs-only blocks spliced in after whichever
+    block preceded them on their branch. Blocks missing from ours that the
+    ancestor had were deleted by ours, and stay deleted."""
+    order = [key for key, _ in ours_blocks]
+    ours_keys = {key for key, _ in ours_blocks}
+    for index, (key, _) in enumerate(theirs_blocks):
+        if key in ours_keys or key in ancestor_keys:
+            continue
+        anchor = next(
+            (prev for prev, _ in reversed(theirs_blocks[:index]) if prev in order),
+            None,
+        )
+        order.insert(order.index(anchor) + 1 if anchor is not None else 0, key)
+    return order
+
+
+def _merge_blocks(ancestor_body: str, ours_body: str, theirs_body: str) -> str | None:
+    """Merge two branches block by block, so edits that touch different facts in
+    the same file never collide. Returns None when a single block was rewritten
+    on both sides — the one shape that genuinely needs a human."""
+    ancestor = dict(_split_blocks(ancestor_body))
+    ours_blocks = _split_blocks(ours_body)
+    theirs_blocks = _split_blocks(theirs_body)
+    ours = dict(ours_blocks)
+    theirs = dict(theirs_blocks)
+
+    merged: list[str] = []
+    for key in _merged_block_order(ours_blocks, theirs_blocks, set(ancestor)):
+        ours_text = ours.get(key)
+        theirs_text = theirs.get(key)
+        base_text = ancestor.get(key)
+
+        if ours_text is None:
+            if theirs_text:
+                merged.append(theirs_text)
+            continue
+        if theirs_text is None:
+            # Theirs deleted a block it never touched otherwise: honor the
+            # delete. If ours also changed it, keep ours — dropping a fact
+            # somebody just wrote is the more expensive mistake.
+            if base_text is not None and ours_text == base_text:
+                continue
+            merged.append(ours_text)
+            continue
+        if ours_text == theirs_text or theirs_text == base_text:
+            merged.append(ours_text)
+            continue
+        if ours_text == base_text:
+            merged.append(theirs_text)
+            continue
+
+        base = base_text or ""
+        if ours_text.startswith(base) and theirs_text.startswith(base):
+            appended = _dedupe_append(ours_text[len(base) :], theirs_text[len(base) :])
+            merged.append((base + appended).rstrip("\n"))
+            continue
+        return None
+
+    return "\n\n".join(block for block in merged if block) + "\n"
+
+
 def resolve_conflict(
-    ancestor_text: str, ours_text: str, theirs_text: str
+    ancestor_text: str, ours_text: str, theirs_text: str, path_hint: str | None = None
 ) -> tuple[str | None, list[str]]:
     """Attempt a semantic 3-way merge of a Memory Fabric markdown file.
 
@@ -152,15 +361,24 @@ def resolve_conflict(
         merged_body = theirs_body
     elif ancestor_body == theirs_body:
         merged_body = ours_body
+    elif _is_derived_view(ours_meta, path_hint) or _is_derived_view(theirs_meta, path_hint):
+        # A rebuilt view, not authored content: never worth a conflict.
+        return _merge_derived_view(
+            ancestor_body, ours_meta, ours_body, theirs_meta, theirs_body
+        ), warnings
     elif ours_body.startswith(ancestor_body) and theirs_body.startswith(ancestor_body):
         ours_new = ours_body[len(ancestor_body) :]
         theirs_new = theirs_body[len(ancestor_body) :]
         merged_body = ancestor_body + _dedupe_append(ours_new, theirs_new)
     else:
-        warnings.append(
-            "body changes on both sides are not pure appends; deferring to textual merge."
-        )
-        return None, warnings
+        block_merged = _merge_blocks(ancestor_body, ours_body, theirs_body)
+        if block_merged is None:
+            warnings.append(
+                "the same block was rewritten on both sides (body changes are not pure "
+                "appends); deferring to textual merge."
+            )
+            return None, warnings
+        merged_body = block_merged
 
     merged_meta = _merge_frontmatter(ours_meta, theirs_meta)
     return dump_frontmatter(merged_meta, merged_body), warnings
@@ -182,8 +400,13 @@ def _git_merge_file_fallback(ancestor: str, ours: str, theirs: str) -> int:
     return res.returncode
 
 
-def run(ancestor: str, ours: str, theirs: str) -> int:
-    """Entry point for `ai-memory merge-driver <ancestor> <ours> <theirs>`."""
+def run(ancestor: str, ours: str, theirs: str, path: str | None = None) -> int:
+    """Entry point for `ai-memory merge-driver <ancestor> <ours> <theirs> [path]`.
+
+    `path` is git's `%P` (the real pathname being merged; `ours` is a temp file).
+    Optional: clones that registered the driver before `%P` was passed keep
+    working, they just lose the path hint.
+    """
     ancestor_text = (
         Path(ancestor).read_text(encoding="utf-8", errors="replace")
         if Path(ancestor).exists()
@@ -194,15 +417,112 @@ def run(ancestor: str, ours: str, theirs: str) -> int:
         Path(theirs).read_text(encoding="utf-8", errors="replace") if Path(theirs).exists() else ""
     )
 
-    merged, warnings = resolve_conflict(ancestor_text, ours_text, theirs_text)
+    merged, warnings = resolve_conflict(ancestor_text, ours_text, theirs_text, path_hint=path)
+    label = path or Path(ours).name
     for warning in warnings:
-        print(f"ai-memory merge-driver: {warning}", file=sys.stderr)
+        print(f"ai-memory merge-driver: {label}: {warning}", file=sys.stderr)
 
     if merged is not None:
         Path(ours).write_text(merged, encoding="utf-8")
         return 0
 
     return _git_merge_file_fallback(ancestor, ours, theirs)
+
+
+def _git_output(root: Path, *args: str) -> str | None:
+    """Run a read-only git command, returning stdout or None when it fails."""
+    try:
+        res = subprocess.run(["git", *args], cwd=root, capture_output=True, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if res.returncode != 0:
+        return None
+    return res.stdout.decode("utf-8", errors="replace")
+
+
+def resolve_unmerged(cwd: str, memory_only: bool = True) -> ConflictResolution:
+    """Resolve the conflicted `.ai-memory` files of an in-progress merge.
+
+    The driver only runs for people who registered it *before* merging. This
+    does the same resolution after the fact, reading the three sides from the
+    index stages git already recorded (`:1:`/`:2:`/`:3:`), so a team that hit
+    conflicts mid-merge can clear them without redoing the merge. Files whose
+    conflict needs a human are left untouched and reported.
+    """
+    root = project_root(cwd)
+    resolved: list[str] = []
+    deferred: list[str] = []
+    warnings: list[str] = []
+
+    if not (root / ".git").exists():
+        return {
+            "ok": False,
+            "resolved": resolved,
+            "deferred": deferred,
+            "warnings": ["Git repository not found; nothing to resolve."],
+        }
+
+    listing = _git_output(root, "diff", "--name-only", "--diff-filter=U", "-z")
+    if listing is None:
+        return {
+            "ok": False,
+            "resolved": resolved,
+            "deferred": deferred,
+            "warnings": ["Could not list unmerged paths; is a merge in progress?"],
+        }
+
+    paths = [p for p in listing.split("\0") if p]
+    for rel_path in paths:
+        if memory_only and not (rel_path.startswith(".ai-memory/") and rel_path.endswith(".md")):
+            continue
+        # Stage 1 is absent for add/add conflicts — an empty ancestor is exactly
+        # the right base there, so a missing stage is not an error.
+        ancestor_text = _git_output(root, "show", f":1:{rel_path}") or ""
+        ours_text = _git_output(root, "show", f":2:{rel_path}")
+        theirs_text = _git_output(root, "show", f":3:{rel_path}")
+        if ours_text is None or theirs_text is None:
+            deferred.append(rel_path)
+            warnings.append(f"{rel_path}: one side is missing (delete/modify); resolve by hand.")
+            continue
+
+        merged, file_warnings = resolve_conflict(
+            ancestor_text, ours_text, theirs_text, path_hint=rel_path
+        )
+        warnings.extend(f"{rel_path}: {w}" for w in file_warnings)
+        if merged is None:
+            deferred.append(rel_path)
+            continue
+
+        (root / rel_path).write_text(merged, encoding="utf-8")
+        if _git_output(root, "add", "--", rel_path) is None:
+            deferred.append(rel_path)
+            warnings.append(f"{rel_path}: merged content written but `git add` failed; stage it.")
+            continue
+        resolved.append(rel_path)
+
+    return {"ok": not deferred, "resolved": resolved, "deferred": deferred, "warnings": warnings}
+
+
+def merge_driver_status(cwd: str) -> MergeDriverStatus:
+    """Report whether this clone will actually run the driver.
+
+    Both halves are required and they fail independently: `.gitattributes` is
+    committed and shared, the driver command is local to each clone. A teammate
+    who clones and merges without registering it gets plain textual conflicts,
+    which is the usual reason memory files conflict on a team.
+    """
+    root = project_root(cwd)
+    gitattributes = root / ".gitattributes"
+    declared = False
+    if gitattributes.exists():
+        try:
+            declared = _ATTRIBUTES_MARKER in gitattributes.read_text(
+                encoding="utf-8", errors="replace"
+            )
+        except OSError:
+            declared = False
+    registered = bool((_git_output(root, "config", "--get", _DRIVER_CONFIG_KEY) or "").strip())
+    return {"declared": declared, "registered": registered, "active": declared and registered}
 
 
 def install_merge_driver(cwd: str) -> dict[str, Any]:
@@ -219,27 +539,16 @@ def install_merge_driver(cwd: str) -> dict[str, Any]:
         }
 
     gitattributes = root / ".gitattributes"
-    pattern_line = ".ai-memory/**/*.md merge=memory-fabric\n"
     existing = gitattributes.read_text(encoding="utf-8") if gitattributes.exists() else ""
     changed_attrs = False
-    if "merge=memory-fabric" not in existing:
+    if _ATTRIBUTES_MARKER not in existing:
         separator = "" if not existing or existing.endswith("\n") else "\n"
-        gitattributes.write_text(existing + separator + pattern_line, encoding="utf-8")
+        gitattributes.write_text(
+            existing + separator + GITATTRIBUTES_PATTERN + "\n", encoding="utf-8"
+        )
         changed_attrs = True
 
-    driver_cmd = f'"{sys.executable}" -m memory_fabric.cli merge-driver %O %A %B'
-    subprocess.run(
-        ["git", "config", "merge.memory-fabric.name", "Memory Fabric semantic merge"],
-        cwd=root,
-        check=False,
-        capture_output=True,
-    )
-    subprocess.run(
-        ["git", "config", "merge.memory-fabric.driver", driver_cmd],
-        cwd=root,
-        check=False,
-        capture_output=True,
-    )
+    _register_driver_command(root)
 
     return {
         "ok": True,
@@ -247,6 +556,43 @@ def install_merge_driver(cwd: str) -> dict[str, Any]:
         "warnings": [
             "Merge driver registration is per-clone by git's own design: "
             "commit .gitattributes, but re-run `ai-memory init --merge-driver` "
-            "(or have teammates run it) after every fresh clone."
+            "(or have teammates run it) after every fresh clone. `ai-memory "
+            "doctor` warns when a clone is missing it."
         ],
     }
+
+
+def _register_driver_command(root: Path) -> None:
+    """Write the per-clone `merge.memory-fabric.*` git config entries."""
+    # %P is the real pathname being merged (%A is a temp file), which is what
+    # lets the driver recognize index.md as a rebuilt view.
+    driver_cmd = f'"{sys.executable}" -m memory_fabric.cli merge-driver %O %A %B %P'
+    for key, value in (
+        ("merge.memory-fabric.name", "Memory Fabric semantic merge"),
+        (_DRIVER_CONFIG_KEY, driver_cmd),
+    ):
+        subprocess.run(
+            ["git", "config", key, value],
+            cwd=root,
+            check=False,
+            capture_output=True,
+        )
+
+
+def ensure_merge_driver_registered(cwd: str) -> bool:
+    """Register the driver in this clone if the repo already asks for it.
+
+    Closes the gap that makes memory files conflict on teams: the person who ran
+    `init --merge-driver` commits `.gitattributes`, but every teammate's clone
+    starts without the local driver command and silently falls back to textual
+    merges. Any later `ai-memory init` in such a clone picks it up. Returns True
+    when a registration was added.
+    """
+    status = merge_driver_status(cwd)
+    if not status["declared"] or status["registered"]:
+        return False
+    root = project_root(cwd)
+    if not (root / ".git").is_dir():
+        return False
+    _register_driver_command(root)
+    return merge_driver_status(cwd)["registered"]

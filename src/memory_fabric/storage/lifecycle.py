@@ -562,6 +562,38 @@ def status(cwd: str) -> StatusResult:
     }
 
 
+def _merge_driver_warnings(cwd: str) -> list[str]:
+    """Warn when the semantic merge driver is only half-installed.
+
+    `.gitattributes` is committed and shared; the driver command is per-clone.
+    A teammate who clones and merges without registering it gets ordinary
+    textual conflicts in `.ai-memory/` with no indication why — the single most
+    common way memory conflicts show up on a team.
+    """
+    # Imported lazily: merge_driver imports from this package.
+    from memory_fabric.merge_driver import merge_driver_status
+
+    try:
+        status = merge_driver_status(cwd)
+    except Exception as exc:  # noqa: BLE001 - a diagnostic must never fail doctor.
+        return [f"Could not determine merge-driver status: {exc}"]
+
+    if status["declared"] and not status["registered"]:
+        return [
+            "This repo declares the Memory Fabric merge driver in .gitattributes, but this "
+            "clone has not registered it, so .ai-memory files will produce textual merge "
+            "conflicts. Run `ai-memory init --merge-driver` (per-clone, by git's design). "
+            "Already mid-merge? `ai-memory resolve-conflicts`."
+        ]
+    if status["registered"] and not status["declared"]:
+        return [
+            "The Memory Fabric merge driver is registered in this clone but no .gitattributes "
+            "rule points at it, so git never calls it. Run `ai-memory init --merge-driver` and "
+            "commit .gitattributes."
+        ]
+    return []
+
+
 def doctor(cwd: str, check_network: bool = False) -> DoctorResult:
     memory_dir = local_memory_dir(cwd)
     errors: list[str] = []
@@ -585,6 +617,8 @@ def doctor(cwd: str, check_network: bool = False) -> DoctorResult:
         warnings.append(
             "Optional package `mcp` is not installed; MCP server tools will be unavailable."
         )
+
+    warnings.extend(_merge_driver_warnings(cwd))
 
     for path in _iter_markdown_files(memory_dir):
         if _is_ignored_local_memory_path(memory_dir, path):

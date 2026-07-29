@@ -14,7 +14,11 @@ from memory_fabric.clients import CLIENTS
 from memory_fabric.contracts import DreamEvalResult, EvalResult, MigrateResult
 from memory_fabric.eval import evaluate_dream_quality, evaluate_memory_fabric
 from memory_fabric.installer import install, install_all
-from memory_fabric.merge_driver import install_merge_driver
+from memory_fabric.merge_driver import (
+    ensure_merge_driver_registered,
+    install_merge_driver,
+    resolve_unmerged,
+)
 from memory_fabric.merge_driver import run as run_merge_driver
 from memory_fabric.paths import local_memory_dir
 from memory_fabric.storage import (
@@ -91,7 +95,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "merge-driver":
         # Bypasses the try/except and cwd/env plumbing below: git invokes this
         # directly with absolute temp-file paths, not a project cwd.
-        return run_merge_driver(args.ancestor, args.ours, args.theirs)
+        return run_merge_driver(args.ancestor, args.ours, args.theirs, args.path)
 
     try:
         if args.command == "init":
@@ -110,6 +114,15 @@ def main(argv: list[str] | None = None) -> int:
                         *list(init_result.get("files_created", [])),
                         str(Path(cwd) / ".gitattributes"),
                     ]
+            elif ensure_merge_driver_registered(cwd):
+                # Fresh clone of a repo that already committed the
+                # `.gitattributes` line: registering the local half here is what
+                # keeps a team's memory files merging instead of conflicting.
+                init_result["warnings"] = [
+                    *list(init_result.get("warnings", [])),
+                    "merge-driver: this repo declares the Memory Fabric merge driver in "
+                    ".gitattributes; registered it in this clone.",
+                ]
             _print_result(init_result, args.json)
             return 0
         if args.command == "status":
@@ -167,6 +180,12 @@ def main(argv: list[str] | None = None) -> int:
             doctor_result = doctor(cwd, check_network=not getattr(args, "offline", False))
             _print_result(doctor_result, args.json)
             return 0 if doctor_result["ok"] else 1
+        if args.command == "resolve-conflicts":
+            resolution = resolve_unmerged(cwd, memory_only=not args.all)
+            _print_result(resolution, args.json)
+            # Non-zero when anything was left for a human: the merge is still
+            # in progress and `git commit` must not be treated as safe to run.
+            return 0 if resolution["ok"] else 1
         if args.command == "verify":
             verify_result = verify_evidence(cwd, mark_broken=not args.no_mark)
             _print_result(verify_result, args.json)
@@ -529,6 +548,22 @@ def build_parser() -> argparse.ArgumentParser:
         "ours", help="Path to our version; result is written here (%%A)"
     )
     merge_driver_parser.add_argument("theirs", help="Path to their version (%%B)")
+    merge_driver_parser.add_argument(
+        "path",
+        nargs="?",
+        default=None,
+        help="Real pathname being merged (%%P); optional, for clones registered before it was passed",
+    )
+
+    resolve_conflicts_parser = add_command(
+        "resolve-conflicts",
+        help="Resolve conflicted .ai-memory files of an in-progress merge and stage them",
+    )
+    resolve_conflicts_parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Also attempt non-.ai-memory conflicted files (they are skipped by default)",
+    )
 
     capture_parser = add_command(
         "capture", help="Record a commit as episodic memory (passive capture)"
