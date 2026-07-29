@@ -8,6 +8,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-07-29
+
+> Memory that survives a team. Reported from a multi-developer project: every
+> merge produced conflicts in `.ai-memory/` — `failures.md`, `index.md`, and the
+> episodic day file both developers had journaled into.
+
+### Added
+
+- **`ai-memory resolve-conflicts`** — resolves the conflicted `.ai-memory` files
+  of an *in-progress* merge and stages them, reading the three sides from the
+  index stages git already recorded. The merge driver only helps people who
+  registered it *before* merging; this is the way out for a team that is already
+  sitting in a conflicted merge, with no need to redo it. Files that need a human
+  are left untouched, reported, and make the command exit non-zero.
+- **`ai-memory doctor` now warns when the merge driver is half-installed.**
+  `.gitattributes` is committed and shared, the driver command is per-clone by
+  git's design — so a teammate's fresh clone silently falls back to textual
+  merges. Doctor names the gap and the fix in both directions (declared but not
+  registered, registered but not declared).
+- **Any `ai-memory init` registers the driver in a clone that already declares
+  it.** Closes the same gap from the other side: the person who ran
+  `init --merge-driver` commits `.gitattributes`, and everyone else picks up the
+  local half without having to know it exists.
+
+### Fixed
+
+- **`memory-fabric[mcp]` installs a working server again.** The MCP SDK's 2.0.0
+  release removed `mcp.server.fastmcp`, which `server.py` is built on. The
+  dependency was an open `mcp>=1.0.0`, so every fresh install from the day 2.0.0
+  shipped silently resolved to the new major and got an MCP server that could
+  not start — `FastMCP` fell back to `None` and the tools were unavailable. It
+  also turned CI red on unchanged commits, which is how it was found. Pinned to
+  `mcp>=1.0.0,<2`; porting to the 2.0 API is separate work.
+
+### Changed
+
+- **Generated views never conflict.** The root maps (`generated: true`) and the
+  two discovery indexes are derived from `memory-store/` and rebuilt on every
+  Dreaming run, so a textual conflict in one was never worth a human's attention.
+  They now union-merge. The merged file is re-stamped (`body_hash` recomputed,
+  `store_fingerprint` blanked) so the next `regenerate_maps` rebuilds it from the
+  store instead of mistaking the merge for a hand edit and folding the union into
+  `memory-store/` as a permanent memory.
+- **Store entries merge block by block.** The driver previously required both
+  sides to be pure appends onto a shared prefix, and deferred everything else to
+  a textual conflict. It now merges per `##` entry, which covers the shape two
+  agents produce on a shared branch: separate new session entries in the same
+  episodic day file, plus an edit to an older entry. Only a single entry rewritten
+  on *both* sides — a real disagreement — still goes to git's textual merge.
+- The driver is now registered with git's `%P` placeholder, so it knows the real
+  pathname being merged. Clones registered before this keep working; `index.md` is
+  recognized from its frontmatter as well as its path.
+
 ## [1.1.2] — 2026-07-27
 
 > Graceful degradation: an agent that cannot reach the MCP tools now has a
