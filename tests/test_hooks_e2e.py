@@ -80,7 +80,8 @@ class HookEndToEndTests(unittest.TestCase):
                 / "memory-store"
                 / "episodic"
                 / "commits"
-                / f"{author_date[:10]}.md"
+                / author_date[:10]
+                / f"{full_hash[:10]}.md"
             )
             self.assertTrue(
                 episodic_path.exists(),

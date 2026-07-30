@@ -149,11 +149,16 @@ class ConflictResolution(TypedDict):
 
 class MergeDriverStatus(TypedDict):
     """Whether this clone will run the semantic merge driver. `declared` is the
-    shared `.gitattributes` half, `registered` the per-clone git config half;
-    git only calls the driver when both are true."""
+    shared `.gitattributes` half, `registered` the per-clone git config half,
+    and `command_ok` says the registered `command` still resolves to something
+    executable in this environment (a venv that moved leaves a registration
+    pointing at nothing). `active` is true only when all three hold — anything
+    less and git silently falls back to a textual merge."""
 
     declared: bool
     registered: bool
+    command: str
+    command_ok: bool
     active: bool
 
 

@@ -67,10 +67,14 @@ class PassiveCaptureTests(unittest.TestCase):
             self.assertTrue(result["captured"])
             self.assertTrue(result["commit"])
             self.assertEqual(result["store_path"].split("/")[:2], ["episodic", "commits"])
+            # One file per commit: episodic/commits/<date>/<short-hash>
+            self.assertEqual(result["store_path"].split("/")[-1], result["commit"])
 
             store_root = Path(temp) / ".ai-memory" / "memory-store" / "episodic" / "commits"
-            files = list(store_root.glob("*.md"))
+            files = list(store_root.rglob("*.md"))
             self.assertEqual(len(files), 1)
+            self.assertEqual(files[0].name, f"{result['commit']}.md")
+            self.assertEqual(files[0].parent.parent, store_root)
             metadata, body = parse_frontmatter(files[0].read_text(encoding="utf-8"))
             self.assertEqual(metadata.get("source"), "passive-capture")
             self.assertEqual(metadata.get("review_status"), "pending")
@@ -90,15 +94,44 @@ class PassiveCaptureTests(unittest.TestCase):
             self.assertFalse(second["captured"])
             self.assertTrue(any("already captured" in w for w in second["warnings"]))
 
-            # A new commit is captured; both records live in the same dated file.
+            # A new commit is captured into its own file under the same date.
             _commit(temp, "b.py", "y\n", "second commit")
             third = capture_commit(temp)
             self.assertTrue(third["captured"])
 
             store_root = Path(temp) / ".ai-memory" / "memory-store" / "episodic" / "commits"
-            body = next(store_root.glob("*.md")).read_text(encoding="utf-8")
-            self.assertIn("first commit", body)
-            self.assertIn("second commit", body)
+            files = sorted(store_root.rglob("*.md"))
+            self.assertEqual(len(files), 2)
+            self.assertEqual({path.parent for path in files}, {files[0].parent})
+            bodies = "".join(path.read_text(encoding="utf-8") for path in files)
+            self.assertIn("first commit", bodies)
+            self.assertIn("second commit", bodies)
+
+    def test_capture_does_not_redo_a_commit_recorded_in_a_legacy_day_file(self) -> None:
+        """Stores written before the one-file-per-commit layout keep their
+        `<date>.md` day files until a deep Dream folds them away. Capturing the
+        same commit again would duplicate every record of the current day."""
+        with tempfile.TemporaryDirectory() as temp:
+            _init_repo(temp)
+            initialize_memory_fabric(temp)
+            _commit(temp, "a.py", "x\n", "first commit")
+
+            first = capture_commit(temp)
+            self.assertTrue(first["captured"])
+
+            # Rewrite the capture in the legacy shape: one shared day file.
+            store_root = Path(temp) / ".ai-memory" / "memory-store" / "episodic" / "commits"
+            captured = next(store_root.rglob("*.md"))
+            day_file = store_root / f"{captured.parent.name}.md"
+            day_file.write_text(captured.read_text(encoding="utf-8"), encoding="utf-8")
+            captured.unlink()
+            captured.parent.rmdir()
+
+            again = capture_commit(temp)
+
+            self.assertFalse(again["captured"])
+            self.assertTrue(any("already captured" in w for w in again["warnings"]))
+            self.assertEqual(list(store_root.rglob("*.md")), [day_file])
 
     def test_capture_graceful_outside_git_repo(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -106,6 +139,96 @@ class PassiveCaptureTests(unittest.TestCase):
             result = capture_commit(temp)
             self.assertFalse(result["captured"])
             self.assertTrue(any("Not a git repository" in w for w in result["warnings"]))
+
+
+@unittest.skipUnless(_GIT, "git is required for passive-capture tests")
+class CaptureKeepsTheTreePullableTests(unittest.TestCase):
+    """Capture runs from the post-commit hook, so the record for commit N can
+    only be committed by commit N+1 — it is always sitting uncommitted in
+    between. With a shared per-day file that meant a *tracked, modified* file,
+    and git refuses to merge into one:
+
+        error: Your local changes to the following files would be overwritten by merge:
+                .ai-memory/memory-store/episodic/commits/2026-07-30.md
+        Aborting
+
+    That abort happens before any merge machinery runs, so the semantic merge
+    driver — which resolves this file correctly when it gets the chance — could
+    never fire. One new file per commit is untracked instead, which git merges
+    straight over.
+    """
+
+    def test_a_pending_capture_is_untracked_not_a_modified_tracked_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            _init_repo(temp)
+            initialize_memory_fabric(temp)
+            _run_git(temp, "add", "-A")
+            _run_git(temp, "commit", "-m", "chore: scaffold memory fabric")
+
+            _commit(temp, "first.py", "1\n", "feat: first change")
+            self.assertTrue(capture_commit(temp)["captured"])
+            _run_git(temp, "add", "-A")
+            _run_git(temp, "commit", "-m", "chore: save captured memory")
+
+            _commit(temp, "second.py", "2\n", "feat: second change")
+            self.assertTrue(capture_commit(temp)["captured"])
+
+            porcelain = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=temp,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.splitlines()
+            capture_entries = [line for line in porcelain if "episodic/commits" in line]
+            self.assertTrue(capture_entries, porcelain)
+            for line in capture_entries:
+                self.assertTrue(
+                    line.startswith("??"),
+                    f"pending capture is a tracked modification, which blocks a pull: {line}",
+                )
+
+    def test_merging_a_teammates_captures_over_a_pending_local_one_succeeds(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            _init_repo(temp)
+            initialize_memory_fabric(temp)
+            _run_git(temp, "add", "-A")
+            _run_git(temp, "commit", "-m", "chore: scaffold memory fabric")
+            base_branch = subprocess.run(
+                ["git", "branch", "--show-current"],
+                cwd=temp,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+
+            # A teammate commits their work and the capture record for it.
+            _run_git(temp, "checkout", "-b", "teammate")
+            _commit(temp, "teammate.py", "t\n", "feat: teammate work")
+            self.assertTrue(capture_commit(temp)["captured"])
+            _run_git(temp, "add", "-A")
+            _run_git(temp, "commit", "-m", "chore: save teammate memory")
+
+            # Locally: our own commit, its capture still uncommitted — exactly
+            # the state every post-commit hook leaves behind.
+            _run_git(temp, "checkout", base_branch)
+            _commit(temp, "local.py", "l\n", "feat: local work")
+            local = capture_commit(temp)
+            self.assertTrue(local["captured"])
+
+            merge = subprocess.run(
+                ["git", "merge", "teammate", "--no-edit"],
+                cwd=temp,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(merge.returncode, 0, merge.stdout + merge.stderr)
+            self.assertNotIn("would be overwritten by merge", merge.stdout + merge.stderr)
+            store_root = Path(temp) / ".ai-memory" / "memory-store" / "episodic" / "commits"
+            bodies = "".join(path.read_text(encoding="utf-8") for path in store_root.rglob("*.md"))
+            self.assertIn("feat: teammate work", bodies)
+            self.assertIn("feat: local work", bodies)
 
 
 class CaptureFilterRuleTests(unittest.TestCase):
@@ -205,7 +328,7 @@ class CaptureFilterIntegrationTests(unittest.TestCase):
             self.assertEqual(capture_stats(temp)["commits_skipped"], 1)
             # No episodic record was written for the merge itself.
             store_root = Path(temp) / ".ai-memory" / "memory-store" / "episodic" / "commits"
-            self.assertFalse(list(store_root.glob("*.md")) if store_root.exists() else [])
+            self.assertFalse(list(store_root.rglob("*.md")) if store_root.exists() else [])
 
     def test_bot_commit_is_skipped(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

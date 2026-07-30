@@ -8,6 +8,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+> Two bugs reported against v1.2.0 and reproduced against a real repo merge. Both
+> ended the same way: memory files that the merge driver was supposed to protect
+> got corrupted, or the driver never ran at all.
+
+### Fixed
+
+- **An empty ancestor no longer takes the pure-append fast path.** When two
+  branches each *created* the same memory file, the common ancestor is `""` — and
+  every string starts with `""`, so `resolve_conflict` took the "both sides
+  appended to a shared prefix" path with no shared prefix at all, then ran
+  whole-file line dedup across two unrelated bodies. On record-structured files
+  (`episodic/commits/<date>.md`), where every record repeats `**Files:**`,
+  `- source: passive-capture`, and its ``` diffstat fences, that deleted the
+  second and later copies of each marker: every record after the first lost its
+  file list and its diffstat, which then bled into the file list as loose text,
+  compounding on each later merge. The fast path now requires a non-empty
+  ancestor, so add/add merges fall through to the block merge that was already
+  correct.
+- **Commit-capture logs merge by record, not by line.** Line-level dedup is the
+  wrong tool for them in both directions: exact match strips the boilerplate that
+  gives each record its structure, and the fuzzy `_jaccard_similar` pass drops
+  file paths and diffstat lines that are merely *word-similar* to one already
+  kept — legitimately distinct content. Paths under `episodic/commits/` now
+  always merge through `_merge_blocks`, whose unit of identity is the commit hash
+  in the record heading.
+- **Passive capture no longer guarantees a permanently dirty tree.** Capture runs
+  from the post-commit hook, so the record for commit N could only be committed by
+  commit N+1 — with a shared `episodic/commits/<date>.md`, that tracked file was
+  modified-but-uncommitted between every pair of commits, and git aborts a pull
+  into one (`error: Your local changes to the following files would be overwritten
+  by merge`) *before* any merge machinery runs. The tool created the precondition
+  that disabled its own merge driver. Capture now writes one file per commit at
+  `episodic/commits/<date>/<short-hash>.md`: a new untracked file, which git
+  merges straight over, and which two developers can never both write.
+  `_write_markdown_if_changed`'s P-15 guard could not help here — capture's output
+  is genuinely new content every run, not a no-op rewrite of a generated view.
+- **The post-commit hook no longer runs `dream --mode light --apply`.** Dreaming
+  rewrites the generated views — `index.md`, `memory-store/index.md`, the root
+  maps — which are tracked files, so it re-dirtied the tree on every commit on
+  every machine, exactly the abort above and a pure conflict surface for files
+  that are regenerated anyway. The hook captures and nothing else; the views stay
+  fresh via the client lifecycle hooks (session end, pre-compaction) and
+  `ai-memory dream` by hand.
+
+### Changed
+
+- **Passive commit captures are listed once per day in `memory-store/index.md`.**
+  One row per commit would have turned the discovery index — regenerated on every
+  branch — into the largest churn surface in the repo, for no navigational gain.
+  The grouped row carries the day, the commit count, and the first few subjects.
+  `ai-memory doctor`'s index-consistency check uses the same grouping, so the two
+  cannot drift.
+- **The weekly roll-up (`dream --mode deep`) walks both capture layouts.** Stores
+  written before this release keep their `<date>.md` day files; a single roll-up
+  folds those and the new per-commit records together under one `## <date>`
+  heading. Emptied day directories are removed; a record that cannot be parsed is
+  still never deleted, and now keeps its directory alive.
+- **The merge driver is registered PATH-first.** The per-clone `.git/config` entry
+  used to hardcode the absolute interpreter path of whichever venv ran
+  `init --merge-driver` — which breaks silently the moment that venv is moved,
+  rebuilt, or the clone is copied, leaving git to write conflict markers into
+  memory files with no indication why. The registered command now resolves
+  `ai-memory` from PATH and falls back to the absolute path only if PATH has none.
+
+### Added
+
+- **`ai-memory doctor` checks that the registered driver command actually
+  resolves.** The third silent failure mode alongside the two half-installed
+  states it already reported: declared *and* registered, but pointing at an
+  interpreter that no longer exists. `merge_driver_status` gained `command` and
+  `command_ok`, and `active` now requires all three conditions. Any later
+  `ai-memory init` repairs an unresolvable registration the same way it already
+  filled in a missing one.
+
 ## [1.2.0] — 2026-07-29
 
 > Memory that survives a team. Reported from a multi-developer project: every

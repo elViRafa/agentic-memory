@@ -483,7 +483,11 @@ class MemoryFabricTests(unittest.TestCase):
             self.assertTrue(post_commit_path.exists())
             self.assertTrue(any("post-commit" in f for f in result["files_created"]))
             content = post_commit_path.read_text(encoding="utf-8")
-            self.assertIn("dream --mode light --apply", content)
+            self.assertIn("capture", content)
+            # Dreaming must NOT run here: it rewrites tracked generated views,
+            # which leaves the tree dirty after every commit and makes the next
+            # `git pull` abort before the merge driver can run.
+            self.assertNotIn("dream", content)
             # P-04: hooks must pin the CLI that created them instead of relying
             # on a bare PATH lookup, and must fail audibly instead of `|| true`.
             self.assertIn('MEMORY_FABRIC_BIN="', content)
@@ -524,9 +528,10 @@ class MemoryFabricTests(unittest.TestCase):
             content = post_commit_path.read_text(encoding="utf-8")
             self.assertIn("echo 'user line'", content)
             self.assertNotIn("ai-memory capture || true", content)
-            self.assertNotIn("ai-memory dream --mode light --apply || true", content)
             self.assertIn('MEMORY_FABRIC_BIN="', content)
-            self.assertEqual(content.count("dream --mode light --apply"), 1)
+            # The legacy Dreaming line is stripped and not replaced: post-commit
+            # captures only (see `initialize_memory_fabric`).
+            self.assertNotIn("dream --mode light --apply", content)
 
     def test_doctor_warns_when_hook_binary_is_unresolvable(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -954,7 +959,7 @@ class MemoryFabricTests(unittest.TestCase):
             self.assertTrue(post_commit_path.exists())
             content = post_commit_path.read_text(encoding="utf-8")
             self.assertIn("echo 'hello'", content)
-            self.assertIn("dream --mode light --apply", content)
+            self.assertIn("capture", content)
             self.assertIn('MEMORY_FABRIC_BIN="', content)
 
     @mock.patch("sys.stdin.isatty", return_value=True)
