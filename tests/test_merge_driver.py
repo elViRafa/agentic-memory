@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -849,7 +850,11 @@ class DriverRegistrationTests(unittest.TestCase):
         """
         from memory_fabric.storage import doctor
 
-        stale = '"/usr/bin/python3" -m memory_fabric.cli merge-driver %O %A %B'
+        # `sys.executable`, not a hardcoded Unix path: it has to actually
+        # resolve on whatever OS runs this test (Windows has no /usr/bin), and
+        # the whole point of this fixture is that the *binary* is fine — only
+        # the placeholder set is stale.
+        stale = f'"{sys.executable}" -m memory_fabric.cli merge-driver %O %A %B'
 
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp:
             _run_git(temp, "init", "-q")
