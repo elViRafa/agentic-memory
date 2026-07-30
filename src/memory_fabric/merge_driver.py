@@ -563,15 +563,24 @@ def resolve_unmerged(cwd: str, memory_only: bool = True) -> ConflictResolution:
 
 
 def merge_driver_status(cwd: str) -> MergeDriverStatus:
-    """Report whether this clone will actually run the driver.
+    """Report whether this clone will actually run the driver, correctly.
 
-    Three things have to hold and they fail independently: `.gitattributes`
-    declares the attribute (committed and shared), the clone registers a driver
-    command (local, by git's own design), and that command still resolves to
-    something executable here. A teammate who clones and merges without the
-    second gets plain textual conflicts; a moved venv breaks the third the same
-    way, and both are silent — git just writes conflict markers into memory
-    files. `active` requires all three.
+    Four things have to hold and they fail independently — all silently, since
+    git's response to any of them is to fall back to a textual merge (or to call
+    a driver that behaves subtly worse) with no message:
+
+    - ``declared``: `.gitattributes` points matched paths at the driver.
+      Committed and shared.
+    - ``registered``: this clone maps the driver name to a command. Local, by
+      git's own design, so a teammate's fresh clone starts without it.
+    - ``command_ok``: that command still resolves to something executable here.
+      A moved or rebuilt venv breaks it.
+    - ``up_to_date``: that command still matches the CLI's argument contract. A
+      registration written by an older release is never rewritten, so a clone
+      can keep calling the driver with a stale placeholder set indefinitely —
+      the driver runs, and quietly does less (see `driver_command_is_current`).
+
+    ``active`` requires all four.
     """
     root = project_root(cwd)
     gitattributes = root / ".gitattributes"
@@ -586,12 +595,14 @@ def merge_driver_status(cwd: str) -> MergeDriverStatus:
     command = (_git_output(root, "config", "--get", _DRIVER_CONFIG_KEY) or "").strip()
     registered = bool(command)
     command_ok = registered and driver_command_resolves(command)
+    up_to_date = registered and driver_command_is_current(command)
     return {
         "declared": declared,
         "registered": registered,
         "command": command,
         "command_ok": command_ok,
-        "active": declared and registered and command_ok,
+        "up_to_date": up_to_date,
+        "active": declared and registered and command_ok and up_to_date,
     }
 
 
@@ -659,6 +670,33 @@ def build_driver_command() -> str:
     )
 
 
+# Placeholders git substitutes into the driver command, and the argument
+# contract the current CLI expects. `%P` (the real pathname; `%A` is a temp
+# file) was added after the first release, so clones registered before it are
+# still out there passing three arguments — and merge with `path_hint=None`,
+# losing derived-view detection for any file whose frontmatter alone is not
+# conclusive. A registration is per-clone and nothing rewrote it, so that drift
+# is permanent until something notices.
+_DRIVER_PLACEHOLDERS = ("%O", "%A", "%B", "%P")
+
+
+def driver_command_is_current(command: str) -> bool:
+    """Whether a registered driver command still matches the CLI's contract.
+
+    Deliberately compares the *contract* — the `merge-driver` subcommand and the
+    full placeholder set — rather than the exact string `build_driver_command`
+    would emit today. That string embeds an absolute fallback path derived from
+    whichever interpreter is running, so a byte comparison would call a
+    perfectly good registration "stale" whenever `doctor` is run from a
+    different install than the one that wrote it (which `_check_install_drift`
+    already reports, on its own terms). The placeholder set is what actually
+    changes behavior, and it is what drifted in the field.
+    """
+    if "merge-driver" not in command:
+        return False
+    return all(placeholder in command for placeholder in _DRIVER_PLACEHOLDERS)
+
+
 def driver_command_executables(command: str) -> list[str]:
     """Every executable the registered driver command could invoke.
 
@@ -719,16 +757,23 @@ def ensure_merge_driver_registered(cwd: str) -> bool:
     Closes the gap that makes memory files conflict on teams: the person who ran
     `init --merge-driver` commits `.gitattributes`, but every teammate's clone
     starts without the local driver command and silently falls back to textual
-    merges. Any later `ai-memory init` in such a clone picks it up. A
-    registration that no longer *resolves* (moved venv, `.git/config` carried
-    over from another machine) is repaired the same way, since it fails just as
-    silently. Returns True when a registration was written.
+    merges. Any later `ai-memory init` in such a clone picks it up.
+
+    A registration that is present but *wrong* is repaired on the same pass,
+    because it fails just as silently: one that no longer resolves (moved venv,
+    `.git/config` carried over from another machine), and one written by an
+    older release whose argument contract has since changed. Treating
+    `registered` as a boolean is what let the latter persist — the command was
+    there, so nothing ever looked at what it said.
+
+    Returns True when a registration was written.
     """
     status = merge_driver_status(cwd)
-    if not status["declared"] or (status["registered"] and status["command_ok"]):
+    healthy = status["registered"] and status["command_ok"] and status["up_to_date"]
+    if not status["declared"] or healthy:
         return False
     root = project_root(cwd)
     if not (root / ".git").is_dir():
         return False
     _register_driver_command(root)
-    return merge_driver_status(cwd)["command_ok"]
+    return merge_driver_status(cwd)["active"]

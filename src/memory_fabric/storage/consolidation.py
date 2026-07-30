@@ -294,6 +294,13 @@ def _regenerate_index_root(
         store_index_path = store_root / "index.md"
         store_root.mkdir(parents=True, exist_ok=True)
 
+        # `generated: true` is stamped explicitly, not inherited from whatever
+        # the file already had: it is the one marker that identifies a rebuilt
+        # view by inspection alone — for the merge driver's derived-view
+        # detection, for `_is_generated_file`, and for any ignore rule. A view
+        # written by a release that predated the marker would otherwise never
+        # acquire it, because this metadata is rebuilt from scratch each run
+        # while `index.md`'s below is carried forward.
         store_metadata = {
             "store_path": "index",
             "title": "Memory Store Index",
@@ -301,6 +308,8 @@ def _regenerate_index_root(
             "priority": "high",
             "tags": ["index", "memory-store"],
             "schema_version": "1.3",
+            "generated": True,
+            "generated_from": "memory-store",
             "last_updated": now_iso(),
         }
         _write_markdown_if_changed(
@@ -323,6 +332,10 @@ def _regenerate_index_root(
     metadata["last_updated"] = now_iso()
     metadata["summary"] = "Map of available project memory sections."
     metadata["priority"] = "high"
+    # Same reasoning as the store index above, and it matters more here: this
+    # metadata is *carried forward* from the existing file, so an `index.md`
+    # created before the marker existed would never gain it on its own.
+    metadata["generated"] = True
     _write_markdown_if_changed(index_path, metadata, "\n".join(lines) + "\n")
 
     if compile_consolidated:

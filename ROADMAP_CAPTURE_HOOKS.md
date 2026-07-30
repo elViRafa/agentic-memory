@@ -71,7 +71,7 @@ produces no episodic entry, a visible `skipped_reason`, and a stats counter incr
 > store already precedes candidate creation (existing infra), so no separate snapshot step
 > was needed.
 >
-> **Amended in v1.2.1:** capture now writes one file per commit
+> **Amended in v1.2.2:** capture now writes one file per commit
 > (`episodic/commits/<date>/<short-hash>.md`) instead of a shared day file, so the
 > post-commit hook can no longer leave a *tracked, modified* file behind between commits —
 > the state that made `git pull` abort before the merge driver could run. The roll-up walks

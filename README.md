@@ -37,9 +37,11 @@ Memory is stored as human-readable Markdown with YAML frontmatter. No vector dat
 
 ## Status
 
-**v1.2.0 — conflict-free memory merges for teams: generated views and same-day journals
-no longer collide, and `ai-memory resolve-conflicts` clears a merge that already went
-wrong. [Live on PyPI](https://pypi.org/project/memory-fabric/).**
+**v1.2.2 — memory that stays mergeable: one capture file per commit, so the post-commit
+hook can no longer leave a tracked file dirty and abort your next `git pull`; an
+add/add merge no longer strips the structure off captured records; and `ai-memory
+doctor` catches a merge driver that is stale, unresolvable, or half-installed.
+[Live on PyPI](https://pypi.org/project/memory-fabric/).**
 Core CLI and MCP tools work end-to-end. See [`ROADMAP.md`](ROADMAP.md) for what
 shipped, what's in progress, and what's next.
 

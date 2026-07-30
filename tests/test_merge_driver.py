@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,6 +16,7 @@ from memory_fabric.frontmatter import parse_frontmatter
 from memory_fabric.merge_driver import (
     build_driver_command,
     driver_command_executables,
+    driver_command_is_current,
     driver_command_resolves,
     ensure_merge_driver_registered,
     install_merge_driver,
@@ -836,6 +838,72 @@ class DriverRegistrationTests(unittest.TestCase):
             self.assertTrue(status["registered"])
             self.assertFalse(status["command_ok"])
             self.assertFalse(status["active"], "a driver that cannot run is not active")
+
+    def test_a_stale_registration_is_reported_and_repaired(self) -> None:
+        """The shape found in the field: a registration written by an older
+        release, missing `%P`. Every binary in the clone was current — only the
+        per-clone git config was stale, and nothing ever rewrote it. It still
+        runs, so `registered` is true and the old boolean check short-circuited
+        the repair; the driver just merges with `path_hint=None` and loses
+        derived-view detection for every file whose frontmatter alone is not
+        conclusive.
+        """
+        from memory_fabric.storage import doctor
+
+        # `sys.executable`, not a hardcoded Unix path: it has to actually
+        # resolve on whatever OS runs this test (Windows has no /usr/bin), and
+        # the whole point of this fixture is that the *binary* is fine — only
+        # the placeholder set is stale.
+        stale = f'"{sys.executable}" -m memory_fabric.cli merge-driver %O %A %B'
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp:
+            _run_git(temp, "init", "-q")
+            initialize_memory_fabric(temp)
+            install_merge_driver(temp)
+            _run_git(temp, "config", "merge.memory-fabric.driver", stale)
+
+            status = merge_driver_status(temp)
+            self.assertTrue(status["registered"])
+            self.assertTrue(status["command_ok"], "the stale command still resolves and runs")
+            self.assertFalse(status["up_to_date"])
+            self.assertFalse(status["active"], "a driver that loses %P is not fully active")
+
+            warnings = doctor(temp, check_network=False)["warnings"]
+            self.assertTrue(any("written by an older release" in w for w in warnings), warnings)
+
+            self.assertTrue(ensure_merge_driver_registered(temp))
+
+            repaired = merge_driver_status(temp)
+            self.assertTrue(repaired["up_to_date"])
+            self.assertTrue(repaired["active"])
+            self.assertIn("%P", repaired["command"])
+            self.assertFalse(
+                any("written by an older release" in w for w in doctor(temp)["warnings"])
+            )
+            # Idempotent: nothing left to repair on a second pass.
+            self.assertFalse(ensure_merge_driver_registered(temp))
+
+    def test_command_currency_tracks_the_argument_contract_not_the_exact_string(self) -> None:
+        """`up_to_date` compares the contract — subcommand plus the full
+        placeholder set — not the literal string `build_driver_command` emits.
+        That string embeds an absolute fallback path from the running
+        interpreter, so a byte comparison would call a perfectly good
+        registration stale whenever doctor runs from a different install."""
+        self.assertTrue(driver_command_is_current(build_driver_command()))
+        self.assertTrue(
+            driver_command_is_current(
+                '"/some/other/venv/bin/python" -m memory_fabric.cli merge-driver %O %A %B %P'
+            ),
+            "a valid registration from another environment must not read as stale",
+        )
+        for stale in (
+            '"/venv/bin/python" -m memory_fabric.cli merge-driver %O %A %B',  # no %P
+            "ai-memory merge-driver %O %A",
+            "some-other-tool %O %A %B %P",
+            "",
+        ):
+            with self.subTest(command=stale):
+                self.assertFalse(driver_command_is_current(stale))
 
     def test_doctor_warns_and_init_repairs_an_unresolvable_driver_command(self) -> None:
         from memory_fabric.storage import doctor

@@ -374,7 +374,7 @@ class DreamStoreTests(unittest.TestCase):
 
 
 def _write_daily_commit_file(commits_dir: Path, date_str: str, commit_line: str) -> Path:
-    """A legacy shared day file, as capture wrote them before v1.2.1."""
+    """A legacy shared day file, as capture wrote them before v1.2.2."""
     commits_dir.mkdir(parents=True, exist_ok=True)
     path = commits_dir / f"{date_str}.md"
     metadata = {"source": "passive-capture", "review_status": "pending"}
