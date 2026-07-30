@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.2.1] — 2026-07-30
+## [1.2.2] — 2026-07-30
 
 > Memory that stays mergeable. Five issues reported against v1.2.0 and
 > reproduced against a real repo merge. They ended the same three ways: memory
@@ -631,8 +631,8 @@ with those fixed the final score is **96/100 with zero failing checks**
   {ubuntu, windows, macos} × {3.11–3.14}; `storage/_core.py` god module split
   into 12 focused modules.
 
-[Unreleased]: https://github.com/elViRafa/agentic-memory/compare/v1.2.1...HEAD
-[1.2.1]: https://github.com/elViRafa/agentic-memory/compare/v1.2.0...v1.2.1
+[Unreleased]: https://github.com/elViRafa/agentic-memory/compare/v1.2.2...HEAD
+[1.2.2]: https://github.com/elViRafa/agentic-memory/compare/v1.2.0...v1.2.2
 [0.8.1]: https://github.com/elViRafa/agentic-memory/compare/v0.7.3...v0.8.1
 [0.7.3]: https://github.com/elViRafa/agentic-memory/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/elViRafa/agentic-memory/compare/v0.7.1...v0.7.2

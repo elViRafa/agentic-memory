@@ -37,7 +37,7 @@ Memory is stored as human-readable Markdown with YAML frontmatter. No vector dat
 
 ## Status
 
-**v1.2.1 — memory that stays mergeable: one capture file per commit, so the post-commit
+**v1.2.2 — memory that stays mergeable: one capture file per commit, so the post-commit
 hook can no longer leave a tracked file dirty and abort your next `git pull`; an
 add/add merge no longer strips the structure off captured records; and `ai-memory
 doctor` catches a merge driver that is stale, unresolvable, or half-installed.
