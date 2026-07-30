@@ -374,10 +374,24 @@ class DreamStoreTests(unittest.TestCase):
 
 
 def _write_daily_commit_file(commits_dir: Path, date_str: str, commit_line: str) -> Path:
+    """A legacy shared day file, as capture wrote them before v1.2.1."""
     commits_dir.mkdir(parents=True, exist_ok=True)
     path = commits_dir / f"{date_str}.md"
     metadata = {"source": "passive-capture", "review_status": "pending"}
     body = f"### commit `abc1234567` — {commit_line}\n\n- when: {date_str}T00:00:00+00:00\n"
+    path.write_text(dump_frontmatter(metadata, body), encoding="utf-8")
+    return path
+
+
+def _write_commit_record_file(
+    commits_dir: Path, date_str: str, short_hash: str, commit_line: str
+) -> Path:
+    """A current one-file-per-commit record: `<date>/<short-hash>.md`."""
+    day_dir = commits_dir / date_str
+    day_dir.mkdir(parents=True, exist_ok=True)
+    path = day_dir / f"{short_hash}.md"
+    metadata = {"source": "passive-capture", "review_status": "pending"}
+    body = f"### commit `{short_hash}` — {commit_line}\n\n- when: {date_str}T00:00:00+00:00\n"
     path.write_text(dump_frontmatter(metadata, body), encoding="utf-8")
     return path
 
@@ -412,6 +426,75 @@ class EpisodicRollupTests(unittest.TestCase):
             self.assertIn("second old commit", body)
             self.assertIn("## 2026-06-01", body)
             self.assertIn("## 2026-06-03", body)
+
+    def test_per_commit_record_files_fold_by_day_and_leave_no_empty_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            candidate_root = Path(temp)
+            commits_dir = candidate_root / "memory-store" / "episodic" / "commits"
+            _write_commit_record_file(commits_dir, "2026-06-01", "aaa1111111", "first old commit")
+            _write_commit_record_file(commits_dir, "2026-06-01", "bbb2222222", "second old commit")
+            _write_commit_record_file(commits_dir, "2026-06-03", "ccc3333333", "third old commit")
+
+            result = _roll_up_episodic_commits(
+                candidate_root, cutoff_days=14, now=datetime(2026, 7, 16, tzinfo=UTC)
+            )
+
+            self.assertEqual(result["weeks_touched"], ["week-2026-w23"])
+            self.assertEqual(len(result["files_consolidated"]), 3)
+            self.assertEqual(result["warnings"], [])
+            # Emptied day directories go away with their files.
+            self.assertFalse((commits_dir / "2026-06-01").exists())
+            self.assertFalse((commits_dir / "2026-06-03").exists())
+
+            metadata, body = parse_frontmatter(
+                (commits_dir / "week-2026-w23.md").read_text(encoding="utf-8")
+            )
+            self.assertEqual(metadata["review_status"], "consolidated")
+            for line in ("first old commit", "second old commit", "third old commit"):
+                self.assertIn(line, body)
+            # One heading per day, not per commit.
+            self.assertEqual(body.count("## 2026-06-01"), 1)
+            self.assertEqual(body.count("## 2026-06-03"), 1)
+
+    def test_both_capture_layouts_fold_together_in_one_pass(self) -> None:
+        """A store written across the upgrade holds legacy day files and
+        per-commit records side by side; a single roll-up clears both."""
+        with tempfile.TemporaryDirectory() as temp:
+            candidate_root = Path(temp)
+            commits_dir = candidate_root / "memory-store" / "episodic" / "commits"
+            _write_daily_commit_file(commits_dir, "2026-06-01", "legacy day-file commit")
+            _write_commit_record_file(commits_dir, "2026-06-03", "ccc3333333", "per-commit record")
+
+            result = _roll_up_episodic_commits(
+                candidate_root, cutoff_days=14, now=datetime(2026, 7, 16, tzinfo=UTC)
+            )
+
+            self.assertEqual(result["weeks_touched"], ["week-2026-w23"])
+            self.assertEqual(len(result["files_consolidated"]), 2)
+            self.assertFalse((commits_dir / "2026-06-01.md").exists())
+            self.assertFalse((commits_dir / "2026-06-03").exists())
+            _metadata, body = parse_frontmatter(
+                (commits_dir / "week-2026-w23.md").read_text(encoding="utf-8")
+            )
+            self.assertIn("legacy day-file commit", body)
+            self.assertIn("per-commit record", body)
+
+    def test_a_malformed_record_keeps_its_day_directory_alive(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            candidate_root = Path(temp)
+            commits_dir = candidate_root / "memory-store" / "episodic" / "commits"
+            good = _write_commit_record_file(commits_dir, "2026-06-01", "aaa1111111", "good commit")
+            bad = commits_dir / "2026-06-01" / "bbb2222222.md"
+            bad.write_text("not valid frontmatter at all", encoding="utf-8")
+
+            result = _roll_up_episodic_commits(
+                candidate_root, cutoff_days=14, now=datetime(2026, 7, 16, tzinfo=UTC)
+            )
+
+            self.assertTrue(any("bbb2222222.md" in w for w in result["warnings"]))
+            self.assertTrue(bad.exists(), "an unreadable record must never be deleted")
+            self.assertFalse(good.exists())
+            self.assertTrue(bad.parent.is_dir())
 
     def test_files_younger_than_cutoff_are_untouched(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -464,6 +547,24 @@ class EpisodicRollupTests(unittest.TestCase):
             # ...but the well-formed file in the same week still gets rolled up.
             self.assertFalse(good_path.exists())
             self.assertTrue((commits_dir / "week-2026-w23.md").exists())
+
+    def test_deep_dream_leaves_no_empty_day_directory_in_the_live_store(self) -> None:
+        """Applying a candidate deletes files, not directories — so the day
+        folder a roll-up emptied has to be pruned explicitly or it lingers in
+        the live store forever."""
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            commits_dir = Path(temp) / ".ai-memory" / "memory-store" / "episodic" / "commits"
+            _write_commit_record_file(commits_dir, "2026-06-01", "aaa1111111", "aged commit")
+
+            with mock.patch("memory_fabric.storage.consolidation.datetime") as mock_datetime:
+                mock_datetime.now.return_value = datetime(2026, 7, 16, tzinfo=UTC)
+                dream(temp, mode="deep", apply=True)
+
+            self.assertTrue((commits_dir / "week-2026-w23.md").exists())
+            self.assertFalse((commits_dir / "2026-06-01").exists())
+            # The scaffolded category directory itself survives (it holds .gitkeep).
+            self.assertTrue((Path(temp) / ".ai-memory" / "memory-store" / "episodic").is_dir())
 
     def test_deep_dream_applies_rollup_light_dream_does_not(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

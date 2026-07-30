@@ -69,7 +69,16 @@ produces no episodic entry, a visible `skipped_reason`, and a stats counter incr
 > deleted only after their content is successfully appended, so a parse failure leaves the
 > daily file in place for a future retry instead of losing it. A snapshot of the whole
 > store already precedes candidate creation (existing infra), so no separate snapshot step
-> was needed. Verified end-to-end via the real CLI: `ai-memory capture` → `ai-memory dream
+> was needed.
+>
+> **Amended in v1.2.1:** capture now writes one file per commit
+> (`episodic/commits/<date>/<short-hash>.md`) instead of a shared day file, so the
+> post-commit hook can no longer leave a *tracked, modified* file behind between commits —
+> the state that made `git pull` abort before the merge driver could run. The roll-up walks
+> both layouts and folds a day's records together under one `## <date>` heading, so a store
+> written across the upgrade clears in a single pass.
+>
+> Verified end-to-end via the real CLI: `ai-memory capture` → `ai-memory dream
 > --mode deep --apply` correctly rolled a dated daily file into a weekly summary with
 > `review_status: consolidated` and removed the daily file; a `--mode light` dream in
 > between left it untouched, confirming the roll-up is deep-only.

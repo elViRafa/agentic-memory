@@ -16,6 +16,7 @@ from memory_fabric.frontmatter import FrontmatterError, parse_frontmatter
 from memory_fabric.paths import global_memory_dir, local_memory_dir, memory_store_dir, project_root
 from memory_fabric.security import redact_secrets
 from memory_fabric.storage._shared import (
+    _index_group_key,
     _is_ignored_local_memory_path,
     _is_steering_file,
     _is_store_path,
@@ -229,16 +230,28 @@ def initialize_memory_fabric(
             if bin_warning:
                 warnings.append(bin_warning)
 
-            # Post-commit hook: passive capture (record the commit) then Dreaming
-            # (consolidate + extract). Capture runs first so the just-made commit
-            # is on disk as episodic memory before consolidation reads it.
+            # Post-commit hook: passive capture only.
+            #
+            # Dreaming deliberately does NOT run here. It rewrites the generated
+            # views — `index.md`, `memory-store/index.md`, the root maps — which
+            # are *tracked* files, so running it after every commit left the
+            # working tree permanently dirty: `git pull` then aborts with "Your
+            # local changes to the following files would be overwritten by
+            # merge" before any merge machinery (including our own merge driver)
+            # ever runs. Capture's own output is one new file per commit
+            # (untracked, which git merges straight over), so the tree is
+            # mergeable the moment the hook returns.
+            #
+            # The views stay fresh without this: the client lifecycle hooks
+            # (`ai-memory install-hooks`) run a light Dream at session end and
+            # before compaction, and `ai-memory dream` is always available by
+            # hand.
             post_commit = hooks_dir / "post-commit"
             post_block = _build_hook_block(
                 cli_bin,
                 [
-                    '  echo "Running Memory Fabric capture + Dreaming..."',
+                    '  echo "Running Memory Fabric capture..."',
                     '  "$MEMORY_FABRIC_BIN" capture || echo "memory-fabric: capture failed (non-fatal)" >&2',
-                    '  "$MEMORY_FABRIC_BIN" dream --mode light --apply || echo "memory-fabric: dream failed (non-fatal)" >&2',
                 ],
             )
             _install_hook_block(
@@ -563,12 +576,20 @@ def status(cwd: str) -> StatusResult:
 
 
 def _merge_driver_warnings(cwd: str) -> list[str]:
-    """Warn when the semantic merge driver is only half-installed.
+    """Warn when the semantic merge driver will not actually run.
 
-    `.gitattributes` is committed and shared; the driver command is per-clone.
-    A teammate who clones and merges without registering it gets ordinary
-    textual conflicts in `.ai-memory/` with no indication why — the single most
-    common way memory conflicts show up on a team.
+    Three independent failures, all silent — git just falls back to a textual
+    merge and writes conflict markers into memory files:
+
+    1. `.gitattributes` declares the driver (committed, shared) but this clone
+       never registered the command (per-clone, by git's design). The single
+       most common way memory conflicts show up on a team: whoever ran
+       `init --merge-driver` committed the attribute, and every teammate's
+       fresh clone starts without the local half.
+    2. The command is registered but `.gitattributes` doesn't point at it, so
+       git never calls it.
+    3. The command is registered but no longer resolves — a venv that moved or
+       was rebuilt, or a `.git/config` copied from another machine.
     """
     # Imported lazily: merge_driver imports from this package.
     from memory_fabric.merge_driver import merge_driver_status
@@ -590,6 +611,14 @@ def _merge_driver_warnings(cwd: str) -> list[str]:
             "The Memory Fabric merge driver is registered in this clone but no .gitattributes "
             "rule points at it, so git never calls it. Run `ai-memory init --merge-driver` and "
             "commit .gitattributes."
+        ]
+    if status["registered"] and not status["command_ok"]:
+        return [
+            "The Memory Fabric merge driver is registered in this clone but its command does "
+            f"not resolve to anything executable here: `{status['command']}`. Git will fall "
+            "back to a plain textual merge and write conflict markers into .ai-memory files. "
+            "Re-run `ai-memory init --merge-driver` from the environment where memory-fabric "
+            "is installed."
         ]
     return []
 
@@ -716,11 +745,15 @@ def doctor(cwd: str, check_network: bool = False) -> DoctorResult:
                             if sec_raw.startswith("`") and sec_raw.endswith("`"):
                                 listed_store_paths.add(sec_raw.strip("`"))
 
-                existing_store_paths = {
-                    _path_to_store_path(store_root, path)
-                    for path in _iter_markdown_files(store_root)
-                    if path.name != "index.md"
-                }
+                # Grouped paths (passive commit captures) are listed once per
+                # group, so compare against the same labels the index writes —
+                # otherwise every captured commit would look "missing".
+                existing_store_paths = set()
+                for path in _iter_markdown_files(store_root):
+                    if path.name == "index.md":
+                        continue
+                    sp = _path_to_store_path(store_root, path)
+                    existing_store_paths.add(_index_group_key(sp) or sp)
 
                 missing_in_store_index = existing_store_paths - listed_store_paths
                 extra_in_store_index = listed_store_paths - existing_store_paths

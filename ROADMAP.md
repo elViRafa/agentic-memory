@@ -569,10 +569,14 @@ before `dream`, so every commit is recorded with no agent cooperation.
       deduplicated from two copies) instructs the LLM to propose **new**
       `store/<category>/<slug>` entries from the diff/transcripts, not just edit existing
       sections.
-- [x] **Provenance rails.** Passive captures live at `memory-store/episodic/commits/<date>`
-      with `source: passive-capture` + `review_status: pending` frontmatter and the
+- [x] **Provenance rails.** Passive captures live at
+      `memory-store/episodic/commits/<date>/<short-hash>` — one file per commit — with
+      `source: passive-capture` + `review_status: pending` frontmatter and the
       commit hash in the body; idempotent per commit hash. Kept separate from
-      agent-written session journals so provenance stays clean.
+      agent-written session journals so provenance stays clean. One file per commit
+      (rather than a shared day file) is what keeps the post-commit hook from leaving a
+      tracked, modified file between every pair of commits — the state that aborts a
+      `git pull` before any merge machinery runs.
 - [x] **No-LLM fallback.** `capture_commit` is pure Python — records message, files, and
       diffstat with zero provider, giving the next LLM-assisted Dream raw material.
 - [x] **Smarter diff budget.** `_summarize_diff` truncates per file (1.5 KB each, 6 KB

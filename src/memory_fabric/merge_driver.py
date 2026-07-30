@@ -23,13 +23,21 @@ Merge strategy, cheapest-safe-outcome first:
    in them is worth a human's attention; the union just keeps them readable
    until the next rebuild. See ``_merge_derived_view`` for why the merged file
    is re-stamped rather than left with stale generation hashes.
-3. Both sides purely *appended* to a shared prefix (the overwhelmingly common
-   case for memory files: two branches each add new facts/journal entries)
-   -> concatenate, deduplicating exact-duplicate lines the same way
-   ``write_memory_store``'s append mode already does.
+3. Both sides purely *appended* to a **non-empty** shared prefix (the
+   overwhelmingly common case for memory files: two branches each add new
+   facts/journal entries) -> concatenate, deduplicating exact-duplicate lines
+   the same way ``write_memory_store``'s append mode already does. The
+   non-empty requirement is load-bearing: every string starts with ``""``, so
+   an add/add merge (both branches created the file independently, no common
+   ancestor) would otherwise take this path with *no* shared prefix at all and
+   run whole-file dedup over two unrelated bodies — silently deleting the
+   repeated per-record boilerplate that gives record-structured files their
+   structure. Those belong in the block merge below.
 4. Both sides changed different ``##`` blocks, or appended inside the same one
    (two agents writing separate session entries into the same episodic day
-   file, plus an edit to an older entry) -> merge block by block.
+   file, plus an edit to an older entry) -> merge block by block. Record logs
+   under ``episodic/commits/`` always take this path, because their unit of
+   identity is the record, not the line.
 5. Anything else (both sides rewrote the same block) -> defer to
    ``git merge-file`` for git's own standard textual 3-way merge with conflict
    markers. This never makes things worse than not having the driver installed
@@ -47,12 +55,15 @@ registered the driver beforehand (``ai-memory resolve-conflicts``).
 from __future__ import annotations
 
 import re
+import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 from typing import Any
 
+from memory_fabric.clients import resolve_cli_binary
 from memory_fabric.contracts import ConflictResolution, MergeDriverStatus
 from memory_fabric.frontmatter import FrontmatterError, dump_frontmatter, parse_frontmatter
 from memory_fabric.paths import project_root
@@ -73,11 +84,36 @@ _DRIVER_CONFIG_KEY = "merge.memory-fabric.driver"
 # fact, decision, or session entry per block.
 _HEADING_RE = re.compile(r"^#{2,6}\s+\S")
 
+# Passively captured commit records (`storage/capture.py`). Line-level dedup is
+# the wrong tool for these on both counts. Exact match: every record repeats the
+# same marker lines by design — `**Files:**`, `- source: passive-capture`, the
+# ``` fences around the diffstat — so dropping "duplicates" strips the structure
+# off every record but the first. Fuzzy match: the content is file paths and
+# diffstats, where two lines being *word-similar* is normal and says nothing
+# about them being the same line.
+#
+# The unit that can actually be deduplicated here is the record, identified by
+# the commit hash in its `### commit` heading — which is precisely what
+# `_merge_blocks` keys on. So these paths skip the line-level append path
+# entirely and merge record by record.
+_RECORD_LOG_PREFIX = "episodic/commits/"
 
-def _dedupe_append(existing_new: str, incoming_new: str) -> str:
+
+def _is_record_log(path_hint: str | None) -> bool:
+    """True for record-structured capture logs, which merge by record rather
+    than by line (see `_RECORD_LOG_PREFIX`)."""
+    if not path_hint:
+        return False
+    return _RECORD_LOG_PREFIX in str(path_hint).replace("\\", "/")
+
+
+def _dedupe_append(existing_new: str, incoming_new: str, fuzzy: bool = True) -> str:
     """Concatenate two branches' additions to a shared prefix, dropping lines
     from the incoming side that are exact or near-duplicates of lines already
-    kept from the existing side (same filter `write_local_memory` applies)."""
+    kept from the existing side (same filter `write_local_memory` applies).
+
+    ``fuzzy=False`` drops only *exact* duplicates — see `_is_record_log`.
+    """
     existing_clean = existing_new.strip("\n")
     if not incoming_new.strip():
         return existing_clean + ("\n" if existing_clean else "")
@@ -96,7 +132,7 @@ def _dedupe_append(existing_new: str, incoming_new: str) -> str:
         norm = re.sub(r"^[-*+]\s+", "", stripped).strip().lower()
         if norm in existing_normalized or stripped.lower() in existing_lines_lower:
             continue
-        if any(_jaccard_similar(norm, existing) for existing in existing_normalized):
+        if fuzzy and any(_jaccard_similar(norm, existing) for existing in existing_normalized):
             continue
         kept.append(line)
 
@@ -289,7 +325,9 @@ def _merged_block_order(
     return order
 
 
-def _merge_blocks(ancestor_body: str, ours_body: str, theirs_body: str) -> str | None:
+def _merge_blocks(
+    ancestor_body: str, ours_body: str, theirs_body: str, fuzzy: bool = True
+) -> str | None:
     """Merge two branches block by block, so edits that touch different facts in
     the same file never collide. Returns None when a single block was rewritten
     on both sides — the one shape that genuinely needs a human."""
@@ -326,7 +364,7 @@ def _merge_blocks(ancestor_body: str, ours_body: str, theirs_body: str) -> str |
 
         base = base_text or ""
         if ours_text.startswith(base) and theirs_text.startswith(base):
-            appended = _dedupe_append(ours_text[len(base) :], theirs_text[len(base) :])
+            appended = _dedupe_append(ours_text[len(base) :], theirs_text[len(base) :], fuzzy=fuzzy)
             merged.append((base + appended).rstrip("\n"))
             continue
         return None
@@ -362,6 +400,8 @@ def resolve_conflict(
             warnings.append(f"`{field}` differs between branches; deferring to textual merge.")
             return None, warnings
 
+    record_log = _is_record_log(path_hint)
+
     merged_body: str
     if ours_body == theirs_body:
         merged_body = ours_body
@@ -374,12 +414,23 @@ def resolve_conflict(
         return _merge_derived_view(
             ancestor_body, ours_meta, ours_body, theirs_meta, theirs_body
         ), warnings
-    elif ours_body.startswith(ancestor_body) and theirs_body.startswith(ancestor_body):
+    elif (
+        not record_log
+        and ancestor_body.strip()
+        and ours_body.startswith(ancestor_body)
+        and theirs_body.startswith(ancestor_body)
+    ):
+        # A real shared prefix, so everything past it is genuinely new on both
+        # sides. An *empty* ancestor is not a shared prefix — every string
+        # starts with "" — and falls through to the block merge below, which
+        # keeps each side's records whole instead of deduping one body against
+        # the other. Record logs skip this path for the same reason at every
+        # ancestor (see `_RECORD_LOG_PREFIX`).
         ours_new = ours_body[len(ancestor_body) :]
         theirs_new = theirs_body[len(ancestor_body) :]
         merged_body = ancestor_body + _dedupe_append(ours_new, theirs_new)
     else:
-        block_merged = _merge_blocks(ancestor_body, ours_body, theirs_body)
+        block_merged = _merge_blocks(ancestor_body, ours_body, theirs_body, fuzzy=not record_log)
         if block_merged is None:
             warnings.append(
                 "the same block was rewritten on both sides (body changes are not pure "
@@ -514,10 +565,13 @@ def resolve_unmerged(cwd: str, memory_only: bool = True) -> ConflictResolution:
 def merge_driver_status(cwd: str) -> MergeDriverStatus:
     """Report whether this clone will actually run the driver.
 
-    Both halves are required and they fail independently: `.gitattributes` is
-    committed and shared, the driver command is local to each clone. A teammate
-    who clones and merges without registering it gets plain textual conflicts,
-    which is the usual reason memory files conflict on a team.
+    Three things have to hold and they fail independently: `.gitattributes`
+    declares the attribute (committed and shared), the clone registers a driver
+    command (local, by git's own design), and that command still resolves to
+    something executable here. A teammate who clones and merges without the
+    second gets plain textual conflicts; a moved venv breaks the third the same
+    way, and both are silent — git just writes conflict markers into memory
+    files. `active` requires all three.
     """
     root = project_root(cwd)
     gitattributes = root / ".gitattributes"
@@ -529,8 +583,16 @@ def merge_driver_status(cwd: str) -> MergeDriverStatus:
             )
         except OSError:
             declared = False
-    registered = bool((_git_output(root, "config", "--get", _DRIVER_CONFIG_KEY) or "").strip())
-    return {"declared": declared, "registered": registered, "active": declared and registered}
+    command = (_git_output(root, "config", "--get", _DRIVER_CONFIG_KEY) or "").strip()
+    registered = bool(command)
+    command_ok = registered and driver_command_resolves(command)
+    return {
+        "declared": declared,
+        "registered": registered,
+        "command": command,
+        "command_ok": command_ok,
+        "active": declared and registered and command_ok,
+    }
 
 
 def install_merge_driver(cwd: str) -> dict[str, Any]:
@@ -570,14 +632,78 @@ def install_merge_driver(cwd: str) -> dict[str, Any]:
     }
 
 
+def build_driver_command() -> str:
+    """The shell command git runs for a matched path.
+
+    PATH first, the interpreter that registered it only as a fallback. Git
+    stores this per-clone in `.git/config`, where it long outlives the
+    environment that wrote it: a hardcoded absolute interpreter path
+    (`/home/<user>/<project>/env/bin/python`) breaks the moment the venv is
+    moved, rebuilt, or the clone is copied to another machine — and a broken
+    driver command is worse than none, because git falls back to a plain
+    textual merge and writes conflict markers into memory files. Resolving
+    `ai-memory` from PATH at merge time survives all of that; the absolute
+    path still covers the case where the CLI is only installed in a venv.
+
+    %P is the real pathname being merged (%A is a temp file), which is what
+    lets the driver recognize index.md as a rebuilt view.
+    """
+    args = "merge-driver '%O' '%A' '%B' '%P'"
+    fallback, _warning = resolve_cli_binary()
+    if fallback == "ai-memory":
+        # No absolute path to fall back to; PATH is all there is.
+        return f"ai-memory {args}"
+    return (
+        f"if command -v ai-memory >/dev/null 2>&1; then ai-memory {args}; "
+        f'else "{fallback}" {args}; fi'
+    )
+
+
+def driver_command_executables(command: str) -> list[str]:
+    """Every executable the registered driver command could invoke.
+
+    `build_driver_command` emits a two-branch shell command, and clones
+    registered by older versions hold a single plain command — both reduce to
+    "the word in command position", which is what this collects so `doctor` can
+    check that at least one of them actually resolves.
+    """
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return []
+    # Words that end a command and start the next one. `shlex` leaves
+    # redirections glued to their operand (`>/dev/null`, `2>&1;`), which is
+    # fine: those are never in command position.
+    separators = {"if", "then", "else", "elif", "do", ";", "&&", "||", "|", "!"}
+    terminators = {"fi", "done", "esac"}
+    executables: list[str] = []
+    expect_command = True
+    for token in tokens:
+        if token in terminators:
+            expect_command = False
+        elif token in separators:
+            expect_command = True
+        elif expect_command:
+            executables.append(token)
+            expect_command = False
+    return executables
+
+
+def driver_command_resolves(command: str) -> bool:
+    """Whether the registered driver command names something git can execute."""
+    if not command.strip():
+        return False
+    for executable in driver_command_executables(command):
+        if shutil.which(executable) or Path(executable).exists():
+            return True
+    return False
+
+
 def _register_driver_command(root: Path) -> None:
     """Write the per-clone `merge.memory-fabric.*` git config entries."""
-    # %P is the real pathname being merged (%A is a temp file), which is what
-    # lets the driver recognize index.md as a rebuilt view.
-    driver_cmd = f'"{sys.executable}" -m memory_fabric.cli merge-driver %O %A %B %P'
     for key, value in (
         ("merge.memory-fabric.name", "Memory Fabric semantic merge"),
-        (_DRIVER_CONFIG_KEY, driver_cmd),
+        (_DRIVER_CONFIG_KEY, build_driver_command()),
     ):
         subprocess.run(
             ["git", "config", key, value],
@@ -593,14 +719,16 @@ def ensure_merge_driver_registered(cwd: str) -> bool:
     Closes the gap that makes memory files conflict on teams: the person who ran
     `init --merge-driver` commits `.gitattributes`, but every teammate's clone
     starts without the local driver command and silently falls back to textual
-    merges. Any later `ai-memory init` in such a clone picks it up. Returns True
-    when a registration was added.
+    merges. Any later `ai-memory init` in such a clone picks it up. A
+    registration that no longer *resolves* (moved venv, `.git/config` carried
+    over from another machine) is repaired the same way, since it fails just as
+    silently. Returns True when a registration was written.
     """
     status = merge_driver_status(cwd)
-    if not status["declared"] or status["registered"]:
+    if not status["declared"] or (status["registered"] and status["command_ok"]):
         return False
     root = project_root(cwd)
     if not (root / ".git").is_dir():
         return False
     _register_driver_command(root)
-    return merge_driver_status(cwd)["registered"]
+    return merge_driver_status(cwd)["command_ok"]

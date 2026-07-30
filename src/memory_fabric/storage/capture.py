@@ -34,6 +34,21 @@ from memory_fabric.storage.store import write_memory_store
 # Provenance store path for passively captured commits. Kept separate from
 # agent-written session journals (episodic/<date>) so the two never mix and
 # review_status stays meaningful.
+#
+# One file per commit — `episodic/commits/<date>/<short-hash>.md` — not one
+# shared file per day. Capture runs from the post-commit hook, so the record for
+# commit N can only ever be committed by commit N+1; with a shared day file that
+# tracked file is modified-but-uncommitted between every pair of commits, and
+# git refuses to pull into it:
+#
+#     error: Your local changes to the following files would be overwritten by merge:
+#             .ai-memory/memory-store/episodic/commits/2026-07-30.md
+#
+# That abort happens *before* any merge machinery runs, so the semantic merge
+# driver — which resolves this file correctly when it gets the chance — could
+# never fire. A distinct new file per commit is untracked instead of modified,
+# which git is happy to pull over, and two developers can never write the same
+# path in the first place.
 _COMMITS_PREFIX = "episodic/commits"
 
 _SESSION_START_MARKER = "session_started_at"
@@ -119,6 +134,27 @@ def _now_iso() -> str:
 # ---------------------------------------------------------------------------
 
 
+def _captured_in_legacy_day_file(
+    commits_root: Path, date_str: str, short_hash: str, full_hash: str
+) -> bool:
+    """Whether a shared `<date>.md` day file written before the one-file-per-commit
+    layout already holds this commit.
+
+    Stores captured by an older version keep their day files until a deep Dream
+    folds them into the weekly summary; without this check the first capture
+    after an upgrade would re-record every commit of the current day in the new
+    layout.
+    """
+    legacy = commits_root / f"{date_str}.md"
+    if not legacy.exists():
+        return False
+    try:
+        existing = legacy.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+    return short_hash in existing or full_hash in existing
+
+
 def capture_commit(cwd: str, commit: str = "HEAD", apply_filter: bool = True) -> dict[str, Any]:
     """Record a single commit as episodic memory. Idempotent per commit hash.
 
@@ -184,19 +220,17 @@ def capture_commit(cwd: str, commit: str = "HEAD", apply_filter: bool = True) ->
     date_str = (author_date[:10] if len(author_date) >= 10 else "") or datetime.now(UTC).strftime(
         "%Y-%m-%d"
     )
-    store_path = f"{_COMMITS_PREFIX}/{date_str}"
+    store_path = f"{_COMMITS_PREFIX}/{date_str}/{short_hash}"
 
-    target = memory_store_dir(cwd) / "episodic" / "commits" / f"{date_str}.md"
-    if target.exists():
-        try:
-            existing = target.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            existing = ""
-        if short_hash in existing or full_hash in existing:
-            result["commit"] = short_hash
-            result["store_path"] = store_path
-            result["warnings"].append(f"Commit {short_hash} already captured.")
-            return result
+    commits_root = memory_store_dir(cwd) / "episodic" / "commits"
+    target = commits_root / date_str / f"{short_hash}.md"
+    if target.exists() or _captured_in_legacy_day_file(
+        commits_root, date_str, short_hash, full_hash
+    ):
+        result["commit"] = short_hash
+        result["store_path"] = store_path
+        result["warnings"].append(f"Commit {short_hash} already captured.")
+        return result
 
     safe_subject, r_subj = redact_secrets(subject)
     redactions = r_subj
@@ -221,25 +255,18 @@ def capture_commit(cwd: str, commit: str = "HEAD", apply_filter: bool = True) ->
         block_lines += ["", "```", safe_stat, "```"]
     block = "\n".join(block_lines)
 
-    # Inject provenance frontmatter only when creating the file, so an agent or
-    # Dream that later clears review_status is not overwritten on the next append.
-    if target.exists():
-        content = block
-    else:
-        provenance = {
-            "source": "passive-capture",
-            "review_status": "pending",
-        }
-        content = dump_frontmatter(provenance, block)
+    # Every capture creates its own file, so provenance is always written fresh
+    # and `mode="replace"` can never clobber somebody else's record.
+    content = dump_frontmatter({"source": "passive-capture", "review_status": "pending"}, block)
 
     write_result = write_memory_store(
         cwd,
         store_path=store_path,
         content=content,
-        title=f"Commit Log — {date_str}",
+        title=f"Commit {short_hash} — {safe_subject}"[:150],
         tags=["episodic", "passive-capture", "needs-review"],
         priority="low",
-        mode="append",
+        mode="replace",
     )
 
     result["changed"] = write_result["changed"]
@@ -352,7 +379,10 @@ def capture_stats(cwd: str) -> dict[str, Any]:
     commit_captures = 0
     commits_dir = store_root / "episodic" / "commits"
     if commits_dir.exists():
-        for path in commits_dir.glob("*.md"):
+        # rglob, not glob: one file per commit lives in a `<date>/` subdirectory.
+        # Counting `### commit` headings rather than files keeps legacy day files
+        # and folded weekly summaries counted correctly too.
+        for path in commits_dir.rglob("*.md"):
             with contextlib.suppress(OSError, UnicodeDecodeError):
                 commit_captures += path.read_text(encoding="utf-8").count("### commit ")
 

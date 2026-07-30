@@ -5,6 +5,7 @@ the project index / consolidated_memory.md compiled view.
 
 from __future__ import annotations
 
+import contextlib
 import difflib
 import re
 import shutil
@@ -20,6 +21,7 @@ from memory_fabric.paths import local_memory_dir
 from memory_fabric.storage._shared import (
     PRIORITY_ORDER,
     _get_section_key,
+    _index_group_key,
     _is_generated_file,
     _is_ignored_local_memory_path,
     _is_steering_file,
@@ -65,6 +67,42 @@ def _extract_key_topics(body: str) -> str:
 
     cleaned_topics = [t.replace("|", "\\|") for t in topics]
     return "<br>".join(f"• {t}" for t in cleaned_topics)
+
+
+# `### commit `<short-hash>` — <subject>`, as storage/capture.py writes it.
+_COMMIT_RECORD_HEADING_RE = re.compile(r"^#{2,6}\s+commit\s+`?([0-9a-f]+)`?\s*(?:—|-)?\s*(.*)$")
+
+
+def _grouped_store_index_row(group_key: str, members: list[tuple[dict[str, Any], str]]) -> str:
+    """One `memory-store/index.md` row standing in for a whole group of files.
+
+    Used for passive commit captures, which are one file per commit: the index
+    lists the day, how many commits it holds, and the first few subjects — the
+    same navigational value a day file's row carried, without a row per commit.
+    """
+    subjects: list[str] = []
+    tags: list[str] = []
+    priority_rank = PRIORITY_ORDER["low"]
+    for metadata, body in members:
+        priority_rank = min(
+            priority_rank, PRIORITY_ORDER.get(str(metadata.get("priority") or "medium"), 1)
+        )
+        for tag in metadata.get("tags", []) if isinstance(metadata.get("tags"), list) else []:
+            if tag not in tags:
+                tags.append(tag)
+        for line in body.splitlines():
+            match = _COMMIT_RECORD_HEADING_RE.match(line.strip())
+            if match and match.group(2).strip():
+                subjects.append(match.group(2).strip())
+                break
+
+    priority = next(name for name, rank in PRIORITY_ORDER.items() if rank == priority_rank)
+    summary = f"{len(members)} passively captured commit(s)."
+    shown = [subject.replace("|", "\\|") for subject in subjects[:3]]
+    if len(subjects) > 3:
+        shown.append(f"…and {len(subjects) - 3} more")
+    topics = "<br>".join(f"• {subject}" for subject in shown) if shown else "None recorded"
+    return f"| `{group_key}` | {priority} | {summary} | {topics} | {', '.join(tags)} |"
 
 
 def _compile_consolidated_memory(memory_dir: Path) -> str:
@@ -213,24 +251,45 @@ def _regenerate_index_root(
             "| Path | Priority | Summary | Key Topics | Tags |",
             "| --- | --- | --- | --- | --- |",
         ]
+        # Grouped paths (passive commit captures) contribute one row per day
+        # rather than one per file; see `_index_group_key`. The row lands where
+        # the group's first member would have, so the index keeps store order.
+        grouped: dict[str, list[tuple[dict[str, Any], str]]] = {}
+        row_order: list[tuple[str, bool]] = []
+        singles: dict[str, tuple[dict[str, Any], str]] = {}
         for sf in store_files:
             try:
                 sf_meta, sf_body = parse_frontmatter(sf.read_text(encoding="utf-8"))
-                sp = _path_to_store_path(store_root, sf)
-                sf_priority = sf_meta.get("priority", "medium")
-                sf_summary = str(sf_meta.get("summary", "")).replace("|", "\\|")
-                sf_topics = _extract_key_topics(sf_body)
-                sf_tags = sf_meta.get("tags", [])
-                tags_str = ", ".join(sf_tags) if isinstance(sf_tags, list) else str(sf_tags)
-                store_index_lines.append(
-                    f"| `{sp}` | {sf_priority} | {sf_summary} | {sf_topics} | {tags_str} |"
-                )
-                checked_files.append(str(sf))
             except (OSError, UnicodeDecodeError, FrontmatterError) as exc:
                 if warnings is not None:
                     warnings.append(
                         f"Skipped {sf.relative_to(store_root)} during index regeneration: {exc}"
                     )
+                continue
+            checked_files.append(str(sf))
+            sp = _path_to_store_path(store_root, sf)
+            group = _index_group_key(sp)
+            if group is None:
+                singles[sp] = (sf_meta, sf_body)
+                row_order.append((sp, False))
+                continue
+            if group not in grouped:
+                row_order.append((group, True))
+            grouped.setdefault(group, []).append((sf_meta, sf_body))
+
+        for key, is_group in row_order:
+            if is_group:
+                store_index_lines.append(_grouped_store_index_row(key, grouped[key]))
+                continue
+            sf_meta, sf_body = singles[key]
+            sf_priority = sf_meta.get("priority", "medium")
+            sf_summary = str(sf_meta.get("summary", "")).replace("|", "\\|")
+            sf_topics = _extract_key_topics(sf_body)
+            sf_tags = sf_meta.get("tags", [])
+            tags_str = ", ".join(sf_tags) if isinstance(sf_tags, list) else str(sf_tags)
+            store_index_lines.append(
+                f"| `{key}` | {sf_priority} | {sf_summary} | {sf_topics} | {tags_str} |"
+            )
 
         store_index_path = store_root / "index.md"
         store_root.mkdir(parents=True, exist_ok=True)
@@ -298,10 +357,50 @@ def _create_candidate_store(memory_dir: Path, snapshot: str) -> Path:
     return candidate_root
 
 
-# Daily passive-capture files are named after the commit's author date
-# (capture.py), so a plain date pattern identifies them; anything else already
-# under episodic/commits/ (e.g. a prior week-*.md summary) is left alone.
-_EPISODIC_COMMITS_DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})\.md$")
+# Passive captures are filed under the commit's author date (capture.py): one
+# file per commit in a `<date>/` directory, plus — in stores written before that
+# layout — a shared `<date>.md` day file. A plain date pattern identifies both;
+# anything else already under episodic/commits/ (e.g. a prior week-*.md summary)
+# is left alone.
+_EPISODIC_COMMITS_DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})(\.md)?$")
+
+
+def _episodic_commit_date(name: str) -> date | None:
+    """The author date a daily capture file or directory is filed under, if any."""
+    match = _EPISODIC_COMMITS_DATE_RE.match(name)
+    if not match:
+        return None
+    try:
+        return date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+    except ValueError:
+        return None  # a well-formed name that isn't a real date (2026-13-40)
+
+
+def _daily_commit_units(commits_dir: Path) -> list[tuple[date, list[Path], Path | None]]:
+    """Every daily capture unit under `episodic/commits/`, oldest first.
+
+    Returns `(author_date, files, directory)` per day. `directory` is the
+    per-day folder of the one-file-per-commit layout (removed once emptied) and
+    None for a legacy shared day file. Both layouts fold into the same weekly
+    summary, so a store written across an upgrade rolls up in one pass.
+    """
+    units: list[tuple[date, list[Path], Path | None]] = []
+    try:
+        entries = sorted(commits_dir.iterdir())
+    except OSError:
+        return units
+    for entry in entries:
+        file_date = _episodic_commit_date(entry.name)
+        if file_date is None:
+            continue
+        if entry.is_dir():
+            files = sorted(path for path in entry.glob("*.md") if path.is_file())
+            if files:
+                units.append((file_date, files, entry))
+        elif entry.is_file():
+            units.append((file_date, [entry], None))
+    return sorted(units, key=lambda unit: (unit[0], str(unit[1][0])))
+
 
 # Default age, in days, at which a daily commit-capture file becomes eligible
 # for weekly roll-up in deep Dreaming. No filter at capture time catches every
@@ -316,10 +415,15 @@ def _roll_up_episodic_commits(
     cutoff_days: int = _EPISODIC_ROLLUP_CUTOFF_DAYS,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Fold daily `episodic/commits/<date>.md` files older than `cutoff_days`
-    into weekly `episodic/commits/week-<iso-year>-w<ww>.md` summaries, marked
+    """Fold daily passive-capture files older than `cutoff_days` into weekly
+    `episodic/commits/week-<iso-year>-w<ww>.md` summaries, marked
     `review_status: consolidated`. Deep dream only (called from `dream()` /
     `prepare_dream_payload()` before the candidate is otherwise processed).
+
+    Handles both capture layouts: the current `<date>/<short-hash>.md` (one file
+    per commit) and the legacy shared `<date>.md` day file. A day's records are
+    folded together under one `## <date>` heading regardless of which layout
+    they came from.
 
     Idempotent and lossless-by-default: a daily file's content is appended to
     its week's summary and the daily file is deleted only once that append
@@ -336,16 +440,12 @@ def _roll_up_episodic_commits(
     today = (now or datetime.now(UTC)).date()
     cutoff = today - timedelta(days=cutoff_days)
 
-    groups: dict[tuple[int, int], list[tuple[date, Path]]] = {}
-    for path in sorted(commits_dir.glob("*.md")):
-        match = _EPISODIC_COMMITS_DATE_RE.match(path.name)
-        if not match:
-            continue
-        file_date = date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+    groups: dict[tuple[int, int], list[tuple[date, list[Path], Path | None]]] = {}
+    for file_date, files, day_dir in _daily_commit_units(commits_dir):
         if file_date >= cutoff:
             continue
         iso_year, iso_week, _ = file_date.isocalendar()
-        groups.setdefault((iso_year, iso_week), []).append((file_date, path))
+        groups.setdefault((iso_year, iso_week), []).append((file_date, files, day_dir))
 
     weeks_touched: set[str] = set()
     files_consolidated: list[str] = []
@@ -375,18 +475,39 @@ def _roll_up_episodic_commits(
             body = ""
 
         rolled_up_any = False
-        for file_date, day_path in entries:
-            try:
-                _day_meta, day_body = parse_frontmatter(day_path.read_text(encoding="utf-8"))
-            except (OSError, UnicodeDecodeError, FrontmatterError) as exc:
-                warnings.append(
-                    f"Skipped {day_path.relative_to(candidate_root)} during episodic roll-up: {exc}"
-                )
+        for file_date, day_files, day_dir in entries:
+            day_records: list[str] = []
+            folded_paths: list[Path] = []
+            for day_path in day_files:
+                try:
+                    _day_meta, day_body = parse_frontmatter(day_path.read_text(encoding="utf-8"))
+                except (OSError, UnicodeDecodeError, FrontmatterError) as exc:
+                    warnings.append(
+                        f"Skipped {day_path.relative_to(candidate_root)} "
+                        f"during episodic roll-up: {exc}"
+                    )
+                    continue  # left on disk: an unreadable file is never deleted
+                if day_body.strip():
+                    day_records.append(day_body.strip())
+                folded_paths.append(day_path)
+
+            if not folded_paths:
                 continue
-            if day_body.strip():
-                body = body.rstrip() + f"\n\n## {file_date.isoformat()}\n\n{day_body.strip()}\n"
-            day_path.unlink()
-            files_consolidated.append(str(day_path.relative_to(candidate_root)))
+            if day_records:
+                body = (
+                    body.rstrip()
+                    + f"\n\n## {file_date.isoformat()}\n\n"
+                    + "\n\n".join(day_records)
+                    + "\n"
+                )
+            for day_path in folded_paths:
+                day_path.unlink()
+                files_consolidated.append(str(day_path.relative_to(candidate_root)))
+            if day_dir is not None:
+                # Empty only when every file in it folded; a skipped unreadable
+                # record keeps its directory (and its content) alive.
+                with contextlib.suppress(OSError):
+                    day_dir.rmdir()
             rolled_up_any = True
 
         if not rolled_up_any:
@@ -512,6 +633,26 @@ def _relative_markdown_paths(root: Path, ignore_local_paths: bool = False) -> se
     return paths
 
 
+def _prune_empty_dirs(directory: Path, stop_at: Path) -> None:
+    """Remove directories an apply just emptied, innermost first.
+
+    Applying a candidate deletes files but knows nothing about directories, so a
+    commit-capture day folder whose records were all folded into a weekly summary
+    would linger as an empty `episodic/commits/<date>/`. Stops at the first
+    directory that still holds anything (a `.gitkeep` counts, which is what keeps
+    the scaffolded store categories intact) and never removes `stop_at` itself.
+    """
+    current = directory
+    while current != stop_at and current.is_relative_to(stop_at):
+        try:
+            if any(current.iterdir()):
+                return
+            current.rmdir()
+        except OSError:
+            return
+        current = current.parent
+
+
 def _apply_candidate_to_live(
     memory_dir: Path, candidate_root: Path, affected_files: list[str]
 ) -> None:
@@ -527,6 +668,7 @@ def _apply_candidate_to_live(
         if target.exists():
             with locked_file(target):
                 target.unlink()
+            _prune_empty_dirs(target.parent, stop_at=memory_dir)
 
     # Also promote consolidated_memory.md if it exists in candidate_root
     source_compiled = candidate_root / "consolidated_memory.md"

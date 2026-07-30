@@ -114,6 +114,32 @@ def _path_to_store_path(store_root: Path, file_path: Path) -> str:
     return "/".join(parts)
 
 
+# Passive commit captures are one file per commit (`episodic/commits/<date>/
+# <short-hash>`, see storage/capture.py). Listing each one in
+# memory-store/index.md would add a row per commit to a file every branch
+# regenerates — turning the discovery index into the single largest churn
+# surface in the repo — for no navigational gain, since the useful unit there is
+# the day. They are listed once per day instead.
+_COMMITS_STORE_PREFIX = "episodic/commits/"
+
+
+def _index_group_key(store_path: str) -> str | None:
+    """The label a store path is listed under in `memory-store/index.md`, when it
+    is grouped rather than listed on its own. Returns None for ordinary files.
+
+    Shared by index regeneration and `doctor`'s index-consistency check so the
+    two can never disagree about what the index is supposed to contain.
+    """
+    if not store_path.startswith(_COMMITS_STORE_PREFIX):
+        return None
+    parts = store_path.split("/")
+    # episodic/commits/<date>/<short-hash> — the day directory, not a day file
+    # (`episodic/commits/<date>`) and not a folded weekly summary.
+    if len(parts) != 4:
+        return None
+    return "/".join(parts[:3]) + "/"
+
+
 def _get_section_key(root: Path, path: Path) -> str:
     """Get the canonical section key relative to the root directory (live or candidate).
 

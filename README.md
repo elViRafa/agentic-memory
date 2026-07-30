@@ -378,7 +378,7 @@ reach agents through the `sync-agents` per-tool files instead.
 |   |-- schemas/...
 |   |-- failures/<slug>.md    # error -> fix pairs, deduplicated by normalized signature
 |   |-- episodic/<date>.md    # agent-written session journals
-|   `-- episodic/commits/<date>.md  # passively captured commits (source: passive-capture)
+|   `-- episodic/commits/<date>/<short-hash>.md  # one passively captured commit each
 |-- evals/       # ignored local quality reports
 |-- snapshots/   # ignored rollback baselines
 |-- private/     # ignored personal notes + session markers
@@ -424,11 +424,22 @@ ai-memory capture              # capture HEAD (this is what the post-commit hook
 ai-memory capture --commit abc1234
 ```
 
-Each capture writes to `memory-store/episodic/commits/<date>.md` with
-`source: passive-capture` and `review_status: pending` frontmatter — reviewable, and
-distinct from agent-written journal entries. It's idempotent per commit hash, needs no
-LLM, and is the raw material the next `ai-memory dream` consolidates or extracts facts
-from. Noise commits (merges, `[bot]` authors, `chore:`/`style:`/`ci:`/`build(deps)`
+Each capture writes one file per commit at
+`memory-store/episodic/commits/<date>/<short-hash>.md`, with `source: passive-capture`
+and `review_status: pending` frontmatter — reviewable, and distinct from agent-written
+journal entries. It's idempotent per commit hash, needs no LLM, and is the raw material
+the next `ai-memory dream` consolidates or extracts facts from.
+
+One file per commit rather than one shared file per day is what keeps the tree
+mergeable. Capture runs *after* the commit, so the record for commit N can only be
+committed by commit N+1 — it is always sitting uncommitted in between. A shared day file
+would therefore be a tracked, modified file at all times, and git refuses to merge into
+one (`error: Your local changes to the following files would be overwritten by merge`)
+*before* any merge machinery runs — including the semantic merge driver that would have
+resolved it. A distinct new file per commit is untracked instead, which git merges
+straight over, and two developers can never write the same path.
+
+Noise commits (merges, `[bot]` authors, `chore:`/`style:`/`ci:`/`build(deps)`
 prefixes, lockfile-only changes) are skipped by default — audibly, with a
 `skipped_reason` and a `--no-filter` opt-out, never silently — and `ai-memory dream
 --mode deep` folds commit records older than 14 days into weekly summaries so
