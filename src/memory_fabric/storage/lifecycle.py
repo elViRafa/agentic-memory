@@ -12,10 +12,11 @@ from typing import Any
 
 from memory_fabric.clients import resolve_cli_binary
 from memory_fabric.contracts import DoctorResult, InitResult, StatusResult
-from memory_fabric.frontmatter import FrontmatterError, parse_frontmatter
+from memory_fabric.frontmatter import FrontmatterError, dump_frontmatter, parse_frontmatter
 from memory_fabric.paths import global_memory_dir, local_memory_dir, memory_store_dir, project_root
 from memory_fabric.security import redact_secrets
 from memory_fabric.storage._shared import (
+    STEERING_SECTIONS,
     _index_group_key,
     _is_ignored_local_memory_path,
     _is_steering_file,
@@ -130,6 +131,53 @@ def _install_hook_block(
         files_created.append(str(hook_path))
 
 
+def _backfill_provenance_markers(memory_dir: Path) -> list[str]:
+    """Stamp the `generated` / `role: steering` markers onto section files
+    written by releases that predated them. Returns the paths changed.
+
+    These two markers are the only way to tell a rebuilt view from hand-curated
+    content by inspecting a file: the merge driver's derived-view detection,
+    `_is_generated_file`, and any ignore rule all key off them. `init` scaffolds
+    them and Dreaming stamps them on every map it writes — but a file created
+    before the marker existed keeps its old frontmatter forever, because nothing
+    rewrites a map whose store category is still empty.
+
+    The safety rule is that a marker is only ever *added*, never a body: a
+    generated marker goes on a section only when its body is still the starter
+    placeholder, i.e. there is demonstrably no hand-written content to mislabel.
+    A legacy map that holds real prose is left alone for `ai-memory migrate`,
+    which splits it into the store first (`doctor` already flags those).
+    """
+    from memory_fabric.storage.maps import _is_starter_placeholder
+
+    changed: list[str] = []
+    for section in sorted(GENERATED_MAP_SECTIONS | STEERING_SECTIONS | {"index"}):
+        path = memory_dir / f"{section}.md"
+        if not path.exists():
+            continue
+        try:
+            metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, FrontmatterError):
+            continue  # unreadable files are reported by doctor's per-file loop
+
+        template_extra = dict(SECTION_TEMPLATES.get(section, {}).get("frontmatter", {}))
+        if section == "index":
+            template_extra.setdefault("generated", True)
+        missing = {key: value for key, value in template_extra.items() if key not in metadata}
+        if not missing:
+            continue
+        if missing.get("generated") and not _is_starter_placeholder(section, body):
+            # Real content under a generated name: `ai-memory migrate`'s job,
+            # not ours. Marking it generated here would invite the next Dream to
+            # overwrite prose nobody has granularized yet.
+            continue
+
+        metadata.update(missing)
+        path.write_text(dump_frontmatter(metadata, body), encoding="utf-8")
+        changed.append(str(path))
+    return changed
+
+
 def initialize_memory_fabric(
     cwd: str,
     install_hooks: bool = False,
@@ -146,6 +194,12 @@ def initialize_memory_fabric(
         if not path.exists():
             path.write_text(build_memory_file(section), encoding="utf-8")
             files_created.append(str(path))
+
+    # Upgrade path for stores scaffolded before the provenance markers existed.
+    # Runs on every init, like the merge-driver back-fill below it.
+    files_created.extend(
+        f"{path} (markers backfilled)" for path in _backfill_provenance_markers(memory_dir)
+    )
 
     gitignore = memory_dir / ".gitignore"
     if not gitignore.exists():
@@ -590,6 +644,9 @@ def _merge_driver_warnings(cwd: str) -> list[str]:
        git never calls it.
     3. The command is registered but no longer resolves — a venv that moved or
        was rebuilt, or a `.git/config` copied from another machine.
+    4. The command is registered and resolves, but was written by an older
+       release: it runs and quietly does less. Nothing rewrites a per-clone
+       registration, so this one persists indefinitely.
     """
     # Imported lazily: merge_driver imports from this package.
     from memory_fabric.merge_driver import merge_driver_status
@@ -619,6 +676,14 @@ def _merge_driver_warnings(cwd: str) -> list[str]:
             "back to a plain textual merge and write conflict markers into .ai-memory files. "
             "Re-run `ai-memory init --merge-driver` from the environment where memory-fabric "
             "is installed."
+        ]
+    if status["registered"] and not status["up_to_date"]:
+        return [
+            "The Memory Fabric merge driver registered in this clone was written by an older "
+            f"release and no longer matches the current command: `{status['command']}`. It "
+            "still runs, but silently does less — a command missing `%P` gives the driver no "
+            "pathname, so it cannot recognize a rebuilt view (index.md, the generated maps) "
+            "and merges it as authored content. Run `ai-memory init` to re-register it."
         ]
     return []
 
@@ -770,6 +835,8 @@ def doctor(cwd: str, check_network: bool = False) -> DoctorResult:
                 errors.append(f"Failed to check memory-store index consistency: {exc}")
 
     _check_legacy_flat_sections(memory_dir, warnings)
+    _check_hand_edited_generated_files(memory_dir, warnings)
+    _check_missing_provenance_markers(memory_dir, warnings)
     _check_directive_budget(memory_dir, warnings)
     _check_steering_secrets(memory_dir, warnings)
     _check_stale_fabric_blocks(cwd, warnings)
@@ -820,6 +887,74 @@ def _check_legacy_flat_sections(memory_dir: Path, warnings: list[str]) -> None:
                 f"model it must be a generated map over memory-store/{section}/. Run "
                 "`ai-memory migrate` to split its content into the store and regenerate the map."
             )
+
+
+def _check_hand_edited_generated_files(memory_dir: Path, warnings: list[str]) -> None:
+    """Flag files that claim to be generated but whose body no longer matches.
+
+    A file cannot be both a rebuilt view and hand-curated content: the next
+    Dreaming run rebuilds it from the store, so an edit made in place is either
+    folded into `memory-store/<category>/map-notes-pending-review.md` or, for a
+    view that carries no fold path, simply overwritten. Saying so here — while
+    the edit is still on disk — is the difference between a warning and a
+    surprise. `body_hash` is what makes this checkable, so only files carrying
+    one are examined; doctor never rewrites anything.
+    """
+    from memory_fabric.storage.maps import _body_hash
+
+    for path in sorted(memory_dir.glob("*.md")):
+        if _is_ignored_local_memory_path(memory_dir, path):
+            continue
+        try:
+            metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, FrontmatterError):
+            continue  # already reported by the per-file loop
+        recorded = str(metadata.get("body_hash") or "")
+        if not metadata.get("generated") or not recorded:
+            continue
+        if recorded != _body_hash(body):
+            warnings.append(
+                f"`{path.name}` is marked `generated: true` but its body was edited by hand "
+                "since it was generated. Dreaming rebuilds it from "
+                f"memory-store/{path.stem}/, folding the edit into "
+                f"memory-store/{path.stem}/map-notes-pending-review.md for review — write the "
+                "fact with `write_memory_store_tool` instead to keep it."
+            )
+
+
+def _check_missing_provenance_markers(memory_dir: Path, warnings: list[str]) -> None:
+    """Flag section files still missing their `generated` / `role: steering`
+    marker after a back-fill declined to add one.
+
+    `_backfill_provenance_markers` (run by every `init`) stamps every file it
+    safely can; what is left is a legacy map holding real hand-written content,
+    which needs `ai-memory migrate` to granularize it first. Without the marker
+    the merge driver cannot recognize the file as a rebuilt view except by its
+    path, so this is worth naming rather than leaving silent.
+    """
+    for section in sorted(GENERATED_MAP_SECTIONS | STEERING_SECTIONS | {"index"}):
+        path = memory_dir / f"{section}.md"
+        if not path.exists():
+            continue
+        try:
+            metadata, _body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, FrontmatterError):
+            continue
+        expected = dict(SECTION_TEMPLATES.get(section, {}).get("frontmatter", {}))
+        if section == "index":
+            expected.setdefault("generated", True)
+        missing = sorted(key for key in expected if key not in metadata)
+        if not missing:
+            continue
+        # A missing `generated` on a section that still holds prose is already
+        # reported, with the right fix, by _check_legacy_flat_sections.
+        if missing == ["generated"] and section in GENERATED_MAP_SECTIONS:
+            continue
+        warnings.append(
+            f"`{section}.md` is missing its provenance frontmatter ({', '.join(missing)}), so "
+            "nothing can tell a rebuilt view from hand-curated content by inspecting the file. "
+            "Run `ai-memory init` to stamp it."
+        )
 
 
 def _map_has_migratable_content(section: str, body: str) -> bool:

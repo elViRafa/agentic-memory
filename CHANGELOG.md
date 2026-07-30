@@ -72,15 +72,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   memory files with no indication why. The registered command now resolves
   `ai-memory` from PATH and falls back to the absolute path only if PATH has none.
 
+- **A stale merge-driver registration is detected and repaired.** The driver
+  command lives in per-clone `.git/config` and nothing ever rewrote it, so a
+  clone registered by an older release kept calling the driver with that
+  release's argument list forever — in the reported case without `%P`, the real
+  pathname, leaving the driver to merge with `path_hint=None` and lose
+  derived-view detection for every file whose frontmatter alone was not
+  conclusive. Every binary in that clone was current; only the registration was
+  stale. `registered` was treated as a boolean, so the command was never looked
+  at: `doctor` reported `ok: True` and `ensure_merge_driver_registered`
+  short-circuited the repair. Both now inspect the command itself.
+- **Rebuilt views are marked as such, reliably.** `generated: true` is the only
+  thing that identifies a regenerated view by inspection — the merge driver's
+  `_is_derived_view`, `_is_generated_file`, and any ignore rule all key off it —
+  but a store scaffolded before the marker existed never acquired it, because
+  nothing rewrites a map whose store category is still empty, and `index.md`'s
+  frontmatter is carried forward rather than rebuilt. Dreaming now stamps
+  `generated: true` explicitly on both indexes, and every `ai-memory init`
+  back-fills the `generated` / `role: steering` markers onto section files that
+  predate them. The back-fill never marks a section holding real prose as
+  generated: that is `ai-memory migrate`'s job, and mislabeling it would invite
+  the next Dream to overwrite content nobody has granularized.
+
 ### Added
 
 - **`ai-memory doctor` checks that the registered driver command actually
-  resolves.** The third silent failure mode alongside the two half-installed
-  states it already reported: declared *and* registered, but pointing at an
-  interpreter that no longer exists. `merge_driver_status` gained `command` and
-  `command_ok`, and `active` now requires all three conditions. Any later
-  `ai-memory init` repairs an unresolvable registration the same way it already
-  filled in a missing one.
+  resolves, and that it is current.** Two more silent failure modes alongside
+  the two half-installed states it already reported: declared *and* registered
+  but pointing at an interpreter that no longer exists, and registered with an
+  older release's command (which runs, and quietly does less).
+  `merge_driver_status` gained `command`, `command_ok`, and `up_to_date`, and
+  `active` now requires all four conditions. Currency is judged on the argument
+  *contract* — the subcommand plus the full placeholder set — not on a byte
+  comparison against what this install would write, so a valid registration from
+  another environment is not mistaken for a stale one. Any later `ai-memory
+  init` repairs a registration that is missing, unresolvable, or stale.
+- **`ai-memory doctor` flags a file that is both generated and hand-edited.** A
+  file cannot be both a rebuilt view and hand-curated content: the next Dream
+  folds the edit into `map-notes-pending-review.md` or overwrites it. Saying so
+  while the edit is still on disk is the difference between a warning and a
+  surprise. Doctor also names any section still missing its provenance markers
+  after a back-fill declined to add them.
+
+### Note
+
+- **The post-commit hook was already reduced to `capture` alone** (see the
+  Dreaming entry under *Fixed*), which is the "remove `dream` from post-commit"
+  half of the tracked-generated-map dirty-tree report. The generated maps
+  remain tracked and committed: `memory-store/` is the source of truth, but the
+  maps are deliberately reviewable in a PR diff. Note that the client
+  PreCompact/pre-compression hooks still run `dream --mode light --apply`, so a
+  view can still be rewritten mid-session — off the commit path, but the same
+  class of dirty tree.
 
 ## [1.2.0] — 2026-07-29
 

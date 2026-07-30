@@ -167,6 +167,132 @@ class GeneratedMapsTests(unittest.TestCase):
             self.assertIn("more entries — see `memory-store/index.md`", body)
 
 
+def _strip_frontmatter_keys(path: Path, *keys: str) -> None:
+    """Rewrite a section file as a release that predated `keys` would have."""
+    metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+    for key in keys:
+        metadata.pop(key, None)
+    path.write_text(dump_frontmatter(metadata, body), encoding="utf-8")
+
+
+class ProvenanceMarkerTests(unittest.TestCase):
+    """`generated: true` and `role: steering` are the only way to tell a rebuilt
+    view from hand-curated content by inspecting a file — the merge driver's
+    derived-view detection, `_is_generated_file`, and any ignore rule all key
+    off them. `init` scaffolds them, but a store created before they existed
+    never acquires them on its own: nothing rewrites a map whose store category
+    is still empty.
+    """
+
+    def test_init_backfills_markers_onto_a_legacy_store(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            memory_dir = _memory_dir(temp)
+            legacy = {
+                "architecture.md": ("generated", "generated_from"),
+                "decisions.md": ("generated", "generated_from"),
+                "index.md": ("generated",),
+                "ubiquitous-language.md": ("role",),
+                "framework-rules.md": ("role",),
+            }
+            for name, keys in legacy.items():
+                _strip_frontmatter_keys(memory_dir / name, *keys)
+
+            initialize_memory_fabric(temp)
+
+            for name, keys in legacy.items():
+                metadata, _ = parse_frontmatter((memory_dir / name).read_text(encoding="utf-8"))
+                for key in keys:
+                    self.assertIn(key, metadata, f"{name} was not back-filled with `{key}`")
+            self.assertTrue(
+                parse_frontmatter((memory_dir / "index.md").read_text(encoding="utf-8"))[0][
+                    "generated"
+                ]
+            )
+
+    def test_backfill_never_marks_hand_written_content_as_generated(self) -> None:
+        """The rule that makes an ignore-by-marker rule safe: a legacy map
+        holding real prose keeps *no* generated marker, so nothing downstream
+        treats it as disposable. `ai-memory migrate` granularizes it first."""
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            memory_dir = _memory_dir(temp)
+            path = memory_dir / "architecture.md"
+            metadata, _body = parse_frontmatter(path.read_text(encoding="utf-8"))
+            for key in ("generated", "generated_from"):
+                metadata.pop(key, None)
+            path.write_text(
+                dump_frontmatter(
+                    metadata,
+                    "# Architecture\n\n## Auth\n\nHand-written notes nobody has migrated yet.\n",
+                ),
+                encoding="utf-8",
+            )
+
+            initialize_memory_fabric(temp)
+
+            metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+            self.assertNotIn("generated", metadata)
+            self.assertIn("Hand-written notes nobody has migrated yet.", body)
+
+    def test_dreaming_stamps_generated_on_both_indexes(self) -> None:
+        """Both indexes are rebuilt views. `memory-store/index.md` gets fresh
+        metadata each run, but `index.md`'s is carried forward — so an old file
+        would keep its pre-marker frontmatter forever without an explicit stamp.
+        """
+        from memory_fabric.storage.consolidation import _regenerate_index_root
+
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            memory_dir = _memory_dir(temp)
+            write_memory_store(temp, "architecture/core", "Core notes.", title="Core")
+            _strip_frontmatter_keys(memory_dir / "index.md", "generated")
+
+            _regenerate_index_root(memory_dir, mode="light")
+
+            for relative in ("index.md", "memory-store/index.md"):
+                metadata, _ = parse_frontmatter((memory_dir / relative).read_text(encoding="utf-8"))
+                self.assertTrue(
+                    metadata.get("generated"), f"{relative} is not marked as a generated view"
+                )
+
+    def test_doctor_warns_when_a_generated_map_was_hand_edited(self) -> None:
+        from memory_fabric.storage import doctor
+
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            memory_dir = _memory_dir(temp)
+            write_memory_store(temp, "architecture/core", "Core notes.", title="Core")
+            regenerate_maps(memory_dir)
+
+            path = memory_dir / "architecture.md"
+            metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+            self.assertTrue(metadata.get("body_hash"))
+            path.write_text(
+                dump_frontmatter(metadata, body + "\n- A line somebody added by hand.\n"),
+                encoding="utf-8",
+            )
+
+            warnings = doctor(temp, check_network=False)["warnings"]
+
+            self.assertTrue(
+                any("edited by hand since it was generated" in w for w in warnings), warnings
+            )
+
+    def test_doctor_is_quiet_on_a_freshly_generated_map(self) -> None:
+        from memory_fabric.storage import doctor
+
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            write_memory_store(temp, "architecture/core", "Core notes.", title="Core")
+            regenerate_maps(_memory_dir(temp))
+
+            warnings = doctor(temp, check_network=False)["warnings"]
+
+            self.assertFalse([w for w in warnings if "edited by hand" in w], warnings)
+            self.assertFalse([w for w in warnings if "provenance frontmatter" in w], warnings)
+
+
 class SteeringAndOrderingTests(unittest.TestCase):
     def test_steering_sections_always_loaded_under_tight_budget(self) -> None:
         with (
