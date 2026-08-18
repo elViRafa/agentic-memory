@@ -37,8 +37,8 @@ Memory is stored as human-readable Markdown with YAML frontmatter. No vector dat
 
 ## Status
 
-**v1.3.1 — maps-first retrieval: honest token budget, Unicode BM25 ranking, Cursor
-hooks, and `context_for_task` / `ai-memory retrieve`. [Live on PyPI](https://pypi.org/project/memory-fabric/).**
+**v1.4.0 — optional local field diary (`ai-memory diary approve`) plus maps-first
+retrieval. [Live on PyPI](https://pypi.org/project/memory-fabric/).**
 Core CLI and MCP tools work end-to-end. See [`ROADMAP.md`](ROADMAP.md) for what
 shipped, what's in progress, and what's next.
 
@@ -58,12 +58,17 @@ in one tool and a different tool reads it back — is storyboarded in
 
 ## Privacy — no telemetry
 
-Memory Fabric collects **nothing**. No telemetry, no account, no cloud, no
+Memory Fabric never sends data anywhere. There is no account, no cloud, no
 analytics, no phone-home. The core read and write paths make no network calls at
 all; the only optional network requests are a PyPI version-drift check and an
 LLM-provider preflight, both of which you can turn off with `--offline`. Your
 memory is plain Markdown in your own git history — it never leaves your machine
-unless you push it. This is a deliberate guarantee, not a default we might change.
+unless you push it.
+
+An optional, **off-by-default** field diary can record operational counts on
+your machine after you run `ai-memory diary approve`. That is not the session
+journal, and it is not telemetry: nothing is transmitted. `MEMORY_FABRIC_DIARY=0`
+is a kill switch. This is a deliberate guarantee, not a default we might change.
 
 ---
 
@@ -578,6 +583,7 @@ Commands:
   sync-global     Preview local-to-global promotions
   rollback        Restore from a snapshot (--to <name>, or --list to discover valid names)
   clean           Prune old snapshots/candidates (--keep-snapshots, --keep-candidates, --dry-run)
+  diary           Local field diary (approve|revoke|mute|unmute|status|checkpoint|wipe) — off by default, never sent
 ```
 
 Eval examples:

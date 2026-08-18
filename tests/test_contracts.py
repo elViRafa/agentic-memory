@@ -28,8 +28,9 @@ from memory_fabric.storage import dream, initialize_memory_fabric, write_memory_
 # Adding a NotRequired field to a contract requires registering it here.
 EXPECTED_OPTIONAL_KEYS: dict[str, set[str]] = {
     "InitResult": {"resource_uris"},
+    "ContextBundle": {"pack_stats"},
     "SearchResult": {"backend", "score"},
-    "StatusResult": {"capture", "snapshots", "candidates_count"},
+    "StatusResult": {"capture", "snapshots", "candidates_count", "diary"},
     "EvalCheck": {"command"},
     "DreamResult": {"evaluation"},
     "DreamConsolidation": {"warnings"},

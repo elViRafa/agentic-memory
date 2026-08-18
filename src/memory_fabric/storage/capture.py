@@ -315,11 +315,14 @@ def _increment_skipped_count(cwd: str) -> None:
         (priv / _SKIPPED_COUNT_MARKER).write_text(f"{count}\n", encoding="utf-8")
 
 
-def mark_session_start(cwd: str) -> dict[str, Any]:
+def mark_session_start(cwd: str, client: str | None = None) -> dict[str, Any]:
     """Record the session start time (SessionStart hook). Overwrites any prior mark."""
     marker = _private_dir(cwd) / _SESSION_START_MARKER
     stamp = _now_iso()
     marker.write_text(stamp + "\n", encoding="utf-8")
+    from memory_fabric.diary.instrument import record_session_start
+
+    record_session_start(cwd, client=client)
     return {"marked_at": stamp, "path": str(marker)}
 
 
@@ -357,6 +360,9 @@ def guard_journal(cwd: str) -> dict[str, Any]:
         except ValueError:
             pass
 
+    from memory_fabric.diary.instrument import record_session_end
+
+    record_session_end(cwd, journaled=False, surface="hook")
     return {
         "ok": False,
         "reason": (

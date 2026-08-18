@@ -82,7 +82,7 @@ def _skip_dump_bundle(cwd: str, max_tokens: int) -> ContextBundle:
         "Skipping a second dump. Use `keyword_search_tool` or `context_for_task_tool` "
         "for task-scoped retrieval; read `memory-store/index.md` for the map.\n"
     )
-    return {
+    bundle: ContextBundle = {
         "text": text,
         "included_sections": [],
         "omitted_sections": [],
@@ -93,6 +93,7 @@ def _skip_dump_bundle(cwd: str, max_tokens: int) -> ContextBundle:
             "MEMORY_FABRIC_SKIP_STARTUP_DUMP is set."
         ],
     }
+    return _with_pack_stats(cwd, bundle, startup_mode="skipped", index_used=False, query=None)
 
 
 def _cap_section_text(full_text: str, metadata: dict[str, Any], cap: int) -> tuple[str, bool]:
@@ -165,7 +166,7 @@ def _try_consolidated_cache(
             match.group(1)
             for match in re.finditer(r"<!-- memory-fabric:([a-zA-Z0-9_/.-]+) -->", full_content)
         ]
-        return {
+        cached_bundle: ContextBundle = {
             "text": full_content,
             "included_sections": included,
             "omitted_sections": [],
@@ -173,6 +174,9 @@ def _try_consolidated_cache(
             "estimated_tokens": est_tokens,
             "warnings": [f"Tier 0 directives not found: {tier0}"],
         }
+        return _with_pack_stats(
+            cwd, cached_bundle, startup_mode="full", index_used=False, query=query
+        )
     except (OSError, UnicodeDecodeError):
         return None
 
@@ -484,10 +488,12 @@ def read_combined_context(
     # Maps-first no-query must not touch the store tree (or the SQLite index):
     # walking 1000 granular files to pack 6 maps is the p95 we are killing.
     sections: list[dict[str, Any]]
+    index_used = False
     if query is None and _startup_mode() == "maps":
         sections = _collect_startup_maps(memory_dir, warnings, omitted)
     else:
         indexed = _collect_sections_from_index(cwd, memory_dir, query, warnings)
+        index_used = indexed is not None
         sections = (
             indexed
             if indexed is not None
@@ -511,7 +517,7 @@ def read_combined_context(
         text = "\n\n".join(fragments).strip() + ("\n" if fragments else "")
         estimated = estimate_tokens(text)
 
-    return {
+    bundle: ContextBundle = {
         "text": text,
         "included_sections": included,
         "omitted_sections": omitted,
@@ -519,6 +525,19 @@ def read_combined_context(
         "estimated_tokens": estimated,
         "warnings": warnings,
     }
+    priority_by_key = {
+        str(item["key"]): str((item.get("metadata") or {}).get("priority") or "medium")
+        for item in sections
+    }
+    return _with_pack_stats(
+        cwd,
+        bundle,
+        startup_mode=_startup_mode() if query is None else "full",
+        index_used=index_used,
+        query=query,
+        fragments=fragments,
+        priority_by_key=priority_by_key,
+    )
 
 
 def _is_startup_map_path(memory_dir: Path, path: Path) -> bool:
@@ -608,3 +627,28 @@ def _section_key(path: Path, section: str) -> str:
 
 def _format_fragment(section: str, text: str) -> str:
     return f"<!-- memory-fabric:{section} -->\n{text.strip()}"
+
+
+def _with_pack_stats(
+    cwd: str,
+    bundle: ContextBundle,
+    *,
+    startup_mode: str,
+    index_used: bool,
+    query: str | None,
+    fragments: list[str] | None = None,
+    priority_by_key: dict[str, str] | None = None,
+) -> ContextBundle:
+    from memory_fabric.diary.instrument import record_context_pack
+    from memory_fabric.diary.stats import attach_pack_stats
+
+    finished = attach_pack_stats(
+        bundle,
+        priority_by_key=priority_by_key,
+        startup_mode=startup_mode,
+        index_used=index_used,
+        query=query,
+        fragments=fragments,
+    )
+    record_context_pack(cwd, finished, query=query)
+    return finished

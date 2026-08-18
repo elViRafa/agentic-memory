@@ -12,6 +12,31 @@ from typing import Any
 from memory_fabric.client_hooks import install_hooks
 from memory_fabric.clients import CLIENTS
 from memory_fabric.contracts import DreamEvalResult, EvalResult, MigrateResult
+from memory_fabric.diary import (
+    APPROVE_NOTICE,
+)
+from memory_fabric.diary import (
+    LEVELS as DIARY_LEVELS,
+)
+from memory_fabric.diary import (
+    approve as diary_approve,
+)
+from memory_fabric.diary import (
+    mute as diary_mute,
+)
+from memory_fabric.diary import (
+    revoke as diary_revoke,
+)
+from memory_fabric.diary import (
+    status as diary_status,
+)
+from memory_fabric.diary import (
+    unmute as diary_unmute,
+)
+from memory_fabric.diary import (
+    wipe as diary_wipe,
+)
+from memory_fabric.diary.instrument import write_manual_checkpoint
 from memory_fabric.eval import evaluate_dream_quality, evaluate_memory_fabric
 from memory_fabric.installer import install, install_all
 from memory_fabric.merge_driver import (
@@ -135,7 +160,7 @@ def main(argv: list[str] | None = None) -> int:
             _print_result(capture_result, args.json)
             return 0
         if args.command == "session-start":
-            mark_result = mark_session_start(cwd)
+            mark_result = mark_session_start(cwd, client=args.hook_format)
             if args.hook_format == "cursor":
                 additional_context = (
                     f'Memory Fabric reminder: call read_combined_context_tool(cwd="{cwd}") '
@@ -533,6 +558,8 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 parser.parse_args(["store", "--help"])
                 return 1
+        if args.command == "diary":
+            return _run_diary_command(args, cwd, parser)
     except Exception as exc:  # noqa: BLE001 - CLI should surface all operational failures.
         print(f"ai-memory: {exc}", file=sys.stderr)
         return 1
@@ -867,7 +894,102 @@ def build_parser() -> argparse.ArgumentParser:
     store_delete = store_subs.add_parser("delete", parents=[common], help="Delete a store file")
     store_delete.add_argument("store_path", help="Semantic path")
 
+    diary_parser = add_command(
+        "diary",
+        help="Local field diary (what Memory Fabric did — not the session journal)",
+    )
+    diary_subs = diary_parser.add_subparsers(dest="diary_action")
+    diary_approve_p = diary_subs.add_parser(
+        "approve",
+        parents=[common],
+        help="Approve local recording (human only; nothing is sent)",
+    )
+    diary_approve_p.add_argument(
+        "--level",
+        choices=list(DIARY_LEVELS),
+        default="counts",
+        help="counts = roles and timings; counts+queries also keeps redacted queries",
+    )
+    diary_approve_p.add_argument(
+        "--yes",
+        action="store_true",
+        help="Skip the [y/N] prompt (still prints what will be recorded)",
+    )
+    diary_subs.add_parser("revoke", parents=[common], help="Stop recording; keep existing files")
+    diary_subs.add_parser("mute", parents=[common], help="Silence the diary in this project")
+    diary_subs.add_parser("unmute", parents=[common], help="Undo mute for this project")
+    diary_subs.add_parser("status", parents=[common], help="Show approval, level, and diary size")
+    diary_subs.add_parser(
+        "checkpoint",
+        parents=[common],
+        help="Write a store-shape snapshot to the field diary (no-op if not approved)",
+    )
+    diary_wipe_p = diary_subs.add_parser(
+        "wipe", parents=[common], help="Delete the local diary and field packs"
+    )
+    diary_wipe_p.add_argument(
+        "--yes",
+        action="store_true",
+        help="Skip the [y/N] prompt",
+    )
+
     return parser
+
+
+def _run_diary_command(args: argparse.Namespace, cwd: str, parser: argparse.ArgumentParser) -> int:
+    action = getattr(args, "diary_action", None)
+    if action == "status":
+        _print_result(diary_status(cwd), args.json)
+        return 0
+    if action == "checkpoint":
+        _print_result(write_manual_checkpoint(cwd), args.json)
+        return 0
+    if action == "approve":
+        if not _diary_confirmed(args, APPROVE_NOTICE, prompt="Approve the field diary? [y/N]: "):
+            _print_result(
+                diary_approve(getattr(args, "level", "counts"), confirmed=False),
+                args.json,
+            )
+            return 1
+        _print_result(diary_approve(args.level, confirmed=True), args.json)
+        return 0
+    if action == "revoke":
+        _print_result(diary_revoke(), args.json)
+        return 0
+    if action == "mute":
+        _print_result(diary_mute(cwd), args.json)
+        return 0
+    if action == "unmute":
+        _print_result(diary_unmute(cwd), args.json)
+        return 0
+    if action == "wipe":
+        wipe_notice = (
+            "This deletes the local field diary and any field packs on this machine.\n"
+            "Nothing is sent. Memory-store files are not touched.\n"
+        )
+        if not _diary_confirmed(args, wipe_notice, prompt="Wipe the field diary? [y/N]: "):
+            _print_result(diary_wipe(confirmed=False), args.json)
+            return 1
+        _print_result(diary_wipe(confirmed=True), args.json)
+        return 0
+    parser.parse_args(["diary", "--help"])
+    return 1
+
+
+def _diary_confirmed(args: argparse.Namespace, notice: str, *, prompt: str) -> bool:
+    """TTY yes or --yes. --json without --yes is a refuse (agents cannot consent)."""
+    if getattr(args, "yes", False):
+        if not args.json:
+            print(notice.rstrip())
+        return True
+    if args.json or not sys.stdin.isatty():
+        return False
+    print(notice.rstrip())
+    try:
+        choice = input(prompt).strip().lower()
+    except EOFError:
+        return False
+    return choice in {"y", "yes"}
 
 
 def _print_migrate_plan(result: MigrateResult) -> None:

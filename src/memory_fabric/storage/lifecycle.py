@@ -623,7 +623,24 @@ def status(cwd: str) -> StatusResult:
             "latest": snapshots[0]["name"] if snapshots else None,
         },
         "candidates_count": candidates_count,
+        "diary": _diary_status_block(cwd),
     }
+
+
+def _diary_status_block(cwd: str) -> dict[str, Any]:
+    try:
+        from memory_fabric.diary import status as diary_status
+
+        result = diary_status(cwd)
+        return {
+            "approved": result["approved"],
+            "level": result["level"],
+            "events_today": result["events_today"],
+            "last_pack": result["last_pack"],
+            "muted": result["muted"],
+        }
+    except Exception:  # noqa: BLE001 - status must never fail because the diary is unavailable.
+        return {"approved": False}
 
 
 def _merge_driver_warnings(cwd: str) -> list[str]:

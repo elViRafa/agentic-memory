@@ -44,6 +44,27 @@ class InitResult(TypedDict):
     resource_uris: NotRequired[list[str] | None]
 
 
+class PackStats(TypedDict):
+    """Closed-vocabulary packer outcome for the field diary. No section slugs."""
+
+    token_budget: int
+    estimated_tokens: int
+    budget_fit: bool
+    startup_mode: str
+    index_used: bool
+    query_present: bool
+    query_len: int
+    tokens_by_role: dict[str, int]
+    included_by_role: dict[str, int]
+    omitted_by_role: dict[str, int]
+    included_by_priority: dict[str, int]
+    omitted_by_priority: dict[str, int]
+    largest_included_tokens: int
+    largest_included_role: str | None
+    truncated_n: int
+    warning_codes: list[str]
+
+
 class ContextBundle(TypedDict):
     text: str
     included_sections: list[str]
@@ -51,6 +72,7 @@ class ContextBundle(TypedDict):
     token_budget: int
     estimated_tokens: int
     warnings: list[str]
+    pack_stats: NotRequired[PackStats | None]
 
 
 class MemorySection(TypedDict):
@@ -235,6 +257,35 @@ class StatusResult(TypedDict):
     capture: NotRequired[dict[str, Any]]
     snapshots: NotRequired[dict[str, Any]]
     candidates_count: NotRequired[int]
+    diary: NotRequired[dict[str, Any]]
+
+
+DiaryLevel = Literal["counts", "counts+queries"]
+
+
+class DiaryStatusResult(TypedDict):
+    """Local field-diary consent and on-disk state. Never implies a network path."""
+
+    approved: bool
+    level: str | None
+    approved_at: str | None
+    scope: str
+    diary_dir: str
+    consent_path: str
+    events_today: int
+    last_pack: str | None
+    muted: bool
+    kill_switch: bool
+    warnings: list[str]
+
+
+class DiaryActionResult(TypedDict):
+    changed: bool
+    approved: bool
+    level: str | None
+    path: str
+    message: str
+    warnings: list[str]
 
 
 class MapsRegenResult(TypedDict):
