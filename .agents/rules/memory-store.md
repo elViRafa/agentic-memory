@@ -5,9 +5,10 @@ trigger: always_on
 ## Memory Fabric — Semantic Store Agent Instructions
 
 🚨 **CRITICAL RULES - READ FIRST** 🚨
+0. **If the memory-fabric MCP tools are NOT available in this session, skip this memory protocol entirely** — do NOT substitute another memory system for it. Any Project Directives block (in this file, or in a generated `project-directives` rule file) still applies in full; missing MCP tools never excuse ignoring project rules.
 1. **NEVER use the native VS Code Copilot `memory` tool.** You MUST ONLY use the `memory-fabric` MCP tools (like `write_memory_store_tool`). The native `memory` tool writes to VS Code workspace storage, bypassing this project's memory system.
-2. **NEVER use raw file system tools** (like `create_file`, `write_to_file`, `bash`, etc.) to read or write files inside the `.ai-memory/` directory. Doing so bypasses secret scanning, token budgeting, and the Dreaming system.
-3. **MANDATORY STARTUP:** You MUST call `read_combined_context_tool(cwd="<absolute project root path>")` before doing anything else at the start of a session. No exceptions.
+2. **NEVER use raw file system tools** (like `create_file`, `write_to_file`, `bash`, etc.) to read or write files inside the `.ai-memory/` directory. Doing so bypasses secret scanning, token budgeting, and the Dreaming system. (Sole exception: hand-curated `role: steering` directive files — see the project directives exception in section 3.)
+3. **MANDATORY STARTUP:** You MUST call `read_combined_context_tool(cwd="<absolute project root path>")` before doing anything else at the start of a session. No exceptions — other than rule 0 above, which is the only sanctioned way out of this protocol.
    > **MCP Resources alternative:** If your client supports MCP Resources and has auto-fetched `memory-fabric://context/<encoded-cwd>`, that context is already in your system prompt — skip the tool call.
 4. **NEVER call `dream_tool` as a substitute for saving new knowledge.** Before triggering any Dream tool, you MUST first call `write_memory_store_tool` to persist specific, isolated memories from the current session (e.g., bugs fixed, features built, architecture decisions). Dreaming consolidates existing memory — it does NOT capture new knowledge.
 5. **MANDATORY SESSION END:** Before your final response in a session, you MUST call `write_session_journal_tool` to log what was accomplished. Skip ONLY for trivial Q&A sessions with no code changes, decisions, or debugging.
@@ -22,12 +23,15 @@ Use `write_memory_store_tool` to register standalone memories.
 - **Parameters:** `cwd`, `store_path`, `content`, `title` (optional), `tags` (optional), `priority` (`high`/`medium`/`low`), `mode` (`replace`/`append`).
 
 ### 3. Root Maps Are Generated — Never Write Them
-Root map files (`index`, `architecture`, `decisions`, `debt`, `schemas`) are **generated views** over `memory-store/`, rebuilt by Dreaming; hand edits get folded back into the store as `map-notes-pending-review` entries. Do NOT update them with `write_local_memory_tool` — that path is deprecated for facts and will be removed in v1.0. Write granular facts with `write_memory_store_tool`, then run `dream_tool` to refresh the maps.
-**Exception:** the steering sections `framework-rules` and `ubiquitous-language` are hand-curated and always loaded into context; update those with `write_local_memory_tool(cwd, section, content)`.
+Root map files (`index`, `architecture`, `decisions`, `debt`, `schemas`) are **generated views** over `memory-store/`, rebuilt by Dreaming. Writing them with `write_local_memory_tool` is rejected (store-first model): the tool now writes only steering sections. Write granular facts with `write_memory_store_tool`, then run `dream_tool` to refresh the maps.
+**Exception:** the steering sections `framework-rules` and `ubiquitous-language` are hand-curated and always loaded into context; update those with `write_local_memory_tool(cwd, section, content)` — this is the tool's only remaining use.
+
+> **Project directives exception:** files in `.ai-memory/` whose frontmatter declares `role: steering` (e.g. `framework-rules`, `ubiquitous-language`, and project directives such as `development-guidelines`) are hand-curated policy — humans and agents MAY edit them directly with file tools (review via MR). Everything else in `.ai-memory/` remains MCP-tools-only. After editing a directive, run `ai-memory sync-agents` (or rely on the pre-commit hook) so per-tool files regenerate.
 
 ### 4. Security & Maintenance
 - **Security:** Do NOT store credentials, tokens, or passwords.
 - **Dreaming:** Use `dream_tool` for consolidation only — after new knowledge has already been saved with `write_memory_store_tool`. Refer to `.agents/rules/dreaming.md` for guidelines.
+- **Bug fixes:** Call `write_failure_memory_tool(cwd, error_summary, fix_summary)` right after fixing a bug. Repeat occurrences of the same error accumulate onto one entry instead of scattering — this is the highest-value memory category for future debugging.
 
 ### 5. Session End — Automatic Journaling
 Before completing a session, call `write_session_journal_tool(cwd, summary, key_decisions, files_changed, session_label)` to capture what happened.

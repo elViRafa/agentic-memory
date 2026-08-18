@@ -42,6 +42,12 @@ class CaptureRateBenchmarkTests(unittest.TestCase):
         self.assertEqual(enforced["sessions_journaled"], 5)
         self.assertEqual(enforced["journal_rate_pct"], 100.0)
 
+    def test_cursor_mode_uses_the_same_guard_and_is_100_percent(self) -> None:
+        results = _bench.run_benchmark(sessions=5)
+        cursor = results["cursor"]
+        self.assertEqual(cursor["sessions_journaled"], 5)
+        self.assertEqual(cursor["journal_rate_pct"], 100.0)
+
     def test_passive_commit_capture_is_unconditional_in_both_modes(self) -> None:
         """Commit capture runs off the git post-commit hook (Stage 0/1), not
         the client-side session hooks — it must hold steady regardless of

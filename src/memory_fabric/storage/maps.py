@@ -243,6 +243,32 @@ def _generate_category_map(
     return map_path.name
 
 
+def regenerate_category_map(memory_root: Path, category: str) -> str | None:
+    """Refresh one category map. No-op when the fingerprint is unchanged.
+
+    Never overwrites a handwritten (pre-store-first) map — folding that
+    content is ``regenerate_maps`` / Dreaming's job. Auto-regen on write
+    only updates maps that are already generated or still the init starter.
+    """
+    if category in STEERING_SECTIONS:
+        return None
+    store_root = memory_root / "memory-store"
+    map_path = memory_root / f"{category}.md"
+    old_meta: dict[str, Any] = {}
+    old_body = ""
+    if map_path.exists():
+        try:
+            old_meta, old_body = parse_frontmatter(map_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, FrontmatterError):
+            return None
+        if not old_meta.get("generated") and not _is_starter_placeholder(category, old_body):
+            return None
+    warnings: list[str] = []
+    return _generate_category_map(
+        memory_root, store_root, category, warnings, old_meta=old_meta or None
+    )
+
+
 def regenerate_maps(memory_root: Path) -> MapsRegenResult:
     """Regenerate root map sections from the memory-store tree under ``memory_root``.
 

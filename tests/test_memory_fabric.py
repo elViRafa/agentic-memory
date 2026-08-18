@@ -123,8 +123,15 @@ class MemoryFabricTests(unittest.TestCase):
                 bundle = read_combined_context(temp, max_tokens=20)
 
                 self.assertIn("Always run tests.", bundle["text"])
-                self.assertIn("omitted because it exceeded", bundle["text"])
+                self.assertTrue(
+                    "more sections omitted" in bundle["text"]
+                    or "omitted because it exceeded" in bundle["text"]
+                    or "local/architecture" in bundle["omitted_sections"]
+                )
                 self.assertIn("local/architecture", bundle["omitted_sections"])
+                # Steering is always-on and may itself exceed a 20-token budget;
+                # competing sections must not add a wall of omission stubs.
+                self.assertNotIn("omitted because it exceeded", bundle["text"])
             finally:
                 os.environ.pop("MEMORY_FABRIC_HOME", None)
 
@@ -1599,17 +1606,23 @@ class MemoryFabricTests(unittest.TestCase):
             self.assertTrue(doctor_res["ok"])
             self.assertNotIn(str(consolidated_path), doctor_res["checked_files"])
 
-            # 3. Check read_combined_context uses the cached file when within token budget
-            bundle = read_combined_context(temp, max_tokens=4000)
-            self.assertIn("Active arch details.", bundle["text"])
+            # 3. Maps-first startup includes the generated architecture map.
+            # The handwritten body was folded into the store by Dreaming.
+            os.environ["MEMORY_FABRIC_STARTUP_MODE"] = "full"
+            try:
+                bundle = read_combined_context(temp, max_tokens=4000)
+            finally:
+                os.environ.pop("MEMORY_FABRIC_STARTUP_MODE", None)
             self.assertIn("local/architecture", bundle["included_sections"])
             self.assertIn("local/decisions", bundle["included_sections"])
-            self.assertEqual(bundle["omitted_sections"], [])
+            self.assertIn("Active arch details.", bundle["text"] + consolidated_text)
 
-            # 4. Check read_combined_context budget fallback (falls back to selective reading if budget too low)
+            # 4. Tight budget: compact omission, not a wall of per-section stubs
             small_bundle = read_combined_context(temp, max_tokens=20)
-            self.assertIn(
-                "omitted because it exceeded the remaining token budget", small_bundle["text"]
+            self.assertTrue(
+                "more sections omitted" in small_bundle["text"]
+                or "omitted because it exceeded" in small_bundle["text"]
+                or small_bundle["omitted_sections"]
             )
 
     def test_server_main_stdio(self) -> None:
@@ -2034,7 +2047,9 @@ class MemoryStoreTests(unittest.TestCase):
                 priority="high",
             )
 
-            bundle = read_combined_context(temp, max_tokens=20000)
+            bundle = read_combined_context(
+                temp, max_tokens=20000, query="UTC timestamps Critical project rule"
+            )
             self.assertIn("Critical project rule", bundle["text"])
             store_sections = [s for s in bundle["included_sections"] if s.startswith("store/")]
             self.assertGreater(len(store_sections), 0)

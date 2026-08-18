@@ -198,7 +198,7 @@ client):
 |---|---|---|---|---|---|
 | **Gemini CLI** | Hooks (`SessionStart`/`AfterAgent`/`PreCompress`) | ✅ works | ✅ exit 2 + stderr, same contract as ours | ⚠️ advisory-only (matches our own PreCompact) | **Implemented** — see below. Primary docs verified directly. |
 | **Codex CLI** | Hooks framework (distinct from the older `notify`) | ✅ works | ✅ exit 2 + stderr, same contract as ours (confirmed from source, not docs) | ⚠️ schema *can* set `continue: false` but we don't use it — same non-blocking design as the others | **Implemented** — see below. Verified straight from Rust source, doc pages all 403'd. |
-| **Cursor** | Agent Hooks (`hooks.json`) | ⚠️ documented but **open upstream bug**: `additional_context` reportedly not reaching the agent (2 forum threads) | ✅ solid | ⚠️ advisory-only | Hold — verify the injection bug is fixed first |
+| **Cursor** | Agent Hooks (`.cursor/hooks.json` schema `version: 1`) | ✅ `sessionStart` ships (verified 2026-08-15 against https://cursor.com/docs/hooks) | ✅ `stop` + `loop_limit` + exit 2 | ⚠️ `preCompact` advisory-only | **Implemented** — plus `preToolUse`/`beforeReadFile` deny raw `.ai-memory/` writes |
 | **VS Code + Copilot** | Agent Hooks | ✅ works, modeled on Claude Code's schema | ✅ exit 2 + stderr (same channel we already learned about the hard way) | ❓ blocking semantics unconfirmed | Hold — feature is explicitly labeled Preview |
 | **Windsurf** | Cascade Hooks | ❌ no session-lifecycle hook exists at all — only per-action pre/post hooks | ❌ none | ❌ none | Not viable — missing mechanism entirely |
 | **Cline** | Hooks (`TaskStart`/`TaskComplete`) | ✅ works | ⚠️ `cancel` aborts the task rather than requesting a correction; open bug report of getting stuck | ❌ none | Not viable yet — wrong enforcement primitive, no compaction hook |
@@ -313,9 +313,10 @@ actual test names and assertions, not paraphrased).
   strings through `sh -c` — confirmed exit 2 + stderr reason and a real light dream exiting
   0, plus the trust warning appearing in the install result.
 
-**Not implemented this round**: Cursor (open upstream bug on context injection), VS Code
-Copilot Hooks (labeled Preview), Windsurf and Cline (missing mechanism/wrong primitive) —
-held per the table above pending upstream fixes or better verification.
+**Updated 2026-08-15**: Cursor is implemented (`ai-memory install --client cursor --with-hooks`).
+The 2026-07-16 SessionStart hold is lifted — Cursor's current schema includes `sessionStart`,
+`stop` (`loop_limit`), `preCompact`, `preToolUse`, and `beforeReadFile`. VS Code Copilot
+Hooks is the next candidate (Preview). Windsurf and Cline remain held.
 
 ---
 

@@ -43,8 +43,11 @@ class GeneratedMapsTests(unittest.TestCase):
             )
 
             result = regenerate_maps(_memory_dir(temp))
+            # write_memory_store already refreshed the generated map; a second
+            # regenerate is a fingerprint no-op. The map must still be correct.
+            if result["maps_written"]:
+                self.assertIn("architecture.md", result["maps_written"])
 
-            self.assertIn("architecture.md", result["maps_written"])
             metadata, body = parse_frontmatter(
                 (_memory_dir(temp) / "architecture.md").read_text(encoding="utf-8")
             )
@@ -63,7 +66,11 @@ class GeneratedMapsTests(unittest.TestCase):
             write_memory_store(temp, "decisions/db-choice", "Postgres.", title="DB Choice")
 
             first = regenerate_maps(_memory_dir(temp))
-            self.assertIn("decisions.md", first["maps_written"])
+            # Auto-regen on write may have already produced the map.
+            if not first["maps_written"]:
+                self.assertTrue((_memory_dir(temp) / "decisions.md").exists())
+            else:
+                self.assertIn("decisions.md", first["maps_written"])
             before = (_memory_dir(temp) / "decisions.md").read_text(encoding="utf-8")
 
             second = regenerate_maps(_memory_dir(temp))
@@ -189,11 +196,13 @@ class SteeringAndOrderingTests(unittest.TestCase):
                     title="Huge",
                 )
 
+                os.environ["MEMORY_FABRIC_STARTUP_MODE"] = "full"
                 bundle = read_combined_context(temp, max_tokens=10)
 
                 self.assertIn("local/framework-rules", bundle["included_sections"])
                 self.assertIn("local/ubiquitous-language", bundle["included_sections"])
                 self.assertIn("store/architecture/huge", bundle["omitted_sections"])
+                os.environ.pop("MEMORY_FABRIC_STARTUP_MODE", None)
             finally:
                 os.environ.pop("MEMORY_FABRIC_HOME", None)
 

@@ -8,6 +8,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-08-15
+
+Behavior change: no-query `read_combined_context` is now **maps-first** (steering
++ generated maps + `memory-store/index.md`). Granular store bodies are no longer
+dumped at session start. Set `MEMORY_FABRIC_STARTUP_MODE=full` to restore the
+previous dump. Combined context now stays at or under its stated token budget
+(always-on steering may still exceed a tiny budget and is named in a warning).
+
+### Added
+
+- **Honest token budget (R0).** Combined context never emits a wall of per-section
+  omission stubs after the budget is gone — one compact line plus the structured
+  `omitted_sections` list. Steering that eats more than half the budget is named
+  in a warning. Query ranking keeps priority and recency. A single file cannot
+  claim more than 25% of the budget (`MEMORY_FABRIC_FILE_SHARE_CAP`). Keyword
+  search excludes `candidates/`, `snapshots/`, `private/`, `evals/`, and
+  `memory-store/index.md` on both backends.
+- **Shared Unicode BM25 ranker + frontmatter index (R1).** Okapi BM25 with IDF
+  serves both `read_combined_context` and `keyword_search`. Maps-first is the
+  no-query default (`MEMORY_FABRIC_STARTUP_MODE=full` restores the old dump).
+  New `context_for_task` MCP tool and `ai-memory retrieve` CLI. Per-commit
+  captures are never included in a no-query bundle.
+- **Cursor lifecycle hooks (R2).** `ai-memory install --client cursor --with-hooks`
+  writes `.cursor/hooks.json` (`sessionStart`, `stop` with `loop_limit`,
+  `preCompact`, `preToolUse`, `beforeReadFile`). Raw file-tool writes into
+  `.ai-memory/` are denied with a redirect to `write_memory_store_tool`.
+- **Map auto-regen, verify CI, doctor freshness, summary ban (R3).** Store writes
+  refresh the touched category map. `repo:` citations are skipped, not broken.
+  `doctor` warns on stale deep dreams, pending-review piles, stale candidates,
+  and high-priority entries that look resolved. Generic summaries (`Contexto`,
+  `Memory: <title>.`) are derived at the write boundary.
+- **Unicode slugs, structured failure signatures, review queue, skills index (R4).**
+  `seção de importação` → `secao-de-importacao`. The same `IntegrityError` in
+  two languages collapses. `ai-memory review --list/--promote/--drop` drains
+  pending captures. `sync-agents` emits `.agents/skills/INDEX.md`.
+- **Thin Cursor rule, skip-startup-dump, agent router (R5).** Always-on
+  `memory-fabric.mdc` is Rule 0 + startup/write/retrieve pointers.
+  `MEMORY_FABRIC_SKIP_STARTUP_DUMP` is implemented and defaults on when the
+  MCP context resource was served this session.
+- **`retrieval_quality` eval category (R6-1).** Driven by
+  `.ai-memory/evals/retrieval.yaml`; an intentional ranking regression fails CI.
+- **Coding-memory benchmark (R6-3).** `ai-memory bench` scores memory-on vs
+  memory-off retrieval on a field-inspired fixture (CAD vs system columns,
+  `test_*.py`, no DRF, PRD 0008/0009 reversal). Extractable runner lives at
+  `benchmarks/coding-memory/`. No LLM required.
+- **Full contradiction detection (R7-3).** Dreaming and `doctor` flag polarity
+  clashes and named decision reversals as well as numeric Jaccard conflicts.
+  Conflicts are surfaced for review; nothing is deleted or auto-chosen. Deep
+  dream can ask the already-configured LLM about remaining overlapping pairs.
+
 > Two bugs reported against v1.2.0 and reproduced against a real repo merge. Both
 > ended the same way: memory files that the merge driver was supposed to protect
 > got corrupted, or the driver never ran at all.
@@ -585,7 +635,8 @@ with those fixed the final score is **96/100 with zero failing checks**
   {ubuntu, windows, macos} × {3.11–3.14}; `storage/_core.py` god module split
   into 12 focused modules.
 
-[Unreleased]: https://github.com/elViRafa/agentic-memory/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/elViRafa/agentic-memory/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/elViRafa/agentic-memory/compare/v1.2.0...v1.3.0
 [0.8.1]: https://github.com/elViRafa/agentic-memory/compare/v0.7.3...v0.8.1
 [0.7.3]: https://github.com/elViRafa/agentic-memory/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/elViRafa/agentic-memory/compare/v0.7.1...v0.7.2

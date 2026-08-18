@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import re
+import time
 
 from memory_fabric.contracts import (
     StoreEntry,
@@ -14,7 +16,7 @@ from memory_fabric.contracts import (
 )
 from memory_fabric.frontmatter import FrontmatterError, dump_frontmatter, parse_frontmatter
 from memory_fabric.locking import locked_file
-from memory_fabric.paths import memory_store_dir
+from memory_fabric.paths import local_memory_dir, memory_store_dir
 from memory_fabric.security import redact_secrets
 from memory_fabric.storage._shared import (
     PRIORITY_ORDER,
@@ -23,6 +25,70 @@ from memory_fabric.storage._shared import (
     estimate_tokens,
 )
 from memory_fabric.templates import now_iso
+
+_GENERIC_SUMMARIES = frozenset(
+    {
+        "",
+        "contexto",
+        "context",
+        "summary",
+        "tbd",
+        "todo",
+        "n/a",
+        "na",
+    }
+)
+_MAP_REGEN_DEBOUNCE_SEC = 2.0
+_last_map_regen: dict[str, float] = {}
+
+
+def _is_useless_summary(summary: str, title: str, first_heading: str) -> bool:
+    s = (summary or "").strip()
+    if not s or s.lower() in _GENERIC_SUMMARIES:
+        return True
+    if len(s) < 16:
+        return True
+    lowered = s.lower().rstrip(".")
+    title_l = (title or "").strip().lower().rstrip(".")
+    if title_l and lowered in {title_l, f"memory: {title_l}"}:
+        return True
+    heading_l = first_heading.lstrip("#").strip().lower().rstrip(".")
+    return bool(heading_l and lowered == heading_l)
+
+
+def _derive_summary(title: str, body: str) -> str:
+    for line in body.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or stripped.startswith("```"):
+            continue
+        sentence = stripped.split(". ")[0].strip().rstrip(".")
+        if len(sentence) >= 24:
+            return sentence[:200]
+    if title:
+        return f"{title} — project memory entry."
+    return "Project memory entry."
+
+
+def _maybe_regen_map(cwd: str, store_path: str) -> None:
+    flag = (os.environ.get("MEMORY_FABRIC_MAP_AUTOREGEN") or "1").strip().lower()
+    if flag in {"0", "false", "no"}:
+        return
+    category = store_path.strip("/").split("/")[0]
+    if not category:
+        return
+    key = f"{cwd}:{category}"
+    now = time.monotonic()
+    if now - _last_map_regen.get(key, 0.0) < _MAP_REGEN_DEBOUNCE_SEC:
+        return
+    _last_map_regen[key] = now
+    try:
+        from memory_fabric.storage.maps import regenerate_category_map
+
+        regenerate_category_map(local_memory_dir(cwd), category)
+    except (OSError, ValueError, TypeError):
+        # Map regen is advisory on the write path; a failure must not roll back
+        # the store write that already succeeded.
+        return
 
 
 def write_memory_store(
@@ -169,17 +235,21 @@ def write_memory_store(
                 changed = False
 
         if changed:
-            # Auto-generate summary from title or first content line
             first_line = new_body.strip().split("\n")[0].strip() if new_body.strip() else ""
-            if title:
-                metadata["summary"] = title[:150]
-            elif first_line and first_line != metadata.get("summary", ""):
-                summary_text = first_line.lstrip("#").strip()
-                if len(summary_text) > 150:
-                    summary_text = summary_text[:147] + "..."
-                metadata["summary"] = summary_text
+            heading = first_line.lstrip("#").strip()
+            current_summary = str(metadata.get("summary") or "")
+            display_title = str(metadata.get("title") or title or "")
+            if _is_useless_summary(current_summary, display_title, heading) or (
+                title and _is_useless_summary(title, display_title, heading)
+            ):
+                metadata["summary"] = _derive_summary(display_title, new_body)
+            elif title and _is_useless_summary(current_summary, title, heading):
+                metadata["summary"] = _derive_summary(title, new_body)
 
             path.write_text(dump_frontmatter(metadata, new_body), encoding="utf-8")
+
+    if changed:
+        _maybe_regen_map(cwd, store_path)
 
     return {
         "changed": changed,

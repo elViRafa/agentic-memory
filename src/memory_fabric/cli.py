@@ -49,7 +49,7 @@ from memory_fabric.version import __version__
 # JSON envelope on stdout (exit 0) — currently byte-identical across both,
 # verified independently against each client's own docs. Split into separate
 # builders here the moment either schema diverges; don't assume it stays true.
-_SESSION_START_JSON_HOOK_FORMATS = frozenset({"claude-code", "gemini-cli", "codex"})
+_SESSION_START_JSON_HOOK_FORMATS = frozenset({"claude-code", "gemini-cli", "codex", "cursor"})
 
 
 def _ensure_utf8_output() -> None:
@@ -136,6 +136,15 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "session-start":
             mark_result = mark_session_start(cwd)
+            if args.hook_format == "cursor":
+                additional_context = (
+                    f'Memory Fabric reminder: call read_combined_context_tool(cwd="{cwd}") '
+                    "now if project memory has not been loaded yet this session. Before your "
+                    "final response, call write_session_journal_tool to log what was "
+                    "accomplished — the Stop hook will block ending the session without it."
+                )
+                print(json.dumps({"additional_context": additional_context}))
+                return 0
             if args.hook_format in _SESSION_START_JSON_HOOK_FORMATS:
                 # Claude Code's, Gemini CLI's, and Codex's SessionStart hooks all
                 # parse stdout as JSON on exit 0 and inject
@@ -258,6 +267,11 @@ def main(argv: list[str] | None = None) -> int:
             _print_result(dream_result, args.json)
             return 0
         if args.command == "migrate":
+            if getattr(args, "fix_slugs", False):
+                from memory_fabric.storage.migrate import fix_mangled_slugs
+
+                _print_result(fix_mangled_slugs(cwd, dry_run=args.dry_run), args.json)
+                return 0
             migrate_result = asyncio.run(
                 migrate_memory(
                     cwd,
@@ -272,6 +286,29 @@ def main(argv: list[str] | None = None) -> int:
                 _print_migrate_plan(migrate_result)
                 _print_result({k: v for k, v in migrate_result.items() if k != "plan"}, False)
             return 0
+        if args.command == "canary":
+            from memory_fabric.eval.canary import run_guideline_canary
+
+            canary_result = asyncio.run(run_guideline_canary(cwd, prompt=args.prompt))
+            _print_result(canary_result, args.json)
+            if canary_result.get("skipped"):
+                return 0
+            return 0 if canary_result.get("passed") else 1
+        if args.command == "bench":
+            from memory_fabric.eval.bench import run_coding_memory_benchmark
+
+            bench_result = run_coding_memory_benchmark(
+                cwd,
+                fixture=args.fixture,
+                suite_path=args.suite,
+                k=args.k,
+            )
+            if args.json:
+                payload = {k: v for k, v in bench_result.items() if k != "report_markdown"}
+                _print_result(payload, True)
+            else:
+                print(bench_result["report_markdown"], end="")
+            return 0 if bench_result.get("passed") else 1
         if args.command == "eval":
             eval_result: EvalResult | DreamEvalResult
             if args.dream_snapshot:
@@ -297,6 +334,41 @@ def main(argv: list[str] | None = None) -> int:
             query_result = keyword_search(cwd, args.query, max_results=args.max_results)
             _print_result(query_result, args.json)
             return 0
+        if args.command == "retrieve":
+            from memory_fabric.storage.retrieve import context_for_task
+
+            files = [f.strip() for f in (args.files or "").split(",") if f.strip()]
+            retrieve_result = context_for_task(
+                cwd,
+                query=args.query,
+                files_open=files or None,
+                max_tokens=args.max_tokens,
+            )
+            _print_result(retrieve_result, args.json)
+            return 0
+        if args.command == "review":
+            from memory_fabric.storage.review import (
+                drop_review,
+                list_pending_reviews,
+                promote_review,
+            )
+
+            if args.drop:
+                _print_result(drop_review(cwd, args.drop), args.json)
+                return 0
+            if args.promote:
+                if not args.to:
+                    raise SystemExit("review --promote requires --to <store_path>")
+                _print_result(promote_review(cwd, args.promote, args.to), args.json)
+                return 0
+            _print_result(list_pending_reviews(cwd), args.json)
+            return 0
+        if args.command == "hook-guard":
+            from memory_fabric.storage.hook_guard import run_hook_guard
+
+            code, hook_payload = run_hook_guard(cwd)
+            print(hook_payload)
+            return code
         if args.command == "sync-agents":
             sync_result = sync_agent_rules(cwd, check=args.check)
             _print_result(sync_result, args.json)
@@ -582,7 +654,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     session_start_parser.add_argument(
         "--hook-format",
-        choices=["claude-code", "gemini-cli", "codex"],
+        choices=["claude-code", "gemini-cli", "codex", "cursor"],
         default=None,
         help="Emit output in a specific client's hook-envelope format instead of "
         "the plain result (e.g. hookSpecificOutput.additionalContext)",
@@ -590,6 +662,10 @@ def build_parser() -> argparse.ArgumentParser:
     add_command(
         "guard-journal",
         help="Exit non-zero if no session journal was written (for client Stop hooks)",
+    )
+    add_command(
+        "hook-guard",
+        help="Deny raw file-tool access to .ai-memory/ (Cursor preToolUse / beforeReadFile)",
     )
 
     install_parser = add_command("install", help="Configure an MCP client to use memory-fabric")
@@ -663,6 +739,34 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip LLM naming and use deterministic heading-based names",
     )
+    migrate_parser.add_argument(
+        "--fix-slugs",
+        action="store_true",
+        help="Rename accent-mangled store slugs (seção → secao); opt-in, never silent",
+    )
+
+    canary_parser = add_command(
+        "canary",
+        help="Guideline canary: ask a cheap model a known convention (skipped without LLM)",
+    )
+    canary_parser.add_argument("--prompt", default=None, help="Override the canary prompt")
+
+    bench_parser = add_command(
+        "bench",
+        help="Coding-memory benchmark: memory-on vs memory-off retrieval (no LLM required)",
+    )
+    bench_parser.add_argument(
+        "--fixture",
+        default="builtin",
+        help="builtin (default field fixture) or a project path whose store is the memory-on side",
+    )
+    bench_parser.add_argument(
+        "--suite",
+        default=None,
+        help="YAML/JSON task file ({query, expected_store_paths}). "
+        "Default for a project fixture: .ai-memory/evals/bench.yaml",
+    )
+    bench_parser.add_argument("--k", type=int, default=5, help="Top-k for retrieval scoring")
 
     eval_parser = add_command("eval", help="Evaluate memory and Dreaming quality")
     eval_parser.add_argument(
@@ -680,6 +784,23 @@ def build_parser() -> argparse.ArgumentParser:
     query_parser = add_command("query", help="Search memory")
     query_parser.add_argument("query")
     query_parser.add_argument("--max-results", type=int, default=10)
+
+    retrieve_parser = add_command(
+        "retrieve", help="Task-scoped context pack (steering + top-k ranked memories)"
+    )
+    retrieve_parser.add_argument("query", help="Natural-language task query")
+    retrieve_parser.add_argument(
+        "--files", default="", help="Comma-separated open file paths (boosts related failures)"
+    )
+    retrieve_parser.add_argument("--max-tokens", type=int, default=None)
+
+    review_parser = add_command("review", help="Drain pending/needs-review captures")
+    review_parser.add_argument(
+        "--list", action="store_true", help="List pending captures (default if no other flag)"
+    )
+    review_parser.add_argument("--promote", default=None, help="Store path to promote")
+    review_parser.add_argument("--to", default=None, help="Destination store path for --promote")
+    review_parser.add_argument("--drop", default=None, help="Store path to drop from the queue")
 
     sync_agents_parser = add_command(
         "sync-agents",

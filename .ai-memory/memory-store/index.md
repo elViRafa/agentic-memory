@@ -5,7 +5,9 @@ summary: "Index of all semantic memory store files."
 priority: high
 tags: [index, memory-store]
 schema_version: 1.3
-last_updated: "2026-07-13T21:22:39-04:00"
+generated: true
+generated_from: memory-store
+last_updated: "2026-08-15T10:31:42-04:00"
 ---
 
 # Memory Store Index
@@ -16,6 +18,7 @@ Updated by Memory Fabric Dreaming mode `light`.
 | --- | --- | --- | --- | --- |
 | `architecture/agent-rules` | high | Agentic Architecture & Rule Registries | • AGENTS.md: Universal instructions at project root.<br>• .agents/rules/memory-store.md: Core rules formatted for I...<br>• .agents/rules/dreaming.md: Specialized parameter rules fo... | architecture, agents, rules |
 | `architecture/core-characteristics` | high | Core Characteristics | • **MCP-Native**: Exposes memory tools through the standard...<br>• **File-First**: Markdown files are the source of truth, i...<br>• **Local-First**: Core reads and writes work offline. | architecture, design, overview, migrated |
+| `architecture/decisions/cursor-hooks-now-viable` | high | Cursor lifecycle hooks are no longer blocked — adapter is viable | • `sessionStart`, `sessionEnd`<br>• `stop` (supports `loop_limit` for follow-up loops)<br>• `preCompact` | cursor, hooks, capture, client-hooks, decision |
 | `architecture/decisions/dream-store-sub-index` | high | Dream Store Sub Index | None recorded | dreaming, memory-store, architecture |
 | `architecture/decisions/dream-store-subfolders` | high | Details hierarchical memory storage structure using `local/` and `store/` prefixes for accurate path preservation during consolidation. | None recorded | dreaming, memory-store, architecture |
 | `architecture/global-memory` | high | Global Memory | • Windows: `%APPDATA%\memory-fabric\global\`<br>• macOS: `~/Library/Application Support/memory-fabric/global/`<br>• Linux: `$XDG_CONFIG_HOME/memory-fabric/global/` | architecture, design, overview, migrated |
@@ -25,18 +28,27 @@ Updated by Memory Fabric Dreaming mode `light`.
 | `architecture/project-memory-layout` | high | Project Memory Layout | None recorded | architecture, design, overview, migrated |
 | `architecture/system-flow-component-boundaries` | high | System Flow & Component Boundaries | None recorded | architecture, design, overview, migrated |
 | `architecture/tests/isolated-unit-tests` | low | Contains isolated unit tests for utility functions like frontmatter parsing and security checks, separating them from high-level integration tests. | • Extracted utility tests for frontmatter.py and security.p...<br>• Promoted isolated test cases for token signatures (ghp, A...<br>• Ensured high-level tests remain in test_memory_fabric.py,... | tests, frontmatter, security |
+| `debt/capture-quality-defects` | medium | Capture-quality defects: unicode slugs, failure dedup, generic summaries, orphaned review queue | None recorded | capture, slugs, unicode, failures, summaries, review-status, debt |
 | `debt/debt-strategy` | low | Debt Strategy | None recorded | debt, risk, map, migrated |
 | `debt/dreaming-roadmap` | low | Detailed roadmap and acceptance criteria for the dream_tool's consolidation and agent-assisted rewrite features. | • Current Limitations<br>• Planned Improvements<br>• Acceptance Criteria | debt, roadmap, dreaming, cli |
 | `debt/granular-debt-records` | low | Granular Debt Records | None recorded | debt, risk, map, migrated |
 | `debt/overview` | low | Debt Overview | None recorded | debt, risk, map, migrated |
+| `debt/read-path-retrieval-defects` | high | Read-path retrieval defects verified in code (v1.2.0) | None recorded | retrieval, context, debt, bm25, budget, phase4 |
 | `decisions/cli-ux` | low | Decisions regarding the ai-memory CLI UX, outputs, and validation rules. | • Status and Doctor Commands<br>• Sync Command<br>• Diagnostic and Evaluation | decisions, cli, ux, commands |
 | `decisions/core-storage` | medium | Decisions regarding markdown file storage, staleness, and memory deduplication. | • Staleness<br>• Write Integrity | decisions, storage, core, markdown |
 | `decisions/engineering-philosophy` | high | Engineering Philosophy | None recorded | decisions, adr, map, migrated |
 | `decisions/git-integration` | low | Decisions regarding Git hooks and subprocess integrations for memory maintenance. | • Post-Commit Hooks<br>• Ingestion & Subprocesses | decisions, git, hooks, subprocess |
 | `decisions/granular-decisions-adr` | high | Granular Decisions (ADR) | None recorded | decisions, adr, map, migrated |
 | `decisions/llm-infrastructure` | medium | Decisions regarding LLM providers, retry logic, sanitization, and optimization. | • Providers & Connectivity<br>• Optimization & Caching<br>• Security | decisions, llm, infrastructure, optimization |
+| `decisions/merge-conflict-free-memory` | high | Conflict-free memory merges for teams | None recorded | decisions, git, merge, teams |
+| `decisions/migrate-llm-names-heuristic-content` | high | Migrate: LLM names chunks, heuristic owns content | None recorded | migration, store-first, llm, design |
 | `decisions/overview` | high | Decisions Overview | None recorded | decisions, adr, map, migrated |
 | `episodic/2026-07-07` | low | Episodic Journal — 2026-07-07 | • store-first-v06 | episodic, session-journal |
+| `episodic/2026-07-14` | low | Episodic Journal — 2026-07-14 | • v0.8-migration-tooling | episodic, session-journal |
+| `episodic/2026-07-29` | low | Episodic Journal — 2026-07-29 | • merge-conflict-free-memory | episodic, session-journal |
+| `episodic/2026-08-15` | low | Episodic Journal — 2026-08-15 | • real-usage-remediation-roadmap | episodic, session-journal |
+| `failures/eval-metadata-quality-failed-975527f4fa` | medium | eval metadata_quality failed every memory-store file with <stem>_section_missing | • Occurrence 1 — 2026-07-13T21:32:03-04:00 | drift, eval, failure, fix, store-first |
+| `failures/merged-generated-map-carried-193c800971` | medium | Merged generated map carried a body_hash that could not match its own body on Wi | • Occurrence 1 — 2026-07-29T18:23:25+00:00 | ci, failure, fix, line-endings, merge-driver, windows |
 | `features/mcp-resources` | high | MCP Resources: Automatic Context Delivery | • Resources registered<br>• URL encoding<br>• Graceful degradation<br>• InitResult.resource_uris<br>• Client compatibility<br>• Files changed | mcp, resources, auto-fetch, context |
 | `rules/mcp-agent-instructions` | high | Crucial instructions for AI Agents interacting with the Memory Fabric via MCP Server tools. | None recorded | rules, agents, mcp, tools |
 | `schemas/cli-contracts` | medium | TypedDict contracts governing the CLI diagnostic, status, and dreaming commands. | • Diagnostic & Status<br>• Dreaming & Maintenance | schemas, contracts, cli, dreaming |

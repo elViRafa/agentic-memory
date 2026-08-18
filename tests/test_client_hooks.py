@@ -180,13 +180,13 @@ class MalformedConfigTests(unittest.TestCase):
 class UnsupportedClientTests(unittest.TestCase):
     def test_client_with_no_adapter_reports_plainly_not_silently(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            result = install_hooks(temp, "cursor")
+            result = install_hooks(temp, "windsurf")
 
             self.assertFalse(result["ok"])
             self.assertFalse(result["supported"])
             self.assertFalse(result["changed"])
             joined = " ".join(result["warnings"])
-            self.assertIn("cursor", joined)
+            self.assertIn("windsurf", joined)
             self.assertIn("claude-code", joined)
 
 

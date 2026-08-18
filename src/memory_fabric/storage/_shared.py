@@ -237,6 +237,22 @@ def _is_ignored_local_memory_path(memory_dir: Path, path: Path) -> bool:
     return bool({"private", "snapshots", "evals", "candidates"}.intersection(relative_parts))
 
 
+def _is_generated_store_index(memory_dir: Path, path: Path) -> bool:
+    return path == memory_dir / "memory-store" / "index.md"
+
+
+def _is_searchable_memory_path(memory_dir: Path, path: Path) -> bool:
+    """True for memory files that should appear in search / ranking corpora.
+
+    Excludes ignored trees (``candidates/``, ``snapshots/``, ``private/``,
+    ``evals/``) and the generated ``memory-store/index.md`` ToC, which
+    otherwise pollutes keyword hits with its own table of contents.
+    """
+    if _is_ignored_local_memory_path(memory_dir, path):
+        return False
+    return not _is_generated_store_index(memory_dir, path)
+
+
 def _is_store_path(memory_dir: Path, path: Path) -> bool:
     """Check if a path is inside the memory-store/ subdirectory."""
     store_root = memory_dir / "memory-store"

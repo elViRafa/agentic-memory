@@ -37,6 +37,11 @@ def _classify_ref(ref: str) -> tuple[str, str]:
     ref = ref.strip()
     if ref.startswith("commit:"):
         return "commit", ref[len("commit:") :].strip()
+    if ref.startswith("repo:"):
+        # Cross-repo evidence (sister checkouts). Recorded as deliberately
+        # unverifiable rather than broken — the local-first rule cannot
+        # resolve another repository's tree.
+        return "repo", ref[len("repo:") :].strip()
     if ref.startswith(_UNVERIFIABLE_PREFIXES):
         return "unverifiable", ref
     return "path", ref
@@ -84,8 +89,9 @@ def verify_evidence(
 ) -> dict[str, Any]:
     """Check every memory file's ``evidence`` refs against the current tree.
 
-    Returns ``{"checked_files", "broken", "marked_broken", "cleared", "ok",
-    "warnings"}``. ``broken`` is a list of ``{"key", "path", "problems"}``.
+    Returns ``{"checked_files", "broken", "marked_broken", "cleared", "skipped",
+    "ok", "warnings"}``. ``broken`` is a list of ``{"key", "path", "problems"}``.
+    ``skipped`` lists ``repo:`` (and other unverifiable) citations.
     When ``mark_broken`` is True (the default for the explicit ``ai-memory
     verify`` command; eval calls this with False to stay read-only), broken
     files get ``review_status: broken-evidence`` stamped in place — and files
@@ -103,6 +109,7 @@ def verify_evidence(
     broken: list[dict[str, Any]] = []
     marked: list[str] = []
     cleared: list[str] = []
+    skipped: list[dict[str, str]] = []
     warnings: list[str] = []
 
     for path in _iter_markdown_files(memory_dir):
@@ -132,6 +139,9 @@ def verify_evidence(
                 problem = _check_path_ref(root, value)
             elif kind == "commit":
                 problem = _check_commit_ref(root, value)
+            elif kind in {"repo", "unverifiable"}:
+                skipped.append({"key": _get_section_key(memory_dir, path), "ref": str(ref)})
+                continue
             else:
                 continue
             if problem:
@@ -154,6 +164,7 @@ def verify_evidence(
         "broken": broken,
         "marked_broken": marked,
         "cleared": cleared,
+        "skipped": skipped,
         "ok": not broken,
         "warnings": warnings,
     }

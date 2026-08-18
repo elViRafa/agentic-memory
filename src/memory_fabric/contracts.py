@@ -68,6 +68,7 @@ class SearchResult(TypedDict):
     line: int
     snippet: str
     backend: NotRequired[str]  # 'ripgrep' | 'python' — which search backend was used
+    score: NotRequired[float]  # BM25 * priority * recency; present after ranking
 
 
 class WriteResult(TypedDict):
@@ -124,6 +125,30 @@ class StoreEntry(TypedDict):
 class StoreListResult(TypedDict):
     entries: list[StoreEntry]
     total: int
+    warnings: list[str]
+
+
+class ReviewEntry(TypedDict):
+    store_path: str
+    path: str
+    title: str
+    summary: str
+    review_status: str
+    preview: str
+
+
+class ReviewListResult(TypedDict):
+    entries: list[ReviewEntry]
+    total: int
+    warnings: list[str]
+
+
+class ReviewActionResult(TypedDict):
+    changed: bool
+    action: str
+    store_path: str
+    target_store_path: str
+    path: str
     warnings: list[str]
 
 
@@ -305,6 +330,32 @@ class EvalResult(TypedDict):
     report_paths: list[str]
     warnings: list[str]
     llm_notes: list[str]
+
+
+class BenchTaskScore(TypedDict):
+    id: str
+    query: str
+    expected_store_paths: list[str]
+    memory_on_hits: list[str]
+    memory_off_hits: list[str]
+    memory_on_recall: float
+    memory_off_recall: float
+    memory_on_token_hit: bool
+    memory_off_token_hit: bool
+
+
+class BenchResult(TypedDict):
+    kind: Literal["coding-memory"]
+    generated_at: str
+    fixture: str
+    k: int
+    tasks: list[BenchTaskScore]
+    memory_on_recall: float
+    memory_off_recall: float
+    lift: float
+    passed: bool
+    warnings: list[str]
+    report_markdown: str
 
 
 class DreamEvalResult(TypedDict):

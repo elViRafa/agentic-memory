@@ -246,18 +246,10 @@ class LargeStorePerformanceTests(unittest.TestCase):
             )
 
     def test_read_combined_context_p95_latency_budget(self) -> None:
-        """Establishes a measured baseline for Phase 4 retrieval work (ROADMAP.md:
-        "read_combined_context p95 under 150ms on a 500-file store").
+        """Maps-first no-query packing must stay under 150ms at 1000 store files.
 
-        Real measurement on this store size (2026-07-13): p95 ~390ms at 500
-        files, ~740ms at this test's 1000 — 2-5x over the Phase 4 aspirational
-        target, because read_combined_context reads and parses every store
-        file up front before ranking/trimming to the token budget, instead of
-        short-circuiting once the budget is full. That gap is real Phase 4
-        work (a lazy/indexed read path), not something to paper over here by
-        asserting an unmet target. This assertion is a regression guard
-        instead: loose enough to pass reliably on a slower CI runner, tight
-        enough to catch an accidental O(n^2)-shaped regression.
+        The packer only reads root maps + memory-store/index.md; it must not
+        walk or parse the granular store tree on a no-query startup call.
         """
         with tempfile.TemporaryDirectory() as temp:
             initialize_memory_fabric(temp)
@@ -275,7 +267,7 @@ class LargeStorePerformanceTests(unittest.TestCase):
 
             self.assertLess(
                 p95,
-                3000.0,
+                150.0,
                 f"read_combined_context p95 was {p95:.0f}ms over {len(samples_ms)} runs "
                 f"at {self.N_FILES} files (samples: {[round(s) for s in samples_ms]})",
             )

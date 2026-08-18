@@ -6,6 +6,7 @@ priority: high
 tags: [schemas, contracts, mcp, typeddict]
 schema_version: 1.3
 last_updated: "2026-06-18T10:06:00-04:00"
+review_status: stale
 ---
 
 # MCP Server API Contracts

@@ -1,0 +1,29 @@
+# Built-in coding-memory tasks. The Python harness embeds the same list so
+# `ai-memory bench` works after install without this file; keep them in sync
+# if you extract this directory as its own repo.
+- id: tot-local-columns
+  query: Should TOT_LOCAL use CAD columns or system columns?
+  expected_store_paths:
+    - decisions/tot-local-cad-columns
+  expected_tokens:
+    - CAD columns
+    - not from system
+- id: test-file-naming
+  query: What should a new Python test file be named?
+  expected_store_paths:
+    - rules/test-file-naming
+  expected_tokens:
+    - test_*.py
+- id: no-drf
+  query: Can we use Django REST Framework?
+  expected_store_paths:
+    - decisions/no-django-rest-framework
+  expected_tokens:
+    - does not use Django REST Framework
+- id: urnas-reversal
+  query: Is urnas_add_pos_calc still part of the schema?
+  expected_store_paths:
+    - decisions/prd-0009-reverse-urnas-add-pos-calc
+  expected_tokens:
+    - PRD 0009 reverses
+    - Do not add urnas_add_pos_calc

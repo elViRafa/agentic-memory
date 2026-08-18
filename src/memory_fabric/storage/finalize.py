@@ -24,8 +24,6 @@ from memory_fabric.storage._shared import (
     _is_generated_file,
     _is_ignored_local_memory_path,
     _iter_markdown_files,
-    _jaccard_similar,
-    _path_to_store_path,
     _should_skip_diff_path,
     _validate_store_path,
 )
@@ -35,6 +33,7 @@ from memory_fabric.storage.consolidation import (
     _diff_memory_roots,
     _regenerate_index_root,
 )
+from memory_fabric.storage.contradictions import detect_contradictions
 from memory_fabric.storage.maps import regenerate_maps
 from memory_fabric.templates import build_empty_section, now_iso
 
@@ -137,7 +136,9 @@ def build_consolidation_prompt(
     prompt = (
         "You are an AI memory consolidation assistant. Below is the project memory index and section bodies.\n"
         "Review the sections to: (1) merge redundant facts or guidelines, (2) resolve overlapping points, "
-        "(3) check for contradiction warnings between files, and (4) incorporate recent Git logs/transcripts if provided.\n"
+        "(3) check for contradiction warnings between files (opposing decisions, "
+        "reversed requirements such as PRD/ADR rollbacks, incompatible numbers) "
+        "and list them without choosing a winner, and (4) incorporate recent Git logs/transcripts if provided.\n"
         "Specifically, extract dates, specific IDs, and missing metadata from the recent transcripts or logs "
         "to enrich the relevant memory sections. If a memory file is outdated or stale, clean it up or propose removing "
         "redundancies.\n"
@@ -232,61 +233,6 @@ def _get_git_diff(cwd: str) -> str:
     except (OSError, subprocess.SubprocessError):
         pass
     return ""
-
-
-# Cap the number of store files the O(n^2) pair scan considers — the check is
-# a best-effort net, not an index; huge stores must not slow every dream down.
-_CONTRADICTION_SCAN_LIMIT = 150
-_NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
-
-
-def _detect_numeric_contradictions(memory_root: Path) -> list[str]:
-    """Deterministic contradiction heuristic over the memory store (P-10).
-
-    Flags pairs of store files whose bodies overlap in wording (Jaccard) but
-    disagree on numbers. Purely advisory; messages avoid commas/colons so the
-    list round-trips cleanly through inline-frontmatter storage.
-    """
-    store_root = memory_root / "memory-store"
-    if not store_root.is_dir():
-        return []
-    entries: list[tuple[str, str, frozenset[str]]] = []
-    for path in sorted(_iter_markdown_files(store_root)):
-        if path.name == "index.md":
-            continue
-        relative = path.relative_to(store_root)
-        # Episodic journals/commit logs and failure records are full of
-        # incidental numbers (dates, line numbers) — comparing them would be
-        # all noise.
-        if relative.parts and relative.parts[0] in {"episodic", "failures"}:
-            continue
-        try:
-            _meta, body = parse_frontmatter(path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, FrontmatterError):
-            continue  # advisory heuristic scan; a skipped file just doesn't participate
-        numbers = frozenset(_NUMBER_RE.findall(body))
-        if not numbers:
-            continue
-        entries.append((_path_to_store_path(store_root, path), body, numbers))
-        if len(entries) >= _CONTRADICTION_SCAN_LIMIT:
-            break
-
-    contradictions: list[str] = []
-    for i in range(len(entries)):
-        for j in range(i + 1, len(entries)):
-            sp_a, body_a, nums_a = entries[i]
-            sp_b, body_b, nums_b = entries[j]
-            if nums_a == nums_b:
-                continue
-            if not _jaccard_similar(body_a, body_b, threshold=0.3):
-                continue
-            only_a = " / ".join(sorted(nums_a - nums_b)[:3]) or "-"
-            only_b = " / ".join(sorted(nums_b - nums_a)[:3]) or "-"
-            contradictions.append(
-                f"`{sp_a}` and `{sp_b}` cover similar content but state different numbers "
-                f"({only_a} vs {only_b}) - review for conflict [heuristic]"
-            )
-    return contradictions
 
 
 async def _process_and_finalize_candidate(
@@ -385,15 +331,15 @@ async def _process_and_finalize_candidate(
     for w in dream_warnings:
         warnings.append(f"Consolidation warning: {w}")
 
-    # Deterministic contradiction net (P-10): small local models routinely
-    # return an empty `contradictions` list even for planted conflicts, and
-    # that failure is silent. Independently of what (or whether) an LLM
-    # answered, flag store-file pairs whose prose overlaps but whose numbers
-    # diverge (e.g. one memory says a cache TTL is 3600 seconds, another 60).
-    for c in _detect_numeric_contradictions(candidate_root):
-        if c not in dream_contradictions:
-            dream_contradictions.append(c)
-            warnings.append(f"Contradiction detected (heuristic): {c}")
+    # Deterministic contradiction net (P-10 / R7-3): small local models
+    # routinely return an empty `contradictions` list even for planted
+    # conflicts, and that failure is silent. Independently of what (or
+    # whether) an LLM answered, flag numeric clashes, polarity reversals,
+    # and named decision rollbacks. Advisory only — never pick a winner.
+    for hit in detect_contradictions(candidate_root):
+        if hit.message not in dream_contradictions:
+            dream_contradictions.append(hit.message)
+            warnings.append(f"Contradiction detected ({hit.kind}): {hit.message}")
 
     # Recalculate hash of consolidated candidates (generated maps excluded — they
     # are derived from the store, which is already part of the hash input)

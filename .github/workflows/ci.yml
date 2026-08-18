@@ -62,3 +62,18 @@ jobs:
 
       - name: mypy
         run: mypy src/memory_fabric
+
+  memory-drift:
+    name: Memory evidence verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install package
+        run: pip install -e ".[test]"
+      - name: Verify in-repo evidence citations
+        run: ai-memory verify --no-mark
+        continue-on-error: false

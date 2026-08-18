@@ -6,6 +6,7 @@ priority: low
 tags: [debt, roadmap, dreaming, cli]
 schema_version: 1.3
 last_updated: "2026-06-18T10:06:00-04:00"
+review_status: stale
 ---
 
 # Dreaming Roadmap: Consolidation, Non-Destructive Output, and Agent-Assisted Rewrite

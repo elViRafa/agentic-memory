@@ -26,7 +26,8 @@ REQUIRED_SECTIONS = [
 MEMORY_WEIGHTS = {
     "coding_usefulness": 30,
     "section_coverage": 20,
-    "retrieval_readiness": 20,
+    "retrieval_readiness": 15,
+    "retrieval_quality": 15,
     "metadata_quality": 15,
     "safety_privacy": 15,
 }

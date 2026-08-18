@@ -8,6 +8,7 @@ schema_version: 1.3
 last_updated: "2026-07-13T21:32:03-04:00"
 occurrences: 1
 error_signature: "eval metadata_quality failed every memory-store file with <stem>_section_missing (e.g. <val>) even though the files were written by write_memory_store itself"
+review_status: stale
 ---
 
 ## Occurrence 1 — 2026-07-13T21:32:03-04:00
