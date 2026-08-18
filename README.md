@@ -37,7 +37,7 @@ Memory is stored as human-readable Markdown with YAML frontmatter. No vector dat
 
 ## Status
 
-**v1.3.0 — maps-first retrieval: honest token budget, Unicode BM25 ranking, Cursor
+**v1.3.1 — maps-first retrieval: honest token budget, Unicode BM25 ranking, Cursor
 hooks, and `context_for_task` / `ai-memory retrieve`. [Live on PyPI](https://pypi.org/project/memory-fabric/).**
 Core CLI and MCP tools work end-to-end. See [`ROADMAP.md`](ROADMAP.md) for what
 shipped, what's in progress, and what's next.
