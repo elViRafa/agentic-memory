@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import sys
+from datetime import UTC
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +37,7 @@ from memory_fabric.templates import (
     LOCAL_GITIGNORE,
     SECTION_TEMPLATES,
     STORE_CATEGORY_SCAFFOLD,
+    build_agent_router_skill,
     build_agents_md,
     build_agents_md_instructions,
     build_agents_rule_directives,
@@ -48,6 +50,7 @@ from memory_fabric.templates import (
     build_cursor_rule,
     build_memory_file,
     build_project_directives_block,
+    build_skills_index,
     build_windsurf_directives,
     build_windsurf_rule,
     order_directive_sections,
@@ -206,6 +209,12 @@ def initialize_memory_fabric(
     cursor_rules_dir = root / ".cursor" / "rules"
     cursor_rules_dir.mkdir(parents=True, exist_ok=True)
     _deploy_file(cursor_rules_dir / "memory-fabric.mdc", build_cursor_rule())
+
+    skills_dir = root / ".agents" / "skills"
+    router_dir = skills_dir / "agent-router"
+    router_dir.mkdir(parents=True, exist_ok=True)
+    _deploy_file(router_dir / "SKILL.md", build_agent_router_skill())
+    _deploy_file(skills_dir / "INDEX.md", build_skills_index(_collect_skill_entries(root)))
 
     # Windsurf IDE (.windsurf/rules/*.md)
     windsurf_rules_dir = root / ".windsurf" / "rules"
@@ -437,6 +446,15 @@ def sync_agent_rules(cwd: str, check: bool = False) -> dict[str, Any]:
     # Cursor
     _write_if_different(root / ".cursor" / "rules" / "memory-fabric.mdc", build_cursor_rule())
 
+    # Skills index + generated router skill (names + one line, not bodies)
+    skills_entries = _collect_skill_entries(root)
+    _write_if_different(
+        root / ".agents" / "skills" / "INDEX.md", build_skills_index(skills_entries)
+    )
+    _write_if_different(
+        root / ".agents" / "skills" / "agent-router" / "SKILL.md", build_agent_router_skill()
+    )
+
     # Windsurf
     _write_if_different(root / ".windsurf" / "rules" / "memory-fabric.md", build_windsurf_rule())
 
@@ -526,6 +544,39 @@ def sync_agent_rules(cwd: str, check: bool = False) -> dict[str, Any]:
         "synced_files": changed_paths,
         "directives_synced": directives_synced,
     }
+
+
+def _skill_oneline(path: Path) -> str:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return path.parent.name
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.lower().startswith("description:"):
+            return stripped.split(":", 1)[1].strip()
+        if stripped.startswith("# "):
+            return stripped[2:].strip()
+    return path.parent.name
+
+
+def _collect_skill_entries(root: Path) -> list[tuple[str, str, str]]:
+    entries: list[tuple[str, str, str]] = [
+        (
+            "agent-router",
+            "When to use guidelines, memory, code-graph tools, or skills.",
+            ".agents/skills/agent-router/SKILL.md",
+        )
+    ]
+    skills_dir = root / ".agents" / "skills"
+    if not skills_dir.is_dir():
+        return entries
+    for skill_md in sorted(skills_dir.rglob("SKILL.md")):
+        if skill_md.parent.name == "agent-router":
+            continue
+        rel = skill_md.relative_to(root).as_posix()
+        entries.append((skill_md.parent.name, _skill_oneline(skill_md), rel))
+    return entries
 
 
 def status(cwd: str) -> StatusResult:
@@ -777,6 +828,11 @@ def doctor(cwd: str, check_network: bool = False) -> DoctorResult:
     _check_hook_health(cwd, warnings)
     _check_install_drift(warnings)
     _check_llm_provider(warnings, check_network=check_network)
+    _check_freshness_signals(cwd, memory_dir, warnings)
+    _check_resolved_high_priority(memory_dir, warnings)
+    _check_stale_candidates(memory_dir, warnings)
+    _check_mangled_slugs(memory_dir, warnings)
+    _check_contradictions(memory_dir, warnings)
     if check_network:
         _check_pypi_drift(warnings)
 
@@ -789,6 +845,172 @@ def doctor(cwd: str, check_network: bool = False) -> DoctorResult:
         "warnings": warnings,
         "checked_files": checked_files,
     }
+
+
+_RESOLVED_RE = re.compile(r"\b(resolvido|resolved|fixed|done|obsolete|superseded)\b", re.IGNORECASE)
+
+
+def _check_freshness_signals(cwd: str, memory_dir: Path, warnings: list[str]) -> None:
+    """Warn when the store looks unconsolidated: stale deep dream, pending pile."""
+    try:
+        stale_days = int(os.environ.get("MEMORY_FABRIC_STALE_DREAM_DAYS", "14"))
+    except (ValueError, TypeError):
+        stale_days = 14
+    try:
+        pending_threshold = int(os.environ.get("MEMORY_FABRIC_PENDING_REVIEW_WARN", "20"))
+    except (ValueError, TypeError):
+        pending_threshold = 20
+
+    try:
+        from memory_fabric.storage.review import count_pending_reviews
+
+        pending = count_pending_reviews(cwd)
+    except Exception:  # noqa: BLE001 - doctor must not fail on a review scan.
+        pending = 0
+
+    stamp = memory_dir / "private" / "last_deep_dream"
+    age_days: float | None = None
+    if stamp.exists():
+        try:
+            from datetime import datetime
+
+            raw = stamp.read_text(encoding="utf-8").strip()
+            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=UTC)
+            age_days = (datetime.now(UTC) - dt.astimezone(UTC)).total_seconds() / 86400
+        except (OSError, UnicodeDecodeError, ValueError):
+            age_days = None
+    if pending > 0 and age_days is None:
+        warnings.append(
+            "No deep-dream stamp found (`.ai-memory/private/last_deep_dream`) "
+            f"and {pending} capture(s) are still pending review. "
+            "Run `ai-memory dream --mode deep --apply` or `ai-memory review`."
+        )
+    elif stale_days > 0 and age_days is not None and age_days > stale_days:
+        warnings.append(
+            f"Last deep dream was {age_days:.0f} days ago "
+            f"(threshold {stale_days}; MEMORY_FABRIC_STALE_DREAM_DAYS). "
+            "Run `ai-memory dream --mode deep --apply`."
+        )
+
+    if pending_threshold > 0 and pending >= pending_threshold:
+        warnings.append(
+            f"{pending} pending/needs-review captures exceed the threshold "
+            f"({pending_threshold}; MEMORY_FABRIC_PENDING_REVIEW_WARN). "
+            "Drain them with `ai-memory review --list` / `--promote`."
+        )
+
+
+def _check_contradictions(memory_dir: Path, warnings: list[str]) -> None:
+    """Surface store conflicts for review; never pick a winner."""
+    try:
+        from memory_fabric.storage.contradictions import detect_contradictions
+
+        hits = detect_contradictions(memory_dir)
+    except Exception:  # noqa: BLE001 - doctor must not fail on an advisory scan.
+        return
+    if not hits:
+        return
+    for hit in hits[:5]:
+        warnings.append(f"Contradiction detected ({hit.kind}): {hit.message}")
+    extra = len(hits) - 5
+    if extra > 0:
+        warnings.append(
+            f"…and {extra} more contradiction(s). Review them; Dreaming will not pick a winner."
+        )
+
+
+def _check_resolved_high_priority(memory_dir: Path, warnings: list[str]) -> None:
+    """Flag high-priority entries whose bodies declare themselves resolved."""
+    store_root = memory_dir / "memory-store"
+    if not store_root.exists():
+        return
+    flagged = 0
+    for path in _iter_markdown_files(store_root):
+        if _is_ignored_local_memory_path(memory_dir, path):
+            continue
+        try:
+            metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, FrontmatterError):
+            continue
+        if str(metadata.get("priority") or "") != "high":
+            continue
+        if _RESOLVED_RE.search(body) or _RESOLVED_RE.search(str(metadata.get("summary") or "")):
+            flagged += 1
+            if flagged <= 5:
+                warnings.append(
+                    f"{path.relative_to(memory_dir)} is priority=high but its body looks resolved; "
+                    "lower the priority so it stops competing with live facts."
+                )
+    if flagged > 5:
+        warnings.append(f"…and {flagged - 5} more high-priority entries look resolved.")
+
+
+def _check_stale_candidates(memory_dir: Path, warnings: list[str]) -> None:
+    try:
+        ttl_days = int(os.environ.get("MEMORY_FABRIC_CANDIDATE_TTL_DAYS", "14"))
+    except (ValueError, TypeError):
+        ttl_days = 14
+    if ttl_days <= 0:
+        return
+    candidates = memory_dir / "candidates"
+    if not candidates.is_dir():
+        return
+    import time
+
+    cutoff = time.time() - ttl_days * 86400
+    stale = 0
+    try:
+        for path in candidates.iterdir():
+            if path.is_dir() and path.stat().st_mtime < cutoff:
+                stale += 1
+    except OSError:
+        return
+    if stale:
+        warnings.append(
+            f"{stale} candidate store(s) older than {ttl_days} days "
+            "(MEMORY_FABRIC_CANDIDATE_TTL_DAYS). Run `ai-memory clean` to prune them."
+        )
+
+
+def _check_mangled_slugs(memory_dir: Path, warnings: list[str]) -> None:
+    from memory_fabric.storage.ranking import slugify
+
+    store_root = memory_dir / "memory-store"
+    if not store_root.exists():
+        return
+    mangled = 0
+    for path in _iter_markdown_files(store_root):
+        if _is_ignored_local_memory_path(memory_dir, path) or path.name == "index.md":
+            continue
+        try:
+            metadata, _body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, FrontmatterError):
+            continue
+        title = str(metadata.get("title") or "")
+        if not title:
+            continue
+        expected = slugify(title)
+        if expected and expected != path.stem and _looks_accent_mangled(title, path.stem, expected):
+            mangled += 1
+            if mangled <= 5:
+                warnings.append(
+                    f"Store slug `{path.stem}` looks accent-mangled "
+                    f"(expected `{expected}` from title). "
+                    "Run `ai-memory migrate --fix-slugs`."
+                )
+    if mangled > 5:
+        warnings.append(f"…and {mangled - 5} more accent-mangled slugs.")
+
+
+def _looks_accent_mangled(title: str, stem: str, expected: str) -> bool:
+    import unicodedata
+
+    if not any(unicodedata.combining(ch) or ord(ch) > 127 for ch in title):
+        # Also catch already-stripped titles vs leftover 1-letter holes: se-o
+        return bool(re.search(r"(^|-)[a-z](-|$)", stem)) and expected != stem
+    return expected != stem
 
 
 def _check_legacy_flat_sections(memory_dir: Path, warnings: list[str]) -> None:

@@ -137,8 +137,22 @@ def prune_dream_artifacts(
         except OSError:
             continue
         dirs.sort(key=lambda p: (p.stat().st_mtime, p.name), reverse=True)
-        for path in dirs[keep:]:
+        ttl_cutoff = None
+        if kind == "candidates":
+            try:
+                ttl_days = int(os.environ.get("MEMORY_FABRIC_CANDIDATE_TTL_DAYS", "14"))
+            except (ValueError, TypeError):
+                ttl_days = 14
+            if ttl_days > 0:
+                import time
+
+                ttl_cutoff = time.time() - ttl_days * 86400
+        for index, path in enumerate(dirs):
             if path.name in protected:
+                continue
+            over_count = index >= keep
+            over_age = ttl_cutoff is not None and path.stat().st_mtime < ttl_cutoff
+            if not over_count and not over_age:
                 continue
             if not dry_run:
                 shutil.rmtree(path, ignore_errors=True)

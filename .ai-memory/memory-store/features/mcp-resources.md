@@ -6,6 +6,7 @@ priority: high
 tags: [mcp, resources, auto-fetch, context]
 schema_version: 1.3
 last_updated: "2026-06-22T09:09:32-04:00"
+review_status: stale
 ---
 
 # MCP Resources: Automatic Context Delivery

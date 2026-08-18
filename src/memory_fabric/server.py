@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import os
 import urllib.parse
 from typing import Any
 
 from memory_fabric.contracts import (
     ContextBundle,
+    ReviewActionResult,
+    ReviewListResult,
     DreamEvalResult,
     DreamResult,
     EpisodicJournalResult,
@@ -40,6 +43,10 @@ from memory_fabric.storage import (
     write_memory_store,
     write_session_journal,
 )
+from memory_fabric.storage.retrieve import context_for_task
+from memory_fabric.storage.review import drop_review, list_pending_reviews, promote_review
+
+_context_resource_served: set[str] = set()
 
 try:
     from mcp.server.fastmcp import Context, FastMCP
@@ -118,6 +125,20 @@ if FastMCP is not None:
                         the result cache.
         """
         safe = _safe_cwd(cwd)
+        skip = os.environ.get("MEMORY_FABRIC_SKIP_STARTUP_DUMP")
+        should_skip = False
+        if query is None and skip not in {"0", "false", "no"}:
+            should_skip = skip in {"1", "true", "yes"} or safe in _context_resource_served
+        if should_skip:
+            previous = os.environ.get("MEMORY_FABRIC_SKIP_STARTUP_DUMP")
+            os.environ["MEMORY_FABRIC_SKIP_STARTUP_DUMP"] = "1"
+            try:
+                return read_combined_context(safe, max_tokens=max_tokens, query=query)
+            finally:
+                if previous is None:
+                    os.environ.pop("MEMORY_FABRIC_SKIP_STARTUP_DUMP", None)
+                else:
+                    os.environ["MEMORY_FABRIC_SKIP_STARTUP_DUMP"] = previous
         return read_combined_context(safe, max_tokens=max_tokens, query=query)
 
     @mcp.tool()
@@ -154,6 +175,45 @@ if FastMCP is not None:
         """
         safe = _safe_cwd(cwd)
         return keyword_search(safe, query=query, max_results=max_results)
+
+    @mcp.tool()
+    def context_for_task_tool(
+        cwd: str,
+        query: str,
+        files_open: str = "",
+        max_tokens: int | None = None,
+    ) -> ContextBundle:
+        """Return a task-scoped memory pack: steering + top-k ranked store entries.
+
+        Call this mid-session instead of re-dumping ``read_combined_context_tool``.
+        Pass the files currently open so related ``failures/`` entries are boosted.
+
+        Args:
+            cwd:        Absolute path to the project root.
+            query:      Natural-language task query (e.g. why MERGE-by-CPF).
+            files_open: Optional comma-separated open file paths.
+            max_tokens: Optional budget override.
+        """
+        safe = _safe_cwd(cwd)
+        files = [f.strip() for f in files_open.split(",") if f.strip()]
+        return context_for_task(safe, query=query, files_open=files or None, max_tokens=max_tokens)
+
+    @mcp.tool()
+    def list_pending_reviews_tool(cwd: str) -> ReviewListResult:
+        """List ``review_status: pending`` / ``needs-review`` captures waiting to be promoted."""
+        return list_pending_reviews(_safe_cwd(cwd))
+
+    @mcp.tool()
+    def promote_review_tool(
+        cwd: str, store_path: str, target_store_path: str
+    ) -> ReviewActionResult:
+        """Promote a pending capture into architecture/, decisions/, or failures/."""
+        return promote_review(_safe_cwd(cwd), store_path, target_store_path)
+
+    @mcp.tool()
+    def drop_review_tool(cwd: str, store_path: str) -> ReviewActionResult:
+        """Drop a pending capture from the review queue (marks it dropped)."""
+        return drop_review(_safe_cwd(cwd), store_path)
 
     @mcp.tool()
     def write_local_memory_tool(
@@ -558,6 +618,7 @@ if FastMCP is not None:
                 f"Run `ai-memory init` or call `initialize_memory_fabric_tool` to get started."
             )
         bundle = read_combined_context(safe)
+        _context_resource_served.add(safe)
         return bundle["text"]
 
     @mcp.resource(

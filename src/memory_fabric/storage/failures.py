@@ -20,7 +20,7 @@ import re
 from memory_fabric.contracts import WriteResult
 from memory_fabric.frontmatter import FrontmatterError, dump_frontmatter, parse_frontmatter
 from memory_fabric.paths import memory_store_dir
-from memory_fabric.storage._shared import _jaccard_similar
+from memory_fabric.storage.ranking import slugify, token_jaccard
 from memory_fabric.storage.store import read_memory_store, write_memory_store
 from memory_fabric.templates import now_iso
 
@@ -62,8 +62,41 @@ def _normalize_error(error_summary: str) -> str:
     return text[:300]
 
 
+_EXCEPTION_RE = re.compile(
+    r"\b((?:[A-Za-z_][\w]*\.)*[A-Za-z_][\w]*(?:Error|Exception|Warning|Fault))\b"
+)
+_ERROR_CODE_RE = re.compile(r"\b([A-Z]{2,}[-_]\d+|E[A-Z]+\d+)\b")
+_GENERIC_EXCEPTIONS = frozenset(
+    {
+        "error",
+        "exception",
+        "valueerror",
+        "typeerror",
+        "keyerror",
+        "attributeerror",
+        "runtimeerror",
+        "indexerror",
+        "assertionerror",
+        "oserror",
+    }
+)
+
+
+def _structured_failure_key(error_summary: str) -> str:
+    """Exception class + error code, independent of surrounding prose language."""
+    classes = _EXCEPTION_RE.findall(error_summary)
+    codes = _ERROR_CODE_RE.findall(error_summary)
+    parts: list[str] = []
+    if classes:
+        parts.append(classes[0].rsplit(".", 1)[-1].lower())
+    if codes:
+        parts.append(codes[0].lower())
+    return "|".join(parts)
+
+
 def _hint_for(normalized: str) -> str:
-    words = re.findall(r"[a-z0-9]+", normalized)
+    slug = slugify(normalized)
+    words = [w for w in slug.split("-") if w]
     return "-".join(words[:4]) or "error"
 
 
@@ -72,28 +105,31 @@ def _slug_for(normalized: str) -> str:
     return f"{_hint_for(normalized)}-{digest}"
 
 
-def _find_similar_failure(cwd: str, normalized: str) -> str | None:
+def _find_similar_failure(cwd: str, normalized: str, structured_key: str) -> str | None:
     """Return the slug of an existing failure entry this report should merge into.
 
-    Stage two of dedup: exact normalized-hash match failed, so scan entries in
-    the same hint bucket (same first words — typically the exception type and
-    message prefix) and compare stored ``error_signature`` values by Jaccard
-    word-set similarity.
+    Structured key (exception class / error code) is tried first across the
+    whole failures/ directory. Prose Jaccard is the fallback, no longer
+    gated on the first-four-words hint prefix.
     """
     failures_dir = memory_store_dir(cwd) / "failures"
     if not failures_dir.is_dir():
         return None
-    prefix = f"{_hint_for(normalized)}-"
     threshold = _failure_merge_threshold()
     for path in sorted(failures_dir.glob("*.md")):
-        if not path.name.startswith(prefix):
-            continue
         try:
             metadata, _body = parse_frontmatter(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, FrontmatterError):
             continue
+        stored_key = str(metadata.get("failure_key") or "")
+        if structured_key and stored_key and structured_key == stored_key:
+            # Generic exceptions (ValueError, TypeError) are too common to
+            # merge on class alone; require a code or a non-generic name.
+            specific = "|" in structured_key or structured_key not in _GENERIC_EXCEPTIONS
+            if specific:
+                return path.stem
         signature = str(metadata.get("error_signature") or "")
-        if signature and _jaccard_similar(normalized, signature, threshold=threshold):
+        if signature and token_jaccard(normalized, signature, min_tokens=3) >= threshold:
             return path.stem
     return None
 
@@ -116,6 +152,7 @@ def write_failure_memory(
     scattering into near-duplicate files.
     """
     normalized = _normalize_error(error_summary)
+    structured_key = _structured_failure_key(error_summary)
     slug = _slug_for(normalized)
     store_path = f"failures/{slug}"
 
@@ -129,7 +166,7 @@ def write_failure_memory(
         pass
 
     if not matched:
-        similar_slug = _find_similar_failure(cwd, normalized)
+        similar_slug = _find_similar_failure(cwd, normalized, structured_key)
         if similar_slug is not None:
             slug = similar_slug
             store_path = f"failures/{slug}"
@@ -166,6 +203,8 @@ def write_failure_memory(
         metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
         metadata["occurrences"] = occurrences
         metadata.setdefault("error_signature", normalized)
+        if structured_key:
+            metadata.setdefault("failure_key", structured_key)
         path.write_text(dump_frontmatter(metadata, body), encoding="utf-8")
 
     warnings = list(result.get("warnings", []))

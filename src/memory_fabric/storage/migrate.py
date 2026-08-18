@@ -44,8 +44,9 @@ _PREVIEW_CHARS = 240
 
 def _slugify(text: str) -> str:
     """Reduce heading text to a valid store-path segment ('' when nothing survives)."""
-    slug = re.sub(r"[^a-z0-9]+", "-", text.strip().lower()).strip("-")
-    return slug[:_MAX_SLUG_CHARS].rstrip("-")
+    from memory_fabric.storage.ranking import slugify
+
+    return slugify(text, max_chars=_MAX_SLUG_CHARS)
 
 
 def _split_by_headings(body: str) -> list[tuple[str, str]]:
@@ -424,4 +425,56 @@ async def migrate_memory(
         "plan": plan,
         "redactions": redactions,
         "warnings": warnings,
+    }
+
+
+def fix_mangled_slugs(cwd: str, dry_run: bool = False) -> dict[str, Any]:
+    """Rename store files whose slugs dropped accents (``se-o`` → ``secao``).
+
+    Opt-in repair for the pre-NFKD slugger. Does not silently overwrite an
+    existing destination; collisions are reported and skipped.
+    """
+    from memory_fabric.frontmatter import FrontmatterError, parse_frontmatter
+    from memory_fabric.paths import local_memory_dir, memory_store_dir
+    from memory_fabric.storage._shared import _is_ignored_local_memory_path, _iter_markdown_files
+
+    store_root = memory_store_dir(cwd)
+    memory_dir = local_memory_dir(cwd)
+    renamed: list[str] = []
+    skipped: list[str] = []
+    warnings: list[str] = []
+    if not store_root.exists():
+        return {
+            "changed": False,
+            "renamed": [],
+            "skipped": [],
+            "warnings": ["Memory store not found."],
+            "dry_run": dry_run,
+        }
+
+    for path in list(_iter_markdown_files(store_root)):
+        if _is_ignored_local_memory_path(memory_dir, path) or path.name == "index.md":
+            continue
+        try:
+            metadata, _body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, FrontmatterError) as exc:
+            warnings.append(f"{path}: {exc}")
+            continue
+        title = str(metadata.get("title") or path.stem)
+        expected = _slugify(title)
+        if not expected or expected == path.stem:
+            continue
+        dest = path.with_name(expected + ".md")
+        if dest.exists():
+            skipped.append(f"{path.stem} -> {expected} (destination exists)")
+            continue
+        if not dry_run:
+            path.rename(dest)
+        renamed.append(f"{path.stem} -> {expected}")
+    return {
+        "changed": bool(renamed) and not dry_run,
+        "renamed": renamed,
+        "skipped": skipped,
+        "warnings": warnings,
+        "dry_run": dry_run,
     }

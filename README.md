@@ -37,9 +37,8 @@ Memory is stored as human-readable Markdown with YAML frontmatter. No vector dat
 
 ## Status
 
-**v1.2.0 — conflict-free memory merges for teams: generated views and same-day journals
-no longer collide, and `ai-memory resolve-conflicts` clears a merge that already went
-wrong. [Live on PyPI](https://pypi.org/project/memory-fabric/).**
+**v1.3.0 — maps-first retrieval: honest token budget, Unicode BM25 ranking, Cursor
+hooks, and `context_for_task` / `ai-memory retrieve`. [Live on PyPI](https://pypi.org/project/memory-fabric/).**
 Core CLI and MCP tools work end-to-end. See [`ROADMAP.md`](ROADMAP.md) for what
 shipped, what's in progress, and what's next.
 
@@ -570,6 +569,7 @@ Commands:
   guard-journal   Exit non-zero if no session journal was written (for client Stop hooks)
   install         Configure an MCP client to use memory-fabric (--client <name|all>)
   eval            Score memory quality or Dreaming quality
+  bench           Coding-memory benchmark: memory-on vs memory-off retrieval
   dream           Run memory maintenance (--mode light|deep)
   migrate         Split legacy hand-written sections into store entries (--dry-run, --section, --no-llm)
   query           Search memory
@@ -591,6 +591,24 @@ ai-memory eval --dream memory-20260601T140000_0400
 ```
 
 Optional LLM review is never enabled by default. When requested, deterministic local scores remain the source of truth; LLM notes are secondary and inputs are sanitized before review.
+
+```sh
+ai-memory bench
+ai-memory bench --json
+ai-memory bench --fixture . --suite .ai-memory/evals/bench.yaml
+```
+
+`bench` scores whether later-session questions recover earlier decisions (memory-on vs an empty store). The built-in fixture and methodology live in [`benchmarks/coding-memory/`](benchmarks/coding-memory/README.md). No LLM is required.
+
+Built-in fixture (2026-08-15, `ai-memory bench`):
+
+| Task | Memory-on recall | Memory-off recall |
+|---|---:|---:|
+| TOT_LOCAL CAD vs system columns | 1.00 | 0.00 |
+| `test_*.py` naming | 1.00 | 0.00 |
+| No Django REST Framework | 1.00 | 0.00 |
+| `urnas_add_pos_calc` PRD 0008/0009 reversal | 1.00 | 0.00 |
+| **Mean / lift** | **1.00** | **0.00 (lift 1.00)** |
 
 ---
 

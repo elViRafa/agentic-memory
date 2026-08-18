@@ -6,6 +6,7 @@ priority: high
 tags: [architecture, design, overview, migrated]
 schema_version: 1.3
 last_updated: "2026-07-13T21:22:38-04:00"
+review_status: stale
 ---
 
 Specific architectural deep-dives, testing strategies, and sub-system indexes are stored in the granular memory store.

@@ -4,7 +4,7 @@
 > one command in VS Code, Claude (Code + Desktop), Codex, Antigravity, Cursor, Windsurf,
 > Gemini CLI, Cline, and anything MCP-compatible.
 
-Last updated: 2026-07-29 · Current version: 1.2.0 · Tests: 384 passing (+97 subtests, +1 skipped on Windows by design) · Lint: ruff (E4,E7,E9,F,I,B,UP,SIM,RUF,BLE001,S110,S112) + mypy clean · No `src/` file >25 KB except 4 tracked borderline files · Phase 0 exit criteria met · Phase 2.2 migration tooling shipped · Phase 2.3 store-first cutover shipped (flat fact-writes removed) · Phase 3 capture reliability (filter, roll-up, multi-client hooks) shipped · v1.1 project directives (sync/context routing, managed markers, `sync-agents --check`) shipped · v1.1.2 instruction-template graceful degradation shipped · v1.2.0 conflict-free team merges shipped (generated-view union merge, block-level store merge, `resolve-conflicts`)
+Last updated: 2026-08-15 · Current version: 1.3.0 · Tests: 384 passing (+97 subtests, +1 skipped on Windows by design) · Lint: ruff (E4,E7,E9,F,I,B,UP,SIM,RUF,BLE001,S110,S112) + mypy clean · No `src/` file >25 KB except 4 tracked borderline files · Phase 0 exit criteria met · Phase 2.2 migration tooling shipped · Phase 2.3 store-first cutover shipped (flat fact-writes removed) · Phase 3 capture reliability (filter, roll-up, multi-client hooks) shipped · v1.1 project directives (sync/context routing, managed markers, `sync-agents --check`) shipped · v1.1.2 instruction-template graceful degradation shipped · v1.2.0 conflict-free team merges shipped (generated-view union merge, block-level store merge, `resolve-conflicts`) · v1.3.0 maps-first retrieval + Cursor hooks + coding-memory bench shipped
 
 ---
 
@@ -729,8 +729,11 @@ Keep the zero-dependency, no-vector-DB default. Add optional layers that degrade
       A cheap knowledge graph with zero database — retrieval follows links one hop out.
 - [ ] **Memory lifecycle.** Provenance (`source_session`), access-count decay, confidence
       scores; Dreaming demotes stale/unused memories instead of letting them rot.
-- [ ] **Contradiction detection** during Dreaming (LLM-assisted when available, Jaccard
+- [x] **Contradiction detection** during Dreaming (LLM-assisted when available, Jaccard
       fallback), surfacing conflicts for human review rather than silently choosing.
+      Shipped 2026-08-15: numeric + polarity + named-reversal net in
+      `storage/contradictions.py`; `doctor` re-scans; deep dream can ask the same LLM
+      about remaining overlapping pairs. Still advisory — no silent winner.
 - [ ] **Latency budget.** Measured 2026-07-13 (§2.1 Q10, `test_robustness.py`):
       p95 is **~390 ms at 500 files, ~740 ms at 1000** — 2-5x over the 150 ms target
       here, and the gap is structural, not incidental: `read_combined_context`
@@ -750,14 +753,18 @@ Claims without numbers don't win "best in the world."
       then M) and LoCoMo through Memory Fabric's store/retrieve loop; publish scores and
       the exact reproduction script. These are conversational benchmarks — expect strong
       but not chart-topping numbers; honesty here buys credibility.
-- [ ] **Create the coding-memory benchmark.** There is no dominant benchmark for *project
+- [x] **Create the coding-memory benchmark.** There is no dominant benchmark for *project
       memory in coding agents*. Build one: N repos × M sessions of realistic tasks, where
       later tasks require decisions recorded in earlier sessions ("which auth approach did
       we pick and why?", "what's the deprecated API we must avoid?"). Score memory-on vs
       memory-off agents. Publish it as a standalone repo — owning the benchmark defines
-      the category.
-- [ ] **Ship `ai-memory bench`** so any user can run the suite against their own store.
-- [ ] Results table in README with reproduction commands.
+      the category. First fixture shipped 2026-08-15 in `benchmarks/coding-memory/`
+      (field recall targets: CAD vs system columns, `test_*.py`, no DRF, PRD reversal).
+      Multi-repo expansion remains open.
+- [x] **Ship `ai-memory bench`** so any user can run the suite against their own store.
+      `ai-memory bench --fixture . --suite .ai-memory/evals/bench.yaml`.
+- [x] Results table in README with reproduction commands. Built-in coding-memory
+      scores landed 2026-08-15. LongMemEval/LoCoMo numbers remain open.
 
 ## 9. Phase 6 — Ecosystem & growth
 

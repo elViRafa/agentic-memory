@@ -6,6 +6,7 @@ priority: low
 tags: [debt, risk, map, migrated]
 schema_version: 1.3
 last_updated: "2026-07-13T21:22:38-04:00"
+review_status: stale
 ---
 
 Detailed technical debt tickets and roadmaps are stored in the granular memory store. Please refer to the specific files below:

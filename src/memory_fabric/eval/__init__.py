@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from memory_fabric.eval.bench import render_bench_markdown, run_coding_memory_benchmark
 from memory_fabric.eval.dream_quality import evaluate_dream_quality, latest_snapshot
 from memory_fabric.eval.memory_quality import evaluate_memory_fabric, evaluate_memory_quality
 
@@ -10,4 +11,6 @@ __all__ = [
     "evaluate_memory_fabric",
     "evaluate_memory_quality",
     "latest_snapshot",
+    "render_bench_markdown",
+    "run_coding_memory_benchmark",
 ]

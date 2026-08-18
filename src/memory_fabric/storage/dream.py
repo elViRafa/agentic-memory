@@ -115,6 +115,19 @@ async def dream(
     tool_calls_text = _read_optional_text(tool_calls_path)
 
     llm_active = _is_llm_ready(context)
+    if (
+        mode == "deep"
+        and llm_active
+        and getattr(call_llm, "__module__", "") == "memory_fabric.llm"
+        and not _llm_looks_healthy()
+    ):
+        llm_active = False
+        warnings.append(
+            "No healthy LLM detected for deep dream; using heuristic consolidation "
+            "instead of hanging on a provider timeout. Use "
+            "prepare_dream_payload_tool + apply_dream_results_tool for client-side "
+            "LLM consolidation (split-tool protocol)."
+        )
 
     fallback_duplicates = 0
     fallback_lines_removed = 0
@@ -202,6 +215,23 @@ async def dream(
         resp_data = {"consolidated_files": {}}
         is_fallback = True
 
+    # R7-3: merge deterministic hits, then optionally ask the same LLM the
+    # dream path already used about remaining overlapping pairs. Advisory only.
+    from memory_fabric.storage.contradictions import (
+        detect_contradiction_messages,
+        enrich_contradictions_with_llm,
+    )
+
+    merged_contradictions = list(resp_data.get("contradictions") or [])
+    for message in detect_contradiction_messages(candidate_root):
+        if message not in merged_contradictions:
+            merged_contradictions.append(message)
+    if mode == "deep" and llm_active:
+        merged_contradictions = await enrich_contradictions_with_llm(
+            candidate_root, merged_contradictions, call_llm, context
+        )
+    resp_data["contradictions"] = merged_contradictions
+
     res = await _process_and_finalize_candidate(
         cwd=cwd,
         candidate_root=candidate_root,
@@ -223,7 +253,40 @@ async def dream(
     )
     if warnings:
         res["warnings"] = warnings + res["warnings"]
+    if apply and mode == "deep":
+        _stamp_last_deep_dream(memory_dir)
     return res
+
+
+def _stamp_last_deep_dream(memory_dir: Path) -> None:
+    stamp = memory_dir / "private" / "last_deep_dream"
+    try:
+        stamp.parent.mkdir(parents=True, exist_ok=True)
+        from memory_fabric.templates import now_iso
+
+        stamp.write_text(now_iso(), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _llm_looks_healthy() -> bool:
+    """Cheap preflight so deep dream does not hang 180s on a dead local server."""
+    import os
+    import urllib.request
+
+    provider = (os.environ.get("MEMORY_FABRIC_LLM_PROVIDER") or "").strip().lower()
+    if provider == "ollama":
+        host = (os.environ.get("OLLAMA_HOST") or "http://localhost:11434").rstrip("/")
+        try:
+            urllib.request.urlopen(f"{host}/api/tags", timeout=2.0).close()
+            return True
+        except OSError:
+            return False
+    if provider in {"openai", "anthropic", "gemini"}:
+        return True
+    if provider:
+        return False
+    return False
 
 
 def prepare_dream_payload(cwd: str, mode: str = "light") -> dict[str, Any]:

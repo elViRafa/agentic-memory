@@ -6,6 +6,7 @@ priority: high
 tags: [schemas, contracts, map, migrated]
 schema_version: 1.3
 last_updated: "2026-07-13T21:22:38-04:00"
+review_status: stale
 ---
 
 # Data Schemas & Contracts Map

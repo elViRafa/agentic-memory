@@ -4,6 +4,7 @@ retrieval readiness, metadata quality, and safety/privacy.
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 from typing import Any
 
@@ -77,6 +78,7 @@ async def evaluate_memory_fabric(
         evaluate_memory_quality(cwd, root=memory_dir),
         _evaluate_section_coverage(memory_dir, sections),
         _evaluate_retrieval_readiness(cwd),
+        _evaluate_retrieval_quality(cwd),
         _evaluate_metadata_quality(cwd, sections),
         _evaluate_safety_privacy(memory_dir, sections),
     ]
@@ -431,9 +433,9 @@ def _evaluate_retrieval_readiness(cwd: str) -> EvalCategory:
 
     try:
         small_context = read_combined_context(cwd, max_tokens=80)
-        if (
-            small_context["omitted_sections"]
-            and "omitted because it exceeded" in small_context["text"]
+        if small_context["omitted_sections"] and (
+            "omitted because it exceeded" in small_context["text"]
+            or "more sections omitted" in small_context["text"]
         ):
             checks.append(
                 _check(
@@ -466,6 +468,170 @@ def _evaluate_retrieval_readiness(cwd: str) -> EvalCategory:
         )
 
     return _category("retrieval_readiness", MEMORY_WEIGHTS["retrieval_readiness"], checks)
+
+
+def _evaluate_retrieval_quality(cwd: str) -> EvalCategory:
+    """Score precision@k / recall@k / budget-fit from a local retrieval fixture.
+
+    Driven by ``.ai-memory/evals/retrieval.yaml`` (or ``.json``). No LLM.
+    Missing fixtures are a skip/pass so repos without a harness stay green.
+    """
+    from memory_fabric.paths import local_memory_dir
+    from memory_fabric.storage.search import keyword_search
+
+    memory_dir = local_memory_dir(cwd)
+    yaml_path = memory_dir / "evals" / "retrieval.yaml"
+    json_path = memory_dir / "evals" / "retrieval.json"
+    cases = _load_retrieval_cases(yaml_path if yaml_path.exists() else json_path)
+    if not cases:
+        return _category(
+            "retrieval_quality",
+            MEMORY_WEIGHTS["retrieval_quality"],
+            [
+                _check(
+                    "retrieval_fixtures_absent",
+                    "pass",
+                    "info",
+                    "No .ai-memory/evals/retrieval.yaml — retrieval quality not scored.",
+                    "Add {query, expected_store_paths} cases so ranking regressions fail CI.",
+                )
+            ],
+        )
+
+    checks: list[EvalCheck] = []
+    try:
+        bundle = read_combined_context(cwd)
+        if bundle["estimated_tokens"] <= bundle["token_budget"]:
+            checks.append(
+                _check(
+                    "retrieval_budget_fit",
+                    "pass",
+                    "info",
+                    "Combined context fits its stated token budget.",
+                    "Keep maps-first packing so the budget stays honest.",
+                )
+            )
+        else:
+            checks.append(
+                _check(
+                    "retrieval_budget_fit",
+                    "fail",
+                    "high",
+                    f"Combined context used {bundle['estimated_tokens']} tokens "
+                    f"against a {bundle['token_budget']} budget.",
+                    "Fix the packer so estimated_tokens never exceeds token_budget.",
+                )
+            )
+    except Exception as exc:  # noqa: BLE001
+        checks.append(
+            _check(
+                "retrieval_budget_failed",
+                "fail",
+                "high",
+                f"Budget-fit check failed: {exc}",
+                "Run ai-memory doctor.",
+            )
+        )
+
+    for index, case in enumerate(cases):
+        query = str(case.get("query") or "")
+        expected = [str(p).strip("/") for p in (case.get("expected_store_paths") or [])]
+        k = int(case.get("k") or 5)
+        if not query or not expected:
+            continue
+        results = keyword_search(cwd, query, max_results=k)
+        hit_paths = []
+        for result in results:
+            section = result.get("section") or ""
+            if section.startswith("store:"):
+                hit_paths.append(section[len("store:") :])
+        hits = [p for p in expected if p in hit_paths]
+        recall = len(hits) / len(expected)
+        precision = (len(hits) / len(hit_paths)) if hit_paths else 0.0
+        ok = recall >= 1.0
+        checks.append(
+            _check(
+                f"retrieval_case_{index}",
+                "pass" if ok else "fail",
+                "high" if not ok else "info",
+                f"query={query!r} recall@{k}={recall:.2f} precision@{k}={precision:.2f} "
+                f"expected={expected} got={hit_paths}",
+                "Fix ranking so the expected store path is in the top-k.",
+            )
+        )
+    if not checks:
+        checks.append(
+            _check(
+                "retrieval_cases_empty",
+                "warn",
+                "low",
+                "Retrieval fixture file existed but contained no usable cases.",
+                "Each case needs a query and expected_store_paths.",
+            )
+        )
+    return _category("retrieval_quality", MEMORY_WEIGHTS["retrieval_quality"], checks)
+
+
+def _load_retrieval_cases(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return []
+    if path.suffix == ".json":
+        import json
+
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+        if isinstance(data, list):
+            return [c for c in data if isinstance(c, dict)]
+        if isinstance(data, dict) and isinstance(data.get("cases"), list):
+            return [c for c in data["cases"] if isinstance(c, dict)]
+        return []
+    return _parse_simple_retrieval_yaml(raw)
+
+
+def _parse_simple_retrieval_yaml(text: str) -> list[dict[str, Any]]:
+    """Minimal parser for the retrieval fixture shape. No PyYAML dependency."""
+    cases: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    in_paths = False
+    for raw_line in text.splitlines():
+        line = raw_line.rstrip()
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("- query:") or stripped.startswith("-query:"):
+            if current:
+                cases.append(current)
+            current = {
+                "query": stripped.split(":", 1)[1].strip().strip("\"'"),
+                "expected_store_paths": [],
+                "k": 5,
+            }
+            in_paths = False
+            continue
+        if current is None:
+            continue
+        if stripped.startswith("query:"):
+            current["query"] = stripped.split(":", 1)[1].strip().strip("\"'")
+            in_paths = False
+        elif stripped.startswith("k:"):
+            with contextlib.suppress(ValueError):
+                current["k"] = int(stripped.split(":", 1)[1].strip())
+            in_paths = False
+        elif stripped.startswith("expected_store_paths:"):
+            in_paths = True
+        elif in_paths and stripped.startswith("- "):
+            current.setdefault("expected_store_paths", []).append(stripped[2:].strip().strip("\"'"))
+        else:
+            in_paths = False
+    if current:
+        cases.append(current)
+    return cases
 
 
 def _evaluate_metadata_quality(

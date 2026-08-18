@@ -71,6 +71,9 @@ from memory_fabric.storage.context import (
 from memory_fabric.storage.context import (
     read_combined_context as read_combined_context,
 )
+from memory_fabric.storage.contradictions import (
+    detect_contradictions as detect_contradictions,
+)
 from memory_fabric.storage.dream import (
     apply_dream_results as apply_dream_results,
 )
@@ -104,6 +107,10 @@ from memory_fabric.storage.migrate import (
     migrate_memory as migrate_memory,
 )
 from memory_fabric.storage.patch import propose_memory_patch as propose_memory_patch
+from memory_fabric.storage.retrieve import context_for_task as context_for_task
+from memory_fabric.storage.review import drop_review as drop_review
+from memory_fabric.storage.review import list_pending_reviews as list_pending_reviews
+from memory_fabric.storage.review import promote_review as promote_review
 from memory_fabric.storage.search import keyword_search as keyword_search
 from memory_fabric.storage.sections import (
     flat_write_rejection as flat_write_rejection,

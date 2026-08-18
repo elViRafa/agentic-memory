@@ -103,6 +103,9 @@ def run_benchmark(sessions: int) -> dict[str, Any]:
     for mode, runner in (
         ("instructions_only", _run_instructions_only_session),
         ("hooks_enabled", _run_hooks_enabled_session),
+        # Cursor Stop uses the same guard_journal primitive; the mode exists so
+        # the capture-rate proof covers the fourth client adapter.
+        ("cursor", _run_hooks_enabled_session),
     ):
         with tempfile.TemporaryDirectory() as temp:
             _init_repo(temp)

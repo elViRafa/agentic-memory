@@ -9,18 +9,18 @@ varying), each client's hook mechanism has its own event model — Claude
 Code's SessionStart/Stop/PreCompact schema (matcher-based blocks) turned out
 structurally identical to Codex's (verified from Codex's own Rust source),
 close to but not identical with Gemini CLI's (flat hook-definition lists, no
-matcher on lifecycle events), and further clients diverge more still (Cursor,
-Windsurf, Cline). So this is not a shared engine with format branches:
-`HOOK_ADAPTERS` registers one real, implemented adapter per client — sharing
-the matcher-block merge/remove helpers where the shape genuinely matches
-(claude-code, codex), independent logic where it doesn't (gemini-cli). A
-client absent from this registry has no hook support yet; `install_hooks()`
-reports that plainly instead of silently no-op'ing — see ROADMAP.md Phase 3
-§5.2's "Client capability survey" for what's still open (verified 2026-07-16:
-Cursor's SessionStart-equivalent context injection has an open upstream bug;
-VS Code Copilot Hooks looks implementable but is labeled Preview and wasn't
-verified against primary docs; Windsurf and Cline lack a compaction-signal
-hook and, for Windsurf, any session-lifecycle hook at all).
+matcher on lifecycle events), and Cursor's ``.cursor/hooks.json`` (schema
+``version: 1``, camelCase events, command hooks over stdio JSON). So this is
+not a shared engine with format branches: `HOOK_ADAPTERS` registers one real
+adapter per client. A client absent from this registry has no hook support
+yet; `install_hooks()` reports that plainly.
+
+Verified 2026-08-15 against https://cursor.com/docs/hooks: Cursor now ships
+stable ``sessionStart``, ``sessionEnd``, ``stop`` (with ``loop_limit``),
+``preCompact``, ``preToolUse``, ``beforeReadFile``, ``afterFileEdit``, and
+``beforeMCPExecution``. The 2026-07-16 hold (SessionStart ``additional_context``
+bug) is lifted. VS Code Copilot Hooks is the next candidate (Preview).
+Windsurf and Cline still lack a session-lifecycle + compaction pair.
 """
 
 from __future__ import annotations
@@ -583,3 +583,126 @@ def _install_codex_hooks(
 
 
 HOOK_ADAPTERS["codex"] = HookAdapter(name="codex", installer=_install_codex_hooks)
+
+
+# --- cursor: sessionStart / stop / preCompact / preToolUse / beforeReadFile --
+# Verified 2026-08-15 against https://cursor.com/docs/hooks (schema version 1).
+# Project file: <root>/.cursor/hooks.json. Events are camelCase. Command hooks
+# receive JSON on stdin and return JSON on stdout. Exit 2 blocks; other non-zero
+# exits fail open. `stop` accepts `loop_limit` so a stubborn agent cannot be
+# trapped in a journal retry loop. `preToolUse` + `beforeReadFile` deny raw
+# file-tool access to `.ai-memory/` (except steering) and redirect to MCP.
+
+_CURSOR_MANAGED_EVENTS = (
+    "sessionStart",
+    "stop",
+    "preCompact",
+    "preToolUse",
+    "beforeReadFile",
+)
+
+
+def _build_cursor_managed_hooks(cli_bin: str, cwd_abs: str) -> dict[str, list[dict[str, Any]]]:
+    quoted_bin = f'"{cli_bin}"'
+    session_start_cmd = (
+        f'{quoted_bin} --cwd "{cwd_abs}" session-start --hook-format cursor {_MANAGED_MARKER}'
+    )
+    stop_cmd = f'{quoted_bin} --cwd "{cwd_abs}" guard-journal {_MANAGED_MARKER}'
+    precompact_cmd = (
+        f'{quoted_bin} --cwd "{cwd_abs}" dream --mode light --apply || true {_MANAGED_MARKER}'
+    )
+    guard_cmd = f'{quoted_bin} --cwd "{cwd_abs}" hook-guard {_MANAGED_MARKER}'
+    return {
+        "sessionStart": [{"command": session_start_cmd}],
+        "stop": [{"command": stop_cmd, "loop_limit": 5}],
+        "preCompact": [{"command": precompact_cmd}],
+        "preToolUse": [{"command": guard_cmd, "matcher": "Write|StrReplace|Delete|Edit"}],
+        "beforeReadFile": [{"command": guard_cmd}],
+    }
+
+
+def _merge_cursor_hooks(
+    config: dict[str, Any], managed: dict[str, list[dict[str, Any]]]
+) -> tuple[dict[str, Any], list[str]]:
+    warnings: list[str] = []
+    new_config = dict(config)
+    new_config["version"] = 1
+    hooks_root = dict(new_config.get("hooks") or {})
+    for event, entries in managed.items():
+        raw_existing = hooks_root.get(event, [])
+        if not isinstance(raw_existing, list):
+            warnings.append(f"{event} in existing .cursor/hooks.json was not a list; replacing.")
+            raw_existing = []
+        kept = [
+            h
+            for h in raw_existing
+            if not (isinstance(h, dict) and _is_managed_command(h.get("command")))
+        ]
+        kept.extend(entries)
+        hooks_root[event] = kept
+    new_config["hooks"] = hooks_root
+    return new_config, warnings
+
+
+def _remove_cursor_hooks(config: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    if "hooks" not in config or not isinstance(config["hooks"], dict):
+        return config, False
+    new_config = dict(config)
+    hooks_root = dict(new_config["hooks"])
+    removed_any = False
+    for event in _CURSOR_MANAGED_EVENTS:
+        raw = hooks_root.get(event)
+        if not isinstance(raw, list):
+            continue
+        kept = []
+        for h in raw:
+            if isinstance(h, dict) and _is_managed_command(h.get("command")):
+                removed_any = True
+                continue
+            kept.append(h)
+        if kept:
+            hooks_root[event] = kept
+        else:
+            hooks_root.pop(event, None)
+    if hooks_root:
+        new_config["hooks"] = hooks_root
+    else:
+        new_config.pop("hooks", None)
+    return new_config, removed_any
+
+
+def _install_cursor_hooks(
+    cwd: Path, *, dry_run: bool = False, uninstall: bool = False
+) -> HookInstallResult:
+    path = cwd / ".cursor" / "hooks.json"
+    cli_bin, bin_warning = resolve_cli_binary()
+    warnings: list[str] = [bin_warning] if bin_warning else []
+
+    config, old_text, failure = _read_config_or_backup(path, "cursor", dry_run=dry_run)
+    if failure is not None:
+        failure["warnings"] = [*failure["warnings"], *warnings]
+        return failure
+    assert config is not None
+
+    if uninstall:
+        new_config, removed = _remove_cursor_hooks(config)
+        if removed:
+            new_text = json.dumps(new_config, indent=2, ensure_ascii=False) + "\n"
+            changed = True
+        else:
+            warnings.append(f"No memory-fabric hooks found in {path}; nothing to remove.")
+            new_text = old_text
+            changed = False
+    else:
+        managed = _build_cursor_managed_hooks(cli_bin, str(cwd))
+        new_config, merge_warnings = _merge_cursor_hooks(config, managed)
+        warnings.extend(merge_warnings)
+        new_text = json.dumps(new_config, indent=2, ensure_ascii=False) + "\n"
+        changed = new_text != old_text
+
+    return _finalize_hook_write(
+        "cursor", path, old_text, new_text, changed, dry_run=dry_run, warnings=warnings
+    )
+
+
+HOOK_ADAPTERS["cursor"] = HookAdapter(name="cursor", installer=_install_cursor_hooks)

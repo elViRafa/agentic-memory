@@ -6,6 +6,7 @@ priority: high
 tags: [decisions, adr, map, migrated]
 schema_version: 1.3
 last_updated: "2026-07-13T21:22:38-04:00"
+review_status: stale
 ---
 
 1. **Zero-Dependency Core:** We favor standard library implementations (e.g., `urllib.request` over `requests`) to keep the MCP Server and CLI lightweight and easy to distribute.

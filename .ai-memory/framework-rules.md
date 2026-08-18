@@ -5,6 +5,7 @@ priority: medium
 tags: [framework, rules, python, pytest, cli, commands, map]
 schema_version: 1.3
 last_updated: "2026-06-18T10:06:00-04:00"
+review_status: stale
 ---
 
 # Framework Rules Map
