@@ -8,8 +8,6 @@ from typing import Any
 
 from memory_fabric.contracts import (
     ContextBundle,
-    ReviewActionResult,
-    ReviewListResult,
     DreamEvalResult,
     DreamResult,
     EpisodicJournalResult,
@@ -17,6 +15,8 @@ from memory_fabric.contracts import (
     InitResult,
     MemorySection,
     PatchPreview,
+    ReviewActionResult,
+    ReviewListResult,
     SearchResult,
     StoreListResult,
     StoreReadResult,

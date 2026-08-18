@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.1] — 2026-08-18
+
+### Fixed
+
+- **CI lint badge.** `ruff check` failed on unsorted imports in `server.py`
+  after the review-tool TypedDicts were added. All 12 test-matrix jobs and
+  `ai-memory verify` already passed; this is the import-order fix so the
+  README/PyPI CI badge goes green.
+
 ## [1.3.0] — 2026-08-15
 
 Behavior change: no-query `read_combined_context` is now **maps-first** (steering
@@ -635,7 +644,8 @@ with those fixed the final score is **96/100 with zero failing checks**
   {ubuntu, windows, macos} × {3.11–3.14}; `storage/_core.py` god module split
   into 12 focused modules.
 
-[Unreleased]: https://github.com/elViRafa/agentic-memory/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/elViRafa/agentic-memory/compare/v1.3.1...HEAD
+[1.3.1]: https://github.com/elViRafa/agentic-memory/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/elViRafa/agentic-memory/compare/v1.2.0...v1.3.0
 [0.8.1]: https://github.com/elViRafa/agentic-memory/compare/v0.7.3...v0.8.1
 [0.7.3]: https://github.com/elViRafa/agentic-memory/compare/v0.7.2...v0.7.3
