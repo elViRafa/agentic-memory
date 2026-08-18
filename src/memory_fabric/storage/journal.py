@@ -83,6 +83,9 @@ def write_session_journal(
     # Record the journal for the Stop-hook guard, so end-of-session enforcement
     # can tell this session was journaled.
     mark_journal_written(cwd)
+    from memory_fabric.diary.instrument import record_session_end
+
+    record_session_end(cwd, journaled=True)
 
     return {
         "changed": result["changed"],

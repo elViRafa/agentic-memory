@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-08-18
+
+### Added
+
+- **Local field diary (opt-in, no upload).** `ai-memory diary approve` is a
+  human-only consent step that records operational counts on this machine.
+  Default remains off. `diary revoke`, `mute` / `unmute`, `status`,
+  `checkpoint`, and `wipe` manage it. `MEMORY_FABRIC_DIARY=0` is a kill
+  switch; `=1` does not approve. Nothing is sent to the internet.
+- **Field-diary recording (slice 2).** When approved, `read_combined_context`
+  and `context_for_task` persist `PackStats` (role histograms, token buckets,
+  `budget_fit`) as local JSONL. Search, session start/end, MCP tool calls, and
+  `ai-memory diary checkpoint` write the same diary. Default `counts` level
+  never stores query text or store slugs.
+
 ## [1.3.1] — 2026-08-18
 
 ### Fixed
@@ -644,7 +659,8 @@ with those fixed the final score is **96/100 with zero failing checks**
   {ubuntu, windows, macos} × {3.11–3.14}; `storage/_core.py` god module split
   into 12 focused modules.
 
-[Unreleased]: https://github.com/elViRafa/agentic-memory/compare/v1.3.1...HEAD
+[Unreleased]: https://github.com/elViRafa/agentic-memory/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/elViRafa/agentic-memory/compare/v1.3.1...v1.4.0
 [1.3.1]: https://github.com/elViRafa/agentic-memory/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/elViRafa/agentic-memory/compare/v1.2.0...v1.3.0
 [0.8.1]: https://github.com/elViRafa/agentic-memory/compare/v0.7.3...v0.8.1

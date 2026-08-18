@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 from memory_fabric.contracts import SearchResult
@@ -56,6 +57,7 @@ def keyword_search(cwd: str, query: str, max_results: int = 10) -> list[SearchRe
     if not query.strip() or max_results <= 0:
         return []
 
+    started = time.perf_counter()
     roots = [path for path in [local_memory_dir(cwd), global_memory_dir()] if path.exists()]
     if not roots:
         return []
@@ -74,6 +76,9 @@ def keyword_search(cwd: str, query: str, max_results: int = 10) -> list[SearchRe
     ranked = _rank_search_results(query, raw, max_results)
     for result in ranked:
         result["backend"] = backend
+    from memory_fabric.diary.instrument import record_search_run
+
+    record_search_run(cwd, ranked, query=query, ms=(time.perf_counter() - started) * 1000)
     return ranked
 
 

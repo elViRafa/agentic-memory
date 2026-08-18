@@ -23,6 +23,7 @@ from memory_fabric.contracts import (
     StoreWriteResult,
     WriteResult,
 )
+from memory_fabric.diary.instrument import wrap_mcp_tool
 from memory_fabric.eval import evaluate_dream_quality, evaluate_memory_fabric
 from memory_fabric.paths import local_memory_dir, validate_cwd
 from memory_fabric.storage import (
@@ -75,6 +76,7 @@ if FastMCP is not None:
         return str(safe)
 
     @mcp.tool()
+    @wrap_mcp_tool("initialize_memory_fabric_tool")
     def initialize_memory_fabric_tool(cwd: str, memory_prompt: str | None = None) -> InitResult:
         """Bootstrap Memory Fabric in the project at *cwd*.
 
@@ -105,6 +107,7 @@ if FastMCP is not None:
         return result
 
     @mcp.tool()
+    @wrap_mcp_tool("read_combined_context_tool")
     def read_combined_context_tool(
         cwd: str, max_tokens: int | None = None, query: str | None = None
     ) -> ContextBundle:
@@ -142,6 +145,7 @@ if FastMCP is not None:
         return read_combined_context(safe, max_tokens=max_tokens, query=query)
 
     @mcp.tool()
+    @wrap_mcp_tool("read_section_tool")
     def read_section_tool(cwd: str, section: str, max_tokens: int = 8000) -> MemorySection:
         """Read a single flat memory section file by name.
 
@@ -160,6 +164,7 @@ if FastMCP is not None:
         return read_section(safe, section=section, max_tokens=max_tokens)
 
     @mcp.tool()
+    @wrap_mcp_tool("keyword_search_tool")
     def keyword_search_tool(cwd: str, query: str, max_results: int = 10) -> list[SearchResult]:
         """Search all memory files by keyword and return ranked results.
 
@@ -177,6 +182,7 @@ if FastMCP is not None:
         return keyword_search(safe, query=query, max_results=max_results)
 
     @mcp.tool()
+    @wrap_mcp_tool("context_for_task_tool")
     def context_for_task_tool(
         cwd: str,
         query: str,
@@ -199,11 +205,13 @@ if FastMCP is not None:
         return context_for_task(safe, query=query, files_open=files or None, max_tokens=max_tokens)
 
     @mcp.tool()
+    @wrap_mcp_tool("list_pending_reviews_tool")
     def list_pending_reviews_tool(cwd: str) -> ReviewListResult:
         """List ``review_status: pending`` / ``needs-review`` captures waiting to be promoted."""
         return list_pending_reviews(_safe_cwd(cwd))
 
     @mcp.tool()
+    @wrap_mcp_tool("promote_review_tool")
     def promote_review_tool(
         cwd: str, store_path: str, target_store_path: str
     ) -> ReviewActionResult:
@@ -211,11 +219,13 @@ if FastMCP is not None:
         return promote_review(_safe_cwd(cwd), store_path, target_store_path)
 
     @mcp.tool()
+    @wrap_mcp_tool("drop_review_tool")
     def drop_review_tool(cwd: str, store_path: str) -> ReviewActionResult:
         """Drop a pending capture from the review queue (marks it dropped)."""
         return drop_review(_safe_cwd(cwd), store_path)
 
     @mcp.tool()
+    @wrap_mcp_tool("write_local_memory_tool")
     def write_local_memory_tool(
         cwd: str, section: str, content: str, mode: str = "append"
     ) -> WriteResult:
@@ -247,6 +257,7 @@ if FastMCP is not None:
         return write_local_memory(safe, section=section, content=content, mode=mode)  # type: ignore[arg-type]
 
     @mcp.tool()
+    @wrap_mcp_tool("propose_memory_patch_tool")
     def propose_memory_patch_tool(cwd: str, instructions: str) -> PatchPreview:
         """Preview a proposed memory update as a unified diff without writing to disk.
 
@@ -269,6 +280,7 @@ if FastMCP is not None:
         return propose_memory_patch(safe, instructions=instructions)
 
     @mcp.tool()
+    @wrap_mcp_tool("dream_tool")
     async def dream_tool(
         cwd: str,
         mode: str = "light",
@@ -336,12 +348,14 @@ if FastMCP is not None:
         return result
 
     @mcp.tool()
+    @wrap_mcp_tool("prepare_dream_payload_tool")
     def prepare_dream_payload_tool(cwd: str, mode: str = "light") -> dict[str, Any]:
         """Prepare prompt and payload for client-agent to perform consolidation."""
         safe = _safe_cwd(cwd)
         return prepare_dream_payload(safe, mode=mode)
 
     @mcp.tool()
+    @wrap_mcp_tool("apply_dream_results_tool")
     async def apply_dream_results_tool(
         cwd: str,
         candidate_store: str,
@@ -397,6 +411,7 @@ if FastMCP is not None:
         return result
 
     @mcp.tool()
+    @wrap_mcp_tool("evaluate_memory_fabric_tool")
     async def evaluate_memory_fabric_tool(
         cwd: str,
         save_report: bool = False,
@@ -423,6 +438,7 @@ if FastMCP is not None:
         )
 
     @mcp.tool()
+    @wrap_mcp_tool("evaluate_dream_quality_tool")
     async def evaluate_dream_quality_tool(
         cwd: str,
         snapshot: str,
@@ -451,6 +467,7 @@ if FastMCP is not None:
         )
 
     @mcp.tool()
+    @wrap_mcp_tool("write_memory_store_tool")
     def write_memory_store_tool(
         cwd: str,
         store_path: str,
@@ -489,6 +506,7 @@ if FastMCP is not None:
         )
 
     @mcp.tool()
+    @wrap_mcp_tool("read_memory_store_tool")
     def read_memory_store_tool(
         cwd: str,
         store_path: str,
@@ -499,6 +517,7 @@ if FastMCP is not None:
         return read_memory_store(safe, store_path=store_path, max_tokens=max_tokens)
 
     @mcp.tool()
+    @wrap_mcp_tool("list_memory_store_tool")
     def list_memory_store_tool(
         cwd: str,
         prefix: str = "",
@@ -511,6 +530,7 @@ if FastMCP is not None:
         return list_memory_store(safe, prefix=prefix, tags=tag_list, max_results=max_results)
 
     @mcp.tool()
+    @wrap_mcp_tool("delete_memory_store_tool")
     def delete_memory_store_tool(
         cwd: str,
         store_path: str,
@@ -520,6 +540,7 @@ if FastMCP is not None:
         return delete_memory_store(safe, store_path=store_path)
 
     @mcp.tool()
+    @wrap_mcp_tool("write_session_journal_tool")
     def write_session_journal_tool(
         cwd: str,
         summary: str,
@@ -550,6 +571,7 @@ if FastMCP is not None:
         )
 
     @mcp.tool()
+    @wrap_mcp_tool("write_failure_memory_tool")
     def write_failure_memory_tool(
         cwd: str,
         error_summary: str,

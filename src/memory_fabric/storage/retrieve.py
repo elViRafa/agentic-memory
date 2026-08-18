@@ -92,7 +92,7 @@ def context_for_task(
         text = "\n\n".join(fragments).strip() + "\n"
         estimated = estimate_tokens(text)
 
-    return {
+    bundle: ContextBundle = {
         "text": text,
         "included_sections": included,
         "omitted_sections": omitted,
@@ -100,6 +100,21 @@ def context_for_task(
         "estimated_tokens": estimated,
         "warnings": warnings,
     }
+    from memory_fabric.storage.context import _with_pack_stats
+
+    priority_by_key = {
+        str(item["key"]): str((item.get("metadata") or {}).get("priority") or "medium")
+        for item in candidates
+    }
+    return _with_pack_stats(
+        cwd,
+        bundle,
+        startup_mode="full",
+        index_used=False,
+        query=query,
+        fragments=fragments,
+        priority_by_key=priority_by_key,
+    )
 
 
 def _collect_task_candidates(

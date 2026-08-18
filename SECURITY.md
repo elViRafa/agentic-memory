@@ -22,7 +22,9 @@ Memory Fabric is designed to minimize the blast radius by construction:
 
 - **Local-first, no telemetry.** No account, no cloud, no analytics. The core
   read/write paths make no network calls; optional network checks (PyPI drift,
-  LLM-provider preflight) honor an offline mode.
+  LLM-provider preflight) honor an offline mode. An optional field diary
+  (`ai-memory diary approve`) records counts on the user's machine only and
+  stays off until a human approves it — it is not phone-home.
 - **Secret redaction on write.** API keys and credential-shaped strings are
   redacted before any memory is written to disk. If a file fails the redaction
   pass, that failure is surfaced, not swallowed.
