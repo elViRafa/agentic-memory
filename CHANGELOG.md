@@ -23,6 +23,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ai-memory diary checkpoint` write the same diary. Default `counts` level
   never stores query text or store slugs.
 
+### Fixed
+
+- **Field-diary consent tests on macOS/Windows.** Assertions compared the
+  unresolved tempfile path to `get_global_root()` (which `resolve()`s
+  `MEMORY_FABRIC_HOME`), so they failed on `/var` → `/private/var` and on
+  Windows 8.3 `RUNNER~1` vs `runneradmin`.
+- **Compact omission notice dropped under tight budgets.** The packer reserved
+  the raw notice string, then the over-budget trim popped the formatted
+  `omission-notice` fragment first. `omitted_sections` was set with no
+  "more sections omitted" line — a Windows-only flake that blocked the v1.3.1
+  Release publish. The notice is now reserved at its formatted size and kept;
+  competing maps are dropped instead.
+
 ## [1.3.1] — 2026-08-18
 
 ### Fixed

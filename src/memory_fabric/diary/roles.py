@@ -58,9 +58,9 @@ def classify_role(key: str) -> str:
     if text == "omission-notice":
         return "other"
 
-    if (
-        text in {"global/directives", "global/directive"} or text.endswith("/directives")
-    ) and ("global/" in text or text.startswith("global")):
+    if (text in {"global/directives", "global/directive"} or text.endswith("/directives")) and (
+        "global/" in text or text.startswith("global")
+    ):
         return "tier0"
 
     if text.startswith("local/"):

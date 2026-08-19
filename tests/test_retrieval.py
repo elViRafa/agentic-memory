@@ -97,9 +97,12 @@ class BudgetHonestyTests(unittest.TestCase):
                 _write_store_file(temp, f"bulk/entry-{i:03d}", "keyword unique-" + ("z" * 4000))
             bundle = read_combined_context(temp, max_tokens=600, query="unique")
             self.assertLessEqual(bundle["estimated_tokens"], bundle["token_budget"])
-            if bundle["omitted_sections"]:
-                self.assertIn("more sections omitted", bundle["text"])
-                self.assertNotIn("omitted because it exceeded", bundle["text"])
+            self.assertTrue(
+                bundle["omitted_sections"],
+                "20 large store files must overflow a 600-token budget",
+            )
+            self.assertIn("more sections omitted", bundle["text"])
+            self.assertNotIn("omitted because it exceeded", bundle["text"])
 
     def test_steering_over_half_budget_emits_named_warning(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
