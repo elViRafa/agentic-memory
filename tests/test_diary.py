@@ -30,9 +30,12 @@ from memory_fabric.storage import initialize_memory_fabric
 class _DiaryHome(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
-        self.home = Path(self._tmp.name) / "mf-home"
+        # Resolve first: macOS /var → /private/var, Windows 8.3 RUNNER~1 →
+        # runneradmin. get_global_root() also resolve()s MEMORY_FABRIC_HOME.
+        tmp = Path(self._tmp.name).resolve()
+        self.home = tmp / "mf-home"
         self.home.mkdir()
-        self.project = Path(self._tmp.name) / "project"
+        self.project = tmp / "project"
         self.project.mkdir()
         self._env = mock.patch.dict(
             os.environ,
@@ -67,7 +70,7 @@ class DiaryConsentTests(_DiaryHome):
         self.assertTrue(result["changed"])
         self.assertTrue(result["approved"])
         self.assertTrue(consent_path().exists())
-        self.assertTrue(str(consent_path()).startswith(str(self.home)))
+        self.assertTrue(consent_path().resolve().is_relative_to(self.home.resolve()))
         data = json.loads(consent_path().read_text(encoding="utf-8"))
         self.assertTrue(data["approved"])
         self.assertEqual(data["level"], "counts")
@@ -142,7 +145,7 @@ class DiaryConsentTests(_DiaryHome):
         self.assertFalse(result["approved"])
         self.assertFalse(result["kill_switch"])
         self.assertEqual(result["events_today"], 0)
-        self.assertIn(str(self.home), result["consent_path"])
+        self.assertTrue(Path(result["consent_path"]).resolve().is_relative_to(self.home.resolve()))
 
 
 class DiaryRecorderTests(_DiaryHome):

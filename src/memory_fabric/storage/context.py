@@ -193,9 +193,10 @@ def _load_always_on(
     tier0 = global_memory_dir() / "directives.md"
     if tier0.exists():
         text = tier0.read_text(encoding="utf-8")
-        fragments.append(_format_fragment("global/directives", text))
+        fragment = _format_fragment("global/directives", text)
+        fragments.append(fragment)
         included.append("global/directives")
-        costs.append((str(tier0), estimate_tokens(text)))
+        costs.append((str(tier0), estimate_tokens(fragment)))
     else:
         warnings.append(f"Tier 0 directives not found: {tier0}")
 
@@ -204,13 +205,12 @@ def _load_always_on(
         try:
             p_text = prompt_path.read_text(encoding="utf-8").strip()
             if p_text:
-                fragments.append(
-                    _format_fragment(
-                        "local/memory_prompt", f"Memory Prompt Steering Instructions:\n{p_text}"
-                    )
+                fragment = _format_fragment(
+                    "local/memory_prompt", f"Memory Prompt Steering Instructions:\n{p_text}"
                 )
+                fragments.append(fragment)
                 included.append("local/memory_prompt")
-                costs.append((str(prompt_path), estimate_tokens(p_text)))
+                costs.append((str(prompt_path), estimate_tokens(fragment)))
         except Exception as exc:  # noqa: BLE001 - reported via warnings, not swallowed.
             warnings.append(f"Failed to read memory_prompt.txt: {exc}")
 
@@ -221,9 +221,10 @@ def _load_always_on(
             continue
         full_text = dump_frontmatter(metadata, body)
         key = f"local/{section_name}"
-        fragments.append(_format_fragment(key, full_text))
+        fragment = _format_fragment(key, full_text)
+        fragments.append(fragment)
         included.append(key)
-        costs.append((str(path), estimate_tokens(full_text)))
+        costs.append((str(path), estimate_tokens(fragment)))
     return costs
 
 
@@ -392,6 +393,61 @@ def _rank_sections(sections: list[dict[str, Any]], query: str | None) -> None:
     sections.sort(key=lambda x: (x["score"], -x["original_index"]), reverse=True)
 
 
+def _assemble_fragments(fragments: list[str]) -> str:
+    if not fragments:
+        return ""
+    return "\n\n".join(fragments).strip() + "\n"
+
+
+def _omission_notice_fragment(n: int) -> str:
+    return _format_fragment("omission-notice", _COMPACT_OMISSION.format(n=n))
+
+
+def _is_omission_notice(fragment: str) -> bool:
+    return fragment.startswith("<!-- memory-fabric:omission-notice")
+
+
+def _refresh_omission_notice(fragments: list[str], omitted: list[str]) -> None:
+    fragments[:] = [f for f in fragments if not _is_omission_notice(f)]
+    if omitted:
+        fragments.append(_omission_notice_fragment(len(omitted)))
+
+
+def _fit_to_budget(
+    fragments: list[str],
+    included: list[str],
+    omitted: list[str],
+    *,
+    always_on_n: int,
+    max_tokens: int,
+    steering_used: int,
+) -> None:
+    """Keep the compact omission line; drop competing sections if the join is over budget.
+
+    Always-on steering may legally exceed ``max_tokens``. Competing maps/store
+    fragments must not. The post-join trim used to pop the omission notice first,
+    leaving ``omitted_sections`` set with no textual cue — the Windows flake in
+    ``test_compact_omission_line_not_per_section_placeholders``.
+    """
+    _refresh_omission_notice(fragments, omitted)
+    if steering_used > max_tokens:
+        return
+    while estimate_tokens(_assemble_fragments(fragments)) > max_tokens:
+        drop_at = None
+        for i in range(len(fragments) - 1, -1, -1):
+            if _is_omission_notice(fragments[i]) or i < always_on_n:
+                continue
+            drop_at = i
+            break
+        if drop_at is None:
+            break
+        fragments.pop(drop_at)
+        competing_i = drop_at - always_on_n
+        key = included.pop(always_on_n + competing_i)
+        omitted.append(key)
+        _refresh_omission_notice(fragments, omitted)
+
+
 def _pack_sections(
     sections: list[dict[str, Any]],
     remaining: int,
@@ -402,7 +458,7 @@ def _pack_sections(
     warnings: list[str],
 ) -> None:
     cap = _file_share_cap_tokens(max_tokens)
-    compact_reserve = estimate_tokens(_COMPACT_OMISSION.format(n=999)) + 4
+    compact_reserve = estimate_tokens(_omission_notice_fragment(999)) + 2
     packable = max(0, remaining - compact_reserve)
     budget_exhausted = packable <= 0
 
@@ -441,14 +497,6 @@ def _pack_sections(
             omitted.extend(rest)
             break
 
-    if omitted:
-        notice = _COMPACT_OMISSION.format(n=len(omitted))
-        notice_fragment = _format_fragment("omission-notice", notice)
-        # Append only when it still fits the stated budget.
-        so_far = estimate_tokens("\n\n".join(fragments))
-        if so_far + estimate_tokens(notice_fragment) <= max_tokens:
-            fragments.append(notice_fragment)
-
 
 def read_combined_context(
     cwd: str,
@@ -482,7 +530,8 @@ def read_combined_context(
 
     always_on = _load_always_on(cwd, memory_dir, fragments, included, warnings)
     _warn_steering_budget(always_on, max_tokens, warnings)
-    used = sum(tok for _label, tok in always_on)
+    always_on_n = len(fragments)
+    used = estimate_tokens(_assemble_fragments(fragments))
     remaining = max_tokens - used
 
     # Maps-first no-query must not touch the store tree (or the SQLite index):
@@ -502,20 +551,17 @@ def read_combined_context(
 
     _rank_sections(sections, query)
     _pack_sections(sections, remaining, max_tokens, fragments, included, omitted, warnings)
+    _fit_to_budget(
+        fragments,
+        included,
+        omitted,
+        always_on_n=always_on_n,
+        max_tokens=max_tokens,
+        steering_used=used,
+    )
 
-    text = "\n\n".join(fragments).strip() + ("\n" if fragments else "")
+    text = _assemble_fragments(fragments)
     estimated = estimate_tokens(text)
-    # Steering can legally exceed the budget (R0-2 warns). Everything after it
-    # must not push a still-under-budget assembly over the line.
-    if used <= max_tokens and estimated > max_tokens:
-        # Drop the compact notice first, then last included competing section.
-        while estimated > max_tokens and fragments:
-            fragments.pop()
-            estimated = estimate_tokens(
-                "\n\n".join(fragments).strip() + ("\n" if fragments else "")
-            )
-        text = "\n\n".join(fragments).strip() + ("\n" if fragments else "")
-        estimated = estimate_tokens(text)
 
     bundle: ContextBundle = {
         "text": text,
