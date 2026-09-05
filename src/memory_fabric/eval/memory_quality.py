@@ -31,6 +31,12 @@ from memory_fabric.paths import local_memory_dir, project_root
 from memory_fabric.security import redact_secrets
 from memory_fabric.storage import read_combined_context
 from memory_fabric.storage._shared import STEERING_SECTIONS
+from memory_fabric.storage.hygiene import (
+    high_priority_inflation,
+    is_weak_summary,
+    steering_body_is_placeholder,
+    store_priority_counts,
+)
 from memory_fabric.storage.maps import category_fingerprint
 from memory_fabric.storage.verify import verify_evidence
 from memory_fabric.templates import SECTION_TEMPLATES, now_iso
@@ -737,6 +743,48 @@ def _evaluate_metadata_quality(
                     "Keep metadata current when content changes.",
                 )
             )
+        if info.get("is_store") and is_weak_summary(
+            str(metadata.get("summary") or ""), str(metadata.get("title") or "")
+        ):
+            checks.append(
+                _check(
+                    f"{section}_summary_weak",
+                    "warn",
+                    "medium",
+                    f"{section} has a weak summary (timestamp, title-echo, or too short).",
+                    "Write a one-line summary that says what the file decides, not when it was edited.",
+                )
+            )
+
+    high, total = store_priority_counts((memory_dir or local_memory_dir(cwd)) / "memory-store")
+    if high_priority_inflation(high, total):
+        checks.append(
+            _check(
+                "priority_inflation",
+                "warn",
+                "high",
+                f"{high}/{total} store files are priority=high, so ranking cannot prefer live facts.",
+                "Keep high for live constraints; demote *-complete and historical handoffs to low.",
+            )
+        )
+
+    for steering in ("framework-rules", "ubiquitous-language"):
+        info = sections.get(steering)
+        if (
+            info
+            and not info.get("error")
+            and steering_body_is_placeholder(str(info.get("body") or ""))
+        ):
+            checks.append(
+                _check(
+                    f"{steering}_placeholder_always_on",
+                    "warn",
+                    "medium",
+                    f"{steering}.md is placeholder text but still occupies the always-on pack.",
+                    f"Fill {steering}.md with project terms, or leave it empty so doctor can skip it.",
+                )
+            )
+
     if not checks:
         checks.append(
             _check(

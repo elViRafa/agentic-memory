@@ -13,6 +13,7 @@ from memory_fabric.contracts import EvalCategory, EvalCheck, EvalResult
 from memory_fabric.frontmatter import FrontmatterError, parse_frontmatter
 from memory_fabric.security import redact_secrets
 from memory_fabric.storage._shared import _is_ignored_local_memory_path, _is_store_path
+from memory_fabric.storage.hygiene import is_weak_summary
 
 REQUIRED_SECTIONS = [
     "architecture",
@@ -204,11 +205,11 @@ def _is_placeholder_body(section: str, body: str, template_body: str) -> bool:
 
 
 def _bad_summary(summary: str, section: str) -> bool:
-    if len(summary) < 24:
+    if is_weak_summary(summary, title=section.replace("-", " ")):
         return True
     normalized = summary.lower()
     weak = ["one-line", "project memory section", "record ", "todo", "tbd"]
-    return any(item in normalized for item in weak) or normalized == section.replace("-", " ")
+    return any(item in normalized for item in weak)
 
 
 def _duplicate_summaries(sections: dict[str, dict[str, Any]]) -> dict[str, list[str]]:

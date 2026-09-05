@@ -24,36 +24,19 @@ from memory_fabric.storage._shared import (
     _resolve_store_file,
     estimate_tokens,
 )
+from memory_fabric.storage.hygiene import (
+    high_priority_inflation,
+    is_live_handoff_path,
+    is_weak_summary,
+    looks_complete_path,
+    looks_resolved_text,
+    sibling_high_handoffs,
+    store_priority_counts,
+)
 from memory_fabric.templates import now_iso
 
-_GENERIC_SUMMARIES = frozenset(
-    {
-        "",
-        "contexto",
-        "context",
-        "summary",
-        "tbd",
-        "todo",
-        "n/a",
-        "na",
-    }
-)
 _MAP_REGEN_DEBOUNCE_SEC = 2.0
 _last_map_regen: dict[str, float] = {}
-
-
-def _is_useless_summary(summary: str, title: str, first_heading: str) -> bool:
-    s = (summary or "").strip()
-    if not s or s.lower() in _GENERIC_SUMMARIES:
-        return True
-    if len(s) < 16:
-        return True
-    lowered = s.lower().rstrip(".")
-    title_l = (title or "").strip().lower().rstrip(".")
-    if title_l and lowered in {title_l, f"memory: {title_l}"}:
-        return True
-    heading_l = first_heading.lstrip("#").strip().lower().rstrip(".")
-    return bool(heading_l and lowered == heading_l)
 
 
 def _derive_summary(title: str, body: str) -> str:
@@ -190,6 +173,20 @@ def write_memory_store(
         if priority is not None:
             metadata["priority"] = priority
         metadata.setdefault("priority", "medium")
+        if looks_complete_path(store_path) and str(metadata.get("priority")) != "low":
+            metadata["priority"] = "low"
+            warnings.append(
+                f"{store_path} looks finished (`-complete`); stored as priority=low "
+                "so it does not compete with live handoffs."
+            )
+        elif looks_resolved_text(redacted) or looks_resolved_text(
+            str(metadata.get("summary") or "")
+        ):
+            if str(metadata.get("priority")) == "high":
+                metadata["priority"] = "medium"
+                warnings.append(
+                    f"{store_path} reads as resolved; stored as priority=medium instead of high."
+                )
         if evidence is not None:
             metadata["evidence"] = evidence
 
@@ -239,14 +236,33 @@ def write_memory_store(
             heading = first_line.lstrip("#").strip()
             current_summary = str(metadata.get("summary") or "")
             display_title = str(metadata.get("title") or title or "")
-            if _is_useless_summary(current_summary, display_title, heading) or (
-                title and _is_useless_summary(title, display_title, heading)
+            if is_weak_summary(current_summary, display_title, heading) or (
+                title and is_weak_summary(title, display_title, heading)
             ):
                 metadata["summary"] = _derive_summary(display_title, new_body)
-            elif title and _is_useless_summary(current_summary, title, heading):
+            elif title and is_weak_summary(current_summary, title, heading):
                 metadata["summary"] = _derive_summary(title, new_body)
 
             path.write_text(dump_frontmatter(metadata, new_body), encoding="utf-8")
+
+    store_root = memory_store_dir(cwd)
+    if changed and str(metadata.get("priority")) == "high":
+        high, total = store_priority_counts(store_root)
+        if high_priority_inflation(high, total):
+            warnings.append(
+                f"{high}/{total} store files are already priority=high; "
+                "further high writes stop discriminating in retrieval. "
+                "Use medium unless this is a live constraint."
+            )
+        if is_live_handoff_path(store_path):
+            siblings = sibling_high_handoffs(store_root, store_path)
+            if siblings:
+                sample = ", ".join(siblings[:5])
+                extra = f" (+{len(siblings) - 5} more)" if len(siblings) > 5 else ""
+                warnings.append(
+                    f"Other high-priority *handoff files still exist under the same "
+                    f"prefix: {sample}{extra}. Demote finished waves to low."
+                )
 
     if changed:
         _maybe_regen_map(cwd, store_path)

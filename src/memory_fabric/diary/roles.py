@@ -1,10 +1,13 @@
-"""Closed-vocabulary roles for field-diary histograms.
+"""Role labels for field-diary histograms.
 
-Keys look like ``store/architecture/overview``, ``local/architecture``,
-or ``global/directives``. The classifier never returns the raw slug.
+Known prefixes map to a closed set (architecture, episodic, …). Custom
+first segments (`fine-tuning/`, `pretraining/`) stay as a stable slug so
+field packs are not a wall of ``other``.
 """
 
 from __future__ import annotations
+
+import re
 
 ROLES = (
     "steering",
@@ -92,7 +95,11 @@ def classify_role(key: str) -> str:
         if len(parts) > 1 and parts[1] == "commits":
             return "episodic_commit"
         return "episodic"
-    return _STORE_ROLE.get(parts[0], "other")
+    known = _STORE_ROLE.get(parts[0])
+    if known:
+        return known
+    slug = re.sub(r"[^a-z0-9]+", "-", parts[0].casefold()).strip("-")
+    return (slug[:32] if slug else "other")
 
 
 def classify_priority(raw: str | None) -> str:

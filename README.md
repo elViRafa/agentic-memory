@@ -37,8 +37,8 @@ Memory is stored as human-readable Markdown with YAML frontmatter. No vector dat
 
 ## Status
 
-**v1.4.0 — optional local field diary (`ai-memory diary approve`) plus maps-first
-retrieval. [Live on PyPI](https://pypi.org/project/memory-fabric/).**
+**v1.4.1 — field-store write/read hygiene (live handoffs, query packs, doctor
+smells) on top of the local field diary. [Live on PyPI](https://pypi.org/project/memory-fabric/).**
 Core CLI and MCP tools work end-to-end. See [`ROADMAP.md`](ROADMAP.md) for what
 shipped, what's in progress, and what's next.
 

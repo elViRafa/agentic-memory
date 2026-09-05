@@ -1,5 +1,5 @@
 """Memory Fabric package version."""
 
-from __future__ import annotations
-
-__version__ = "1.4.0"
+# Single source of truth — pyproject.toml reads this via setuptools dynamic version.
+# Keep README / ROADMAP / server.json in sync (tests/test_version_truth.py).
+__version__ = "1.4.1"

@@ -24,6 +24,7 @@ from memory_fabric.storage._shared import (
     _steering_context_enabled,
     estimate_tokens,
 )
+from memory_fabric.storage.hygiene import MAP_QUERY_CAP_TOKENS, steering_body_is_placeholder
 from memory_fabric.storage.ranking import (
     blended_score,
     bm25_scores,
@@ -219,6 +220,12 @@ def _load_always_on(
         if read_warning:
             warnings.append(read_warning)
             continue
+        if steering_body_is_placeholder(body):
+            warnings.append(
+                f"Skipped placeholder steering file {path.name} so it does not "
+                "occupy the always-on budget."
+            )
+            continue
         full_text = dump_frontmatter(metadata, body)
         key = f"local/{section_name}"
         fragment = _format_fragment(key, full_text)
@@ -389,6 +396,7 @@ def _rank_sections(sections: list[dict[str, Any]], query: str | None) -> None:
             str(metadata.get("priority") or "medium"),
             str(metadata.get("last_updated") or ""),
             key=str(item["key"]),
+            query_present=bool(query_tokens),
         )
     sections.sort(key=lambda x: (x["score"], -x["original_index"]), reverse=True)
 
@@ -456,22 +464,34 @@ def _pack_sections(
     included: list[str],
     omitted: list[str],
     warnings: list[str],
+    *,
+    query: str | None = None,
 ) -> None:
     cap = _file_share_cap_tokens(max_tokens)
     compact_reserve = estimate_tokens(_omission_notice_fragment(999)) + 2
     packable = max(0, remaining - compact_reserve)
     budget_exhausted = packable <= 0
+    query_present = bool(query and query.strip())
 
     for item in sections:
         key = item["key"]
         if budget_exhausted:
             omitted.append(key)
             continue
+        if query_present and float(item.get("score") or 0) <= 0:
+            omitted.append(key)
+            continue
         if not _ensure_section_body(item, warnings, omitted):
             continue
         full_text = item["text"]
         metadata = item["metadata"]
-        capped, truncated = _cap_section_text(full_text, metadata, cap)
+        item_cap = cap
+        if query_present:
+            from memory_fabric.diary.roles import classify_role
+
+            if classify_role(key) == "map":
+                item_cap = min(cap, MAP_QUERY_CAP_TOKENS)
+        capped, truncated = _cap_section_text(full_text, metadata, item_cap)
         fragment = _format_fragment(key, capped)
         cost = estimate_tokens(fragment)
         if cost <= packable:
@@ -480,7 +500,7 @@ def _pack_sections(
             packable -= cost
             remaining -= cost
             if truncated:
-                warnings.append(f"Truncated `{key}` to the per-file share cap ({cap} tokens).")
+                warnings.append(f"Truncated `{key}` to the per-file share cap ({item_cap} tokens).")
         else:
             omitted.append(key)
             budget_exhausted = True
@@ -550,7 +570,9 @@ def read_combined_context(
         )
 
     _rank_sections(sections, query)
-    _pack_sections(sections, remaining, max_tokens, fragments, included, omitted, warnings)
+    _pack_sections(
+        sections, remaining, max_tokens, fragments, included, omitted, warnings, query=query
+    )
     _fit_to_budget(
         fragments,
         included,

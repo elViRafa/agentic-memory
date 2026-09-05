@@ -217,6 +217,8 @@ class RoleClassifierTests(unittest.TestCase):
         self.assertEqual(classify_role("local/framework-rules"), "steering")
         self.assertEqual(classify_role("global/directives"), "tier0")
         self.assertEqual(classify_role("store/failures/lock-timeout"), "failure")
+        self.assertEqual(classify_role("store/fine-tuning/next-session-handoff"), "fine-tuning")
+        self.assertEqual(classify_role("store/pretraining/cpt-current"), "pretraining")
 
 
 class PackStatsRecordingTests(_DiaryHome):
@@ -265,6 +267,18 @@ class PackStatsRecordingTests(_DiaryHome):
         self.assertEqual(len(events), 1)
         self.assertIn("[REDACTED_SECRET]", events[0]["query"])
         self.assertNotIn("sk-A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6", events[0]["query"])
+
+    def test_search_run_records_backend_on_zero_hits(self) -> None:
+        from memory_fabric.storage import keyword_search
+
+        initialize_memory_fabric(str(self.project))
+        approve("counts", confirmed=True)
+        with mock.patch("shutil.which", return_value=None):
+            keyword_search(str(self.project), "no-such-token-zzz")
+        events = [e for e in self._events() if e.get("event") == "search.run"]
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["hit_n"], 0)
+        self.assertEqual(events[0]["backend"], "python")
 
     def test_checkpoint_cli_when_approved(self) -> None:
         initialize_memory_fabric(str(self.project))

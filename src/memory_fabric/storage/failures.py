@@ -84,6 +84,9 @@ _GENERIC_EXCEPTIONS = frozenset(
 
 def _structured_failure_key(error_summary: str) -> str:
     """Exception class + error code, independent of surrounding prose language."""
+    resource = _resource_failure_key(error_summary)
+    if resource:
+        return resource
     classes = _EXCEPTION_RE.findall(error_summary)
     codes = _ERROR_CODE_RE.findall(error_summary)
     parts: list[str] = []
@@ -92,6 +95,16 @@ def _structured_failure_key(error_summary: str) -> str:
     if codes:
         parts.append(codes[0].lower())
     return "|".join(parts)
+
+
+def _resource_failure_key(error_summary: str) -> str:
+    """Collapse reworded resource errors (CUDA OOM, ENOSPC) onto one key."""
+    text = error_summary.lower()
+    if re.search(r"\bcuda\b", text) and re.search(r"\b(oom|out of memory)\b", text):
+        return "cuda|oom"
+    if "no space left" in text or "enospc" in text:
+        return "enospc"
+    return ""
 
 
 def _hint_for(normalized: str) -> str:

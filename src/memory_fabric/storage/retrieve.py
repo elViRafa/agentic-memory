@@ -16,6 +16,8 @@ from memory_fabric.storage._shared import (
     estimate_tokens,
 )
 from memory_fabric.storage.context import (
+    _collect_sections_from_index,
+    _ensure_section_body,
     _file_share_cap_tokens,
     _format_fragment,
     _load_always_on,
@@ -51,7 +53,7 @@ def context_for_task(
     _warn_steering_budget(always_on, max_tokens, warnings)
     remaining = max_tokens - sum(tok for _label, tok in always_on)
 
-    candidates = _collect_task_candidates(cwd, memory_dir, files_open, warnings)
+    candidates, index_used = _task_candidates(cwd, memory_dir, query, files_open, warnings)
     if not query.strip():
         query = " ".join(files_open or [])
     _score_candidates(candidates, query)
@@ -62,6 +64,8 @@ def context_for_task(
     for item in candidates:
         if taken >= top_k or remaining <= 0:
             omitted.append(item["key"])
+            continue
+        if not _ensure_section_body(item, warnings, omitted):
             continue
         text = item["text"]
         if estimate_tokens(text) > cap:
@@ -87,7 +91,6 @@ def context_for_task(
         while estimated > max_tokens and len(fragments) > 1:
             dropped = fragments.pop()
             estimated = estimate_tokens("\n\n".join(fragments).strip() + "\n")
-            # Best-effort: keep included list aligned with fragments.
             _ = dropped
         text = "\n\n".join(fragments).strip() + "\n"
         estimated = estimate_tokens(text)
@@ -110,11 +113,43 @@ def context_for_task(
         cwd,
         bundle,
         startup_mode="full",
-        index_used=False,
+        index_used=index_used,
         query=query,
         fragments=fragments,
         priority_by_key=priority_by_key,
     )
+
+
+def _task_candidates(
+    cwd: str,
+    memory_dir: Path,
+    query: str,
+    files_open: list[str] | None,
+    warnings: list[str],
+) -> tuple[list[dict[str, Any]], bool]:
+    indexed = _collect_sections_from_index(cwd, memory_dir, query, warnings)
+    if indexed is not None:
+        open_basenames = {Path(p).name.lower() for p in (files_open or []) if p}
+        candidates: list[dict[str, Any]] = []
+        for item in indexed:
+            from memory_fabric.diary.roles import classify_role
+
+            if classify_role(item["key"]) == "map":
+                continue
+            store_path = str((item.get("metadata") or {}).get("store_path") or "")
+            if not store_path and str(item["key"]).startswith("store/"):
+                store_path = str(item["key"])[6:]
+            boost = 0.0
+            if open_basenames and store_path.startswith("failures/"):
+                blob = str(item.get("rank_text") or "").lower()
+                if any(name in blob for name in open_basenames):
+                    boost = 2.0
+            item["store_path"] = store_path
+            item["boost"] = boost
+            item["score"] = 0.0
+            candidates.append(item)
+        return candidates, True
+    return _collect_task_candidates(cwd, memory_dir, files_open, warnings), False
 
 
 def _collect_task_candidates(
@@ -170,6 +205,8 @@ def _collect_task_candidates(
                     "store_path": store_path,
                     "boost": boost,
                     "score": 0.0,
+                    "rank_text": dump_frontmatter(metadata, body),
+                    "path": path,
                 }
             )
     return candidates
@@ -179,7 +216,7 @@ def _score_candidates(candidates: list[dict[str, Any]], query: str) -> None:
     if not candidates:
         return
     query_tokens = tokenize(query)
-    docs = [tokenize(item["text"]) for item in candidates]
+    docs = [tokenize(str(item.get("rank_text") or item.get("text") or "")) for item in candidates]
     scores = bm25_scores(query_tokens, docs) if query_tokens else [1.0] * len(candidates)
     for item, raw in zip(candidates, scores, strict=True):
         metadata = item["metadata"]
@@ -188,4 +225,5 @@ def _score_candidates(candidates: list[dict[str, Any]], query: str) -> None:
             str(metadata.get("priority") or "medium"),
             str(metadata.get("last_updated") or ""),
             key=str(item["key"]),
+            query_present=True,
         ) + float(item.get("boost") or 0.0)

@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.1] — 2026-09-05
+
+### Fixed
+
+- **Query packs no longer spend the budget on generated maps.** With a
+  query, maps are down-ranked and capped so granular hits (the files the
+  query is for) win. `context_for_task` uses the SQLite index like startup.
+- **Live handoffs outrank finished waves.** Ranking boosts
+  `next-session-handoff` / `current`, penalizes `*-complete` and `-v2-`
+  copies, and uses a 14-day recency half-life on handoff-like keys.
+- **Write path stops reproducing field-store rot.** Timestamp-only
+  summaries are derived from the body; `*-complete` paths store as `low`;
+  resolved bodies cannot stay `high`; doctor/eval warn on high-priority
+  inflation, placeholder steering, and weak store summaries.
+- **CUDA OOM wordings collapse** onto one failure entry. Custom store
+  prefixes (`fine-tuning/`, `pretraining/`) are diary roles instead of
+  `other`. `search.run` records `backend` even when `hit_n` is 0.
+
 ## [1.4.0] — 2026-08-18
 
 ### Added
@@ -672,7 +690,8 @@ with those fixed the final score is **96/100 with zero failing checks**
   {ubuntu, windows, macos} × {3.11–3.14}; `storage/_core.py` god module split
   into 12 focused modules.
 
-[Unreleased]: https://github.com/elViRafa/agentic-memory/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/elViRafa/agentic-memory/compare/v1.4.1...HEAD
+[1.4.1]: https://github.com/elViRafa/agentic-memory/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/elViRafa/agentic-memory/compare/v1.3.1...v1.4.0
 [1.3.1]: https://github.com/elViRafa/agentic-memory/compare/v1.3.0...v1.3.1
 [1.3.0]: https://github.com/elViRafa/agentic-memory/compare/v1.2.0...v1.3.0

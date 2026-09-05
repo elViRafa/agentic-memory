@@ -134,6 +134,7 @@ def record_search_run(
     query: str,
     ms: float,
     surface: str = "core",
+    backend: str | None = None,
 ) -> None:
     if not is_approved(cwd):
         return
@@ -145,13 +146,13 @@ def record_search_run(
         score = top.get("score")
         if isinstance(score, (int, float)):
             top_score = float(score)
-    backend = ""
-    if results:
-        backend = str(results[0].get("backend") or "")
+    resolved_backend = backend if backend else ""
+    if not resolved_backend and results:
+        resolved_backend = str(results[0].get("backend") or "")
     event: dict[str, Any] = {
         **envelope(cwd=cwd, surface=surface),
         "event": "search.run",
-        "backend": backend,
+        "backend": resolved_backend,
         "hit_n": len(results),
         "ms": round(ms, 3),
         "query_len": len(query or ""),

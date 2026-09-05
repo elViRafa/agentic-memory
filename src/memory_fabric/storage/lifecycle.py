@@ -28,6 +28,14 @@ from memory_fabric.storage._shared import (
     _steering_sync_enabled,
     estimate_tokens,
 )
+from memory_fabric.storage.hygiene import (
+    high_priority_inflation,
+    is_weak_summary,
+    looks_complete_path,
+    looks_resolved_text,
+    steering_body_is_placeholder,
+    store_priority_counts,
+)
 from memory_fabric.templates import (
     DIRECTIVES_BLOCK_END,
     DIRECTIVES_BLOCK_START,
@@ -847,6 +855,9 @@ def doctor(cwd: str, check_network: bool = False) -> DoctorResult:
     _check_llm_provider(warnings, check_network=check_network)
     _check_freshness_signals(cwd, memory_dir, warnings)
     _check_resolved_high_priority(memory_dir, warnings)
+    _check_priority_inflation(memory_dir, warnings)
+    _check_placeholder_steering(memory_dir, warnings)
+    _check_weak_store_summaries(memory_dir, warnings)
     _check_stale_candidates(memory_dir, warnings)
     _check_mangled_slugs(memory_dir, warnings)
     _check_contradictions(memory_dir, warnings)
@@ -862,9 +873,6 @@ def doctor(cwd: str, check_network: bool = False) -> DoctorResult:
         "warnings": warnings,
         "checked_files": checked_files,
     }
-
-
-_RESOLVED_RE = re.compile(r"\b(resolvido|resolved|fixed|done|obsolete|superseded)\b", re.IGNORECASE)
 
 
 def _check_freshness_signals(cwd: str, memory_dir: Path, warnings: list[str]) -> None:
@@ -951,9 +959,21 @@ def _check_resolved_high_priority(memory_dir: Path, warnings: list[str]) -> None
             metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, FrontmatterError):
             continue
+        try:
+            sp = _path_to_store_path(store_root, path)
+        except ValueError:
+            sp = path.stem
+        if looks_complete_path(sp) and str(metadata.get("priority") or "") == "high":
+            flagged += 1
+            if flagged <= 5:
+                warnings.append(
+                    f"{path.relative_to(memory_dir)} is a `-complete` path still at "
+                    "priority=high; lower it so live handoffs win retrieval."
+                )
+            continue
         if str(metadata.get("priority") or "") != "high":
             continue
-        if _RESOLVED_RE.search(body) or _RESOLVED_RE.search(str(metadata.get("summary") or "")):
+        if looks_resolved_text(body) or looks_resolved_text(str(metadata.get("summary") or "")):
             flagged += 1
             if flagged <= 5:
                 warnings.append(
@@ -962,6 +982,59 @@ def _check_resolved_high_priority(memory_dir: Path, warnings: list[str]) -> None
                 )
     if flagged > 5:
         warnings.append(f"…and {flagged - 5} more high-priority entries look resolved.")
+
+
+def _check_priority_inflation(memory_dir: Path, warnings: list[str]) -> None:
+    store_root = memory_dir / "memory-store"
+    high, total = store_priority_counts(store_root)
+    if high_priority_inflation(high, total):
+        pct = round(100 * high / total)
+        warnings.append(
+            f"{high}/{total} store files ({pct}%) are priority=high; "
+            "priority no longer discriminates in retrieval. Use high only for live constraints."
+        )
+
+
+def _check_placeholder_steering(memory_dir: Path, warnings: list[str]) -> None:
+    if not memory_dir.exists():
+        return
+    for path in sorted(memory_dir.glob("*.md")):
+        if not _is_steering_file(path):
+            continue
+        try:
+            _metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, FrontmatterError):
+            continue
+        if steering_body_is_placeholder(body):
+            warnings.append(
+                f"{path.name} is placeholder steering still in the always-on pack; "
+                "fill it or agents pay for an empty file every session."
+            )
+
+
+def _check_weak_store_summaries(memory_dir: Path, warnings: list[str]) -> None:
+    store_root = memory_dir / "memory-store"
+    if not store_root.exists():
+        return
+    flagged = 0
+    for path in _iter_markdown_files(store_root):
+        if path.name == "index.md":
+            continue
+        try:
+            metadata, _body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, FrontmatterError):
+            continue
+        summary = str(metadata.get("summary") or "")
+        title = str(metadata.get("title") or "")
+        if is_weak_summary(summary, title):
+            flagged += 1
+            if flagged <= 5:
+                warnings.append(
+                    f"{path.relative_to(memory_dir)} has a weak summary "
+                    "(timestamp, title-echo, or too short) — maps-first retrieval cannot use it."
+                )
+    if flagged > 5:
+        warnings.append(f"…and {flagged - 5} more store files have weak summaries.")
 
 
 def _check_stale_candidates(memory_dir: Path, warnings: list[str]) -> None:

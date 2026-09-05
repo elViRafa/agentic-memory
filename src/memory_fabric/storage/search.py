@@ -78,7 +78,9 @@ def keyword_search(cwd: str, query: str, max_results: int = 10) -> list[SearchRe
         result["backend"] = backend
     from memory_fabric.diary.instrument import record_search_run
 
-    record_search_run(cwd, ranked, query=query, ms=(time.perf_counter() - started) * 1000)
+    record_search_run(
+        cwd, ranked, query=query, ms=(time.perf_counter() - started) * 1000, backend=backend
+    )
     return ranked
 
 
@@ -110,7 +112,9 @@ def _rank_search_results(
     query_tokens = tokenize(query)
     scores = bm25_scores(query_tokens, docs)
     path_scores = {
-        str(path): blended_score(score, priority, last_updated, key=str(path))
+        str(path): blended_score(
+            score, priority, last_updated, key=str(path), query_present=True
+        )
         for path, score, (priority, last_updated) in zip(unique_paths, scores, metas, strict=True)
     }
 

@@ -23,6 +23,16 @@ RECENCY_FLOOR = 0.3
 
 # Passive per-commit captures are raw material for dreaming, not answers.
 _COMMITS_MARKERS = ("/episodic/commits/", "episodic/commits/")
+# Handoffs go stale in days, not quarters — 90-day half-life made a week-old
+# ``s3-handoff`` tie the live ``next-session-handoff``.
+HANDOFF_RECENCY_HALF_LIFE_DAYS = 14.0
+_COMPLETE_STEM_RE = re.compile(r"(?:^|/)([^/]*-complete)(?:\.md)?$", re.IGNORECASE)
+_V2_STEM_RE = re.compile(r"(?:^|/)([^/]*-v2-[^/]*)(?:\.md)?$", re.IGNORECASE)
+_LIVE_STEM_RE = re.compile(
+    r"(?:^|/)(next-session-handoff|current)(?:\.md)?$",
+    re.IGNORECASE,
+)
+_LIFECYCLE_KEY_RE = re.compile(r"handoff|complete|(?:^|/)current(?:\.md)?$", re.IGNORECASE)
 
 
 def tokenize(text: str) -> list[str]:
@@ -90,6 +100,43 @@ def category_penalty(key: str) -> float:
     return 0.05 if is_commit_capture(key) else 1.0
 
 
+def _normalized_key(key: str) -> str:
+    return (key or "").replace("\\", "/").strip("/")
+
+
+def lifecycle_penalty(key: str) -> float:
+    """Boost live handoffs; bury completed waves and historical v2 copies.
+
+    BM25 treats every file that says ``handoff`` as equal. Field stores keep
+    ``*-complete`` and ``cpt-v2-next-session-handoff`` at priority=high, so
+    recency alone (90-day half-life) cannot break the tie.
+    """
+    text = _normalized_key(key)
+    if _COMPLETE_STEM_RE.search(text):
+        return 0.2
+    if _LIVE_STEM_RE.search(text):
+        return 1.3
+    if _V2_STEM_RE.search(text):
+        return 0.4
+    return 1.0
+
+
+def query_map_penalty(key: str, *, query_present: bool) -> float:
+    """With a query, generated maps must not outrank the matching store hit."""
+    if not query_present:
+        return 1.0
+    from memory_fabric.diary.roles import classify_role
+
+    return 0.15 if classify_role(key) == "map" else 1.0
+
+
+def _half_life_for_key(key: str) -> float:
+    text = _normalized_key(key)
+    if _LIFECYCLE_KEY_RE.search(text):
+        return HANDOFF_RECENCY_HALF_LIFE_DAYS
+    return RECENCY_HALF_LIFE_DAYS
+
+
 def bm25_scores(
     query_tokens: Sequence[str],
     documents: Sequence[Sequence[str]],
@@ -140,13 +187,28 @@ def blended_score(
     last_updated: str | None,
     *,
     key: str = "",
+    query_present: bool = False,
 ) -> float:
-    """``bm25 * priority_weight * recency_weight * category_penalty``."""
+    """``bm25 * priority * recency * category * lifecycle * map-query``."""
     raw = bm25 if bm25 > 0 else 0.0
-    # No-query / zero-BM25 still needs a priority*recency order so a high
-    # architecture map outranks a low resolved-debt entry.
-    base = raw if raw > 0 else 1.0
-    return base * priority_weight(priority) * recency_weight(last_updated) * category_penalty(key)
+    if query_present:
+        # Unmatched files must not keep the old "base = 1.0" no-query behavior
+        # or generated maps with zero BM25 still consume the query pack.
+        if raw <= 0:
+            return 0.0
+        base = raw
+    else:
+        # No-query / zero-BM25 still needs a priority*recency order so a high
+        # architecture map outranks a low resolved-debt entry.
+        base = raw if raw > 0 else 1.0
+    return (
+        base
+        * priority_weight(priority)
+        * recency_weight(last_updated, half_life_days=_half_life_for_key(key))
+        * category_penalty(key)
+        * lifecycle_penalty(key)
+        * query_map_penalty(key, query_present=query_present)
+    )
 
 
 def token_jaccard(a: str, b: str, *, min_tokens: int = 2) -> float:
