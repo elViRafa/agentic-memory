@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.2] — 2026-09-21
+
 ### Fixed
 
 - **Contradiction pack spam.** Polarity IDF drops vocabulary tokens (`lora`,
@@ -27,6 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   skips when the store is unchanged since the last apply.
 - **Doctor smells.** Stale-only `decisions/`, off-topic failures, and
   ADR-shaped diary-prefix files are warned.
+
+### Added
+
+- **Almost-real field pack smoke.** `scripts/field_pack_usage_smoke.py` seeds a
+  search-sermons-shaped store (no domain copy) and asserts pack/ranking/dream
+  gates; `tests/test_field_pack_usage_smoke.py` wraps it for CI.
 
 ## [1.4.1] — 2026-09-05
 

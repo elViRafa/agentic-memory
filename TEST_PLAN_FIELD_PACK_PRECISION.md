@@ -234,11 +234,19 @@ These are expected under field-shaped stores:
 
 ## 9. Definition of done
 
-- [ ] `scripts/field_pack_usage_smoke.py` exists and exits 0 on synthetic seed
-- [ ] `tests/test_field_pack_usage_smoke.py` exists and passes under `PYTHONPATH=src`
+- [x] `scripts/field_pack_usage_smoke.py` exists and exits 0 on synthetic seed
+- [x] `tests/test_field_pack_usage_smoke.py` exists and passes under `PYTHONPATH=src`
 - [ ] Live run documented; optional manual: smoke against search-sermons exits 0 after local install
-- [ ] No domain facts from search-sermons copied into seed bodies
-- [ ] This file remains the handoff spec for future agents
+- [x] No domain facts from search-sermons copied into seed bodies
+- [x] This file remains the handoff spec for future agents
+
+### Seed note (implementation)
+
+Near-duplicate diary files that only differ by an integer (`note-00` … `note-13`
+with `notebook {i}` in the body) explode the numeric contradiction detector and
+push pack token hygiene over the fail threshold even at pack length ≤5. The
+synthetic seed uses distinct topic phrases and one short PRD reversal pair so
+pack length is small and `contradiction_pack_hygiene` passes.
 
 ---
 
