@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from memory_fabric.frontmatter import parse_frontmatter
 from memory_fabric.paths import local_memory_dir
 from memory_fabric.storage import (
     detect_contradictions,
@@ -24,6 +25,101 @@ from memory_fabric.storage.contradictions import (
 
 def dream(*args: object, **kwargs: object):
     return asyncio.run(_async_dream(*args, **kwargs))
+
+
+class ContradictionPrecisionTests(unittest.TestCase):
+    def test_field_false_polarity_across_categories_is_suppressed(self) -> None:
+        """Architecture 'must not mount CPT' vs pretraining 'run CPT' is not an ADR clash."""
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            write_memory_store(
+                temp,
+                "architecture/ask-app-rag",
+                "Must not mount the CPT training volume on the serving pod. "
+                "Keep inference volumes separate from CPT.",
+                title="Ask App Rag",
+            )
+            write_memory_store(
+                temp,
+                "pretraining/cpt-eval-stack-pin",
+                "Run CPT C-eval with the pinned Unsloth stack. CPT is required next session.",
+                title="CPT Eval Stack Pin",
+            )
+            write_memory_store(
+                temp,
+                "bugs/lora-frozen-embeddings",
+                "Do not use LoRA on frozen embeddings. LoRA caused the tokenizer mismatch.",
+                title="LoRA Frozen Embeddings",
+            )
+            write_memory_store(
+                temp,
+                "pretraining/cpt-s6-phase0",
+                "Use LoRA for CPT S6 phase0. Keep LoRA rank at 16.",
+                title="CPT S6 Phase0",
+            )
+            # Pad the store so CPT/LORA become generic vocabulary via IDF.
+            for i in range(8):
+                write_memory_store(
+                    temp,
+                    f"pretraining/wave-{i:02d}-notes",
+                    f"Wave {i} CPT notes. LoRA training notes for CPT wave {i}.",
+                    title=f"Wave {i} Notes",
+                )
+            hits = detect_contradictions(local_memory_dir(temp))
+            polarity = [h for h in hits if h.kind == "polarity"]
+            evidence = " ".join(h.evidence for h in polarity)
+            self.assertNotIn("cpt", evidence)
+            self.assertNotIn("lora", evidence)
+            # bugs vs pretraining polarity must not fire even without IDF.
+            crossed = [
+                h
+                for h in polarity
+                if ("bugs/" in h.store_path_a) != ("bugs/" in h.store_path_b)
+            ]
+            self.assertEqual(crossed, [])
+
+    def test_successive_handoff_numeric_clash_is_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            write_memory_store(
+                temp,
+                "pretraining/cpt-corpus-v3-s2-handoff",
+                "S2 handoff. Completed 2 waves. Loss 0.45. Next is S3.",
+                title="S2 Handoff",
+            )
+            write_memory_store(
+                temp,
+                "pretraining/cpt-corpus-v3-s3-handoff",
+                "S3 handoff. Completed 3 waves. Loss 0.32. Next is S4.",
+                title="S3 Handoff",
+            )
+            hits = detect_contradictions(local_memory_dir(temp))
+            numeric = [h for h in hits if h.kind == "numeric"]
+            self.assertEqual(numeric, [])
+
+    def test_pack_surface_caps_index_and_writes_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            write_memory_store(
+                temp,
+                "decisions/prd-0008-urnas-add-pos-calc",
+                "PRD 0008 adds the column urnas_add_pos_calc after the tally.",
+                title="PRD 0008 add urnas_add_pos_calc",
+            )
+            write_memory_store(
+                temp,
+                "decisions/prd-0009-reverse-urnas-add-pos-calc",
+                "PRD 0009 reverses PRD 0008. Do not add urnas_add_pos_calc.",
+                title="PRD 0009 reverses urnas_add_pos-calc",
+            )
+            result = dream(temp, mode="light", apply=True)
+            self.assertTrue(result["changed"] or result["warnings"])
+            index = Path(temp) / ".ai-memory" / "index.md"
+            metadata, _ = parse_frontmatter(index.read_text(encoding="utf-8"))
+            pack = metadata.get("contradictions") or []
+            self.assertLessEqual(len(pack), 5)
+            report = Path(temp) / ".ai-memory" / "evals" / "contradictions.json"
+            self.assertTrue(report.exists())
 
 
 class ContradictionNetTests(unittest.TestCase):

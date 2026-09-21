@@ -74,6 +74,12 @@ from memory_fabric.storage.context import (
 from memory_fabric.storage.contradictions import (
     detect_contradictions as detect_contradictions,
 )
+from memory_fabric.storage.contradictions import (
+    pack_contradiction_messages as pack_contradiction_messages,
+)
+from memory_fabric.storage.contradictions import (
+    write_contradiction_report as write_contradiction_report,
+)
 from memory_fabric.storage.dream import (
     apply_dream_results as apply_dream_results,
 )

@@ -273,6 +273,99 @@ class QueryPackAndRetrieveTests(unittest.TestCase):
             )
 
 
+class StaleSupersededRankingTests(unittest.TestCase):
+    def test_stale_and_superseded_lose_to_live_handoff(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            _write_store_file(
+                temp,
+                "pretraining/next-session-handoff",
+                "Live CPT C-eval next session handoff. Run C-eval only.",
+                last_updated="2026-09-20T12:00:00-04:00",
+            )
+            stale_path = (
+                Path(temp)
+                / ".ai-memory"
+                / "memory-store"
+                / "decisions"
+                / "gemma4-finetuning.md"
+            )
+            stale_path.parent.mkdir(parents=True, exist_ok=True)
+            stale_path.write_text(
+                dump_frontmatter(
+                    {
+                        "store_path": "decisions/gemma4-finetuning",
+                        "title": "Gemma 4 Fine Tuning",
+                        "summary": "Legacy Gemma 4 fine-tuning decision.",
+                        "priority": "high",
+                        "tags": ["test"],
+                        "schema_version": "1.3",
+                        "last_updated": "2026-06-01T00:00:00-04:00",
+                        "review_status": "stale",
+                    },
+                    "We use Gemma 4 for fine-tuning. CPT next session handoff for Gemma.",
+                ),
+                encoding="utf-8",
+            )
+            old_handoff = (
+                Path(temp)
+                / ".ai-memory"
+                / "memory-store"
+                / "pretraining"
+                / "cpt-s5-handoff.md"
+            )
+            old_handoff.write_text(
+                dump_frontmatter(
+                    {
+                        "store_path": "pretraining/cpt-s5-handoff",
+                        "title": "CPT S5 Handoff",
+                        "summary": "Previous CPT handoff, superseded.",
+                        "priority": "high",
+                        "tags": ["test"],
+                        "schema_version": "1.3",
+                        "last_updated": "2026-09-18T12:00:00-04:00",
+                        "superseded_by": "pretraining/next-session-handoff",
+                    },
+                    "Old CPT C-eval next session handoff. Superseded.",
+                ),
+                encoding="utf-8",
+            )
+            live = blended_score(
+                1.0,
+                "high",
+                "2026-09-20T12:00:00-04:00",
+                key="store/pretraining/next-session-handoff",
+                query_present=True,
+            )
+            stale = blended_score(
+                1.0,
+                "high",
+                "2026-06-01T00:00:00-04:00",
+                key="store/decisions/gemma4-finetuning",
+                query_present=True,
+                review_status="stale",
+            )
+            superseded = blended_score(
+                1.0,
+                "high",
+                "2026-09-18T12:00:00-04:00",
+                key="store/pretraining/cpt-s5-handoff",
+                query_present=True,
+                superseded_by="pretraining/next-session-handoff",
+            )
+            self.assertGreater(live, stale)
+            self.assertGreater(live, superseded)
+            pack = context_for_task(temp, "next CPT session handoff C-eval")
+            included = pack["included_sections"]
+            self.assertIn("store/pretraining/next-session-handoff", included)
+            self.assertNotIn("store/decisions/gemma4-finetuning", included)
+            if "store/pretraining/cpt-s5-handoff" in included:
+                self.assertLess(
+                    included.index("store/pretraining/next-session-handoff"),
+                    included.index("store/pretraining/cpt-s5-handoff"),
+                )
+
+
 class DoctorEvalSmellTests(unittest.TestCase):
     def test_doctor_warns_on_high_percent_empty_steering_and_timestamp(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -320,6 +413,45 @@ class DoctorEvalSmellTests(unittest.TestCase):
             failures = list((Path(temp) / ".ai-memory" / "memory-store" / "failures").glob("*.md"))
             self.assertEqual(len(failures), 1)
             self.assertTrue(any("occurred 2 times" in w for w in result["warnings"]))
+
+
+class DreamChurnTests(unittest.TestCase):
+    def test_second_apply_on_quiet_tree_is_cooldown_noop(self) -> None:
+        import asyncio
+        import os
+
+        from memory_fabric.storage import dream as _async_dream
+        from memory_fabric.templates import now_iso
+
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            write_memory_store(
+                temp,
+                "decisions/cache-policy",
+                "The cache TTL for TaskMaster task lists is 3600 seconds.",
+                title="Cache Policy",
+            )
+            # Stamp a recent apply with matching fingerprint so cooldown engages.
+            from memory_fabric.storage.finalize import _store_fingerprint
+
+            private = Path(temp) / ".ai-memory" / "private"
+            private.mkdir(parents=True, exist_ok=True)
+            fp = _store_fingerprint(Path(temp) / ".ai-memory")
+            (private / "last_dream_apply").write_text(now_iso() + "\n" + fp + "\n", encoding="utf-8")
+            os.environ["MEMORY_FABRIC_DREAM_COOLDOWN_MINUTES"] = "30"
+            try:
+                snaps_before = list((Path(temp) / ".ai-memory" / "snapshots").glob("memory-*"))
+                second = asyncio.run(_async_dream(temp, mode="light", apply=True))
+                snaps_after = list((Path(temp) / ".ai-memory" / "snapshots").glob("memory-*"))
+            finally:
+                os.environ.pop("MEMORY_FABRIC_DREAM_COOLDOWN_MINUTES", None)
+            self.assertTrue(
+                any("cooldown" in w.lower() or "skipped" in w.lower() for w in second["warnings"]),
+                second["warnings"],
+            )
+            self.assertFalse(second["changed"])
+            self.assertEqual(len(snaps_after), len(snaps_before))
+            self.assertEqual(second.get("snapshot") or "", "")
 
 
 if __name__ == "__main__":

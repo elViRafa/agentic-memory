@@ -1,20 +1,25 @@
 ---
 store_path: architecture/decisions/contradiction-detection
-title: "Full contradiction detection (R7-3)"
-summary: "Full contradiction detection (R7-3)"
+title: "Contradiction precision and pack surface"
+summary: "Contradiction detection remains advisory (never deletes or picks a winner)"
 priority: high
-tags: [dreaming, doctor, contradictions]
+tags: [dreaming, doctor, contradictions, pack]
 schema_version: 1.3
-last_updated: "2026-08-15T17:32:57-04:00"
+last_updated: "2026-09-21T08:21:25-03:00"
 evidence: [src/memory_fabric/storage/contradictions.py, tests/test_contradictions.py]
 ---
 
-Contradiction detection is no longer numbers-only. `storage/contradictions.py` flags three deterministic kinds:
+Contradiction detection remains advisory (never deletes or picks a winner).
 
-- numeric Jaccard clashes (the original P-10 TTL 3600 vs 60 net)
-- polarity on a shared identifier (use DRF vs do not use DRF)
-- named decision reversals (PRD 0009 reverses PRD 0008 / `urnas_add_pos_calc`)
+**Precision (2026-09-21):**
+- Generic-ident IDF: idents in ≥25% of scanned files are vocabulary (`lora`, `cpt`), not decisions — polarity on them is dropped.
+- Same-topic gate: polarity/numeric require shared top-level store prefix or title/body Jaccard ≥0.25.
+- Successive-version numeric skip: paths that differ only by `sN` / `vN` / `waveN` are evolution, not conflict.
+- Bugs-vs-other polarity skip: a bug fix that says "do not use LoRA on embeddings" is not an ADR against training LoRA.
 
-Dreaming and `doctor` surface hits for review. Nothing is deleted or auto-chosen. Deep dream can ask the already-configured LLM about remaining overlapping pairs via the same `call_llm` the consolidation path uses, so mocks still cover it.
+**Pack surface:**
+- `index.md` frontmatter keeps at most 5 hits (reversal > numeric > polarity) plus `contradiction_count`.
+- Full advisory list is written to gitignored `evals/contradictions.json` (also written to the live tree because `evals/` is excluded from candidate apply).
+- Doctor still surfaces top hits; agents must not treat pack YAML as a wall of actionable ADRs.
 
-Episodic journals and failure records are skipped. Cap is 150 files / 50 hits.
+Episodic journals and failure records remain skipped. Cap is 150 files / 50 hits for the full scan.

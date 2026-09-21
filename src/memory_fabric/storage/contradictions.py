@@ -4,10 +4,17 @@ Deterministic first (numeric disagreement, polarity on a shared identifier,
 explicit reversal of a named decision). LLM-assisted when a provider is
 already in play for a deep dream. Conflicts are surfaced for review —
 never silently resolved or deleted.
+
+Field stores (search-sermons scale) showed the always-on pack drowning in
+polarity spam on vocabulary tokens (``lora``, ``cpt``) across unrelated
+categories. Precision gates (IDF, same-topic, successive-version, bugs-skip)
+and a separate pack surface (top-N in ``index.md``, full list in
+``evals/contradictions.json``) keep startup context usable.
 """
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,6 +32,9 @@ from memory_fabric.storage._shared import (
 # Cap the O(n^2) pair scan. Advisory, not an index.
 _SCAN_LIMIT = 150
 _MAX_HITS = 50
+_PACK_MAX = 5
+_GENERIC_IDENT_FRAC = 0.25
+_SAME_TOPIC_JACCARD = 0.25
 _NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
 _IDENT_RE = re.compile(
     r"\b("
@@ -93,7 +103,13 @@ _REVERSAL_RE = re.compile(
     r"(?P<ref>\d{2,}|\w[\w-]{2,})",
     re.IGNORECASE,
 )
+# Normalize successive wave/version tokens so s2 vs s3 is evolution, not conflict.
+_VERSION_TOKEN_RE = re.compile(
+    r"(?:^|[-_/])(?:s|v|wave|phase|step|epoch|round)[-_]?\d+(?=$|[-_/])",
+    re.IGNORECASE,
+)
 _SKIP_TOP = frozenset({"episodic", "failures"})
+_KIND_RANK = {"reversal": 0, "numeric": 1, "llm": 2, "polarity": 3}
 ContradictionKind = Literal["numeric", "polarity", "reversal", "llm"]
 
 
@@ -121,9 +137,10 @@ def detect_contradictions(memory_root: Path) -> list[Contradiction]:
     ``memory_root`` is a `.ai-memory/` directory (live or candidate).
     """
     entries = _load_entries(memory_root)
+    generic = _generic_idents(entries)
     hits: list[Contradiction] = []
     hits.extend(_detect_numeric(entries))
-    hits.extend(_detect_polarity(entries))
+    hits.extend(_detect_polarity(entries, generic))
     hits.extend(_detect_reversals(entries))
     return _dedupe(hits)[:_MAX_HITS]
 
@@ -134,6 +151,75 @@ def format_contradiction(hit: Contradiction) -> str:
 
 def detect_contradiction_messages(memory_root: Path) -> list[str]:
     return [format_contradiction(hit) for hit in detect_contradictions(memory_root)]
+
+
+def select_pack_contradictions(
+    hits: list[Contradiction], max_n: int = _PACK_MAX
+) -> list[Contradiction]:
+    """Top-N hits for ``index.md`` frontmatter (reversal > numeric > polarity)."""
+    if max_n <= 0:
+        return []
+    ranked = sorted(
+        hits,
+        key=lambda h: (_KIND_RANK.get(h.kind, 9), h.message),
+    )
+    return ranked[:max_n]
+
+
+def pack_contradiction_messages(
+    hits: list[Contradiction],
+    llm_messages: list[str] | None = None,
+    max_n: int = _PACK_MAX,
+) -> tuple[list[str], int]:
+    """Return ``(messages_for_index_frontmatter, total_hit_count)``.
+
+    LLM strings that are not already covered by a deterministic hit can fill
+    remaining pack slots. Full hit count includes deterministic hits only;
+    LLM extras are advisory add-ons for the pack list.
+    """
+    selected = select_pack_contradictions(hits, max_n=max_n)
+    messages = [format_contradiction(h) for h in selected]
+    total = len(hits)
+    if llm_messages and len(messages) < max_n:
+        for raw in llm_messages:
+            text = str(raw or "").strip()
+            if not text or text in messages:
+                continue
+            messages.append(text)
+            if len(messages) >= max_n:
+                break
+    return messages, total
+
+
+def write_contradiction_report(
+    memory_root: Path,
+    hits: list[Contradiction],
+    llm_messages: list[str] | None = None,
+) -> Path | None:
+    """Write the full advisory list to gitignored ``evals/contradictions.json``."""
+    evals = memory_root / "evals"
+    try:
+        evals.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "count": len(hits),
+            "pack_max": _PACK_MAX,
+            "hits": [
+                {
+                    "store_path_a": h.store_path_a,
+                    "store_path_b": h.store_path_b,
+                    "kind": h.kind,
+                    "message": h.message,
+                    "evidence": h.evidence,
+                }
+                for h in hits
+            ],
+            "llm_messages": [str(m) for m in (llm_messages or []) if str(m).strip()],
+        }
+        path = evals / "contradictions.json"
+        path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        return path
+    except OSError:
+        return None
 
 
 async def enrich_contradictions_with_llm(
@@ -204,6 +290,53 @@ def _load_entries(memory_root: Path) -> list[_Entry]:
     return entries
 
 
+def _generic_idents(entries: list[_Entry]) -> frozenset[str]:
+    """Idents that appear in enough files to be vocabulary, not a decision."""
+    if len(entries) < 4:
+        return frozenset()
+    counts: dict[str, int] = {}
+    for entry in entries:
+        for ident in entry.idents:
+            counts[ident] = counts.get(ident, 0) + 1
+    threshold = max(2, int(len(entries) * _GENERIC_IDENT_FRAC + 0.999))
+    return frozenset(ident for ident, n in counts.items() if n >= threshold)
+
+
+def _top_level_prefix(store_path: str) -> str:
+    parts = [p for p in store_path.replace("\\", "/").strip("/").split("/") if p]
+    return parts[0].casefold() if parts else ""
+
+
+def _same_topic(a: _Entry, b: _Entry) -> bool:
+    if _top_level_prefix(a.store_path) and _top_level_prefix(a.store_path) == _top_level_prefix(
+        b.store_path
+    ):
+        return True
+    blob_a = f"{a.title}\n{a.body}"
+    blob_b = f"{b.title}\n{b.body}"
+    return _jaccard_similar(blob_a, blob_b, threshold=_SAME_TOPIC_JACCARD)
+
+
+def _normalize_versioned_path(store_path: str) -> str:
+    text = store_path.replace("\\", "/").casefold()
+    return _VERSION_TOKEN_RE.sub("-N", text)
+
+
+def _successive_version_pair(a: str, b: str) -> bool:
+    """True when paths differ only by wave/version tokens (s2 vs s3, v2 vs v3)."""
+    na = _normalize_versioned_path(a)
+    nb = _normalize_versioned_path(b)
+    if na != nb:
+        return False
+    return a.replace("\\", "/").casefold() != b.replace("\\", "/").casefold()
+
+
+def _bugs_vs_other(a: str, b: str) -> bool:
+    pa = _top_level_prefix(a)
+    pb = _top_level_prefix(b)
+    return (pa == "bugs") != (pb == "bugs") and (pa == "bugs" or pb == "bugs")
+
+
 def _ident_polarities(body: str) -> dict[str, str]:
     found: dict[str, str] = {}
     for match in _IDENT_RE.finditer(body):
@@ -239,6 +372,10 @@ def _detect_numeric(entries: list[_Entry]) -> list[Contradiction]:
         for b in entries[i + 1 :]:
             if not b.numbers or a.numbers == b.numbers:
                 continue
+            if _successive_version_pair(a.store_path, b.store_path):
+                continue
+            if not _same_topic(a, b):
+                continue
             if not _jaccard_similar(a.body, b.body, threshold=0.3):
                 continue
             only_a = " / ".join(sorted(a.numbers - b.numbers)[:3]) or "-"
@@ -259,13 +396,21 @@ def _detect_numeric(entries: list[_Entry]) -> list[Contradiction]:
     return hits
 
 
-def _detect_polarity(entries: list[_Entry]) -> list[Contradiction]:
+def _detect_polarity(
+    entries: list[_Entry], generic: frozenset[str]
+) -> list[Contradiction]:
     hits: list[Contradiction] = []
     seen_pairs: set[tuple[str, str, str]] = set()
     for i, a in enumerate(entries):
         for b in entries[i + 1 :]:
+            if _bugs_vs_other(a.store_path, b.store_path):
+                continue
+            if not _same_topic(a, b):
+                continue
             shared = set(a.idents) & set(b.idents)
             for ident in sorted(shared):
+                if ident in generic:
+                    continue
                 pol_a = a.idents[ident]
                 pol_b = b.idents[ident]
                 if pol_a not in {"pos", "neg"} or pol_b not in {"pos", "neg"}:
@@ -354,6 +499,8 @@ def _unresolved_overlap_pairs(
         for b in entries[i + 1 :]:
             if a.store_path in already and b.store_path in already:
                 continue
+            if not _same_topic(a, b):
+                continue
             if not _jaccard_similar(a.body, b.body, threshold=0.3):
                 continue
             pairs.append((a, b))
@@ -384,8 +531,6 @@ def _parse_llm_contradictions(raw: str) -> list[str]:
         text = re.sub(r"^```(?:json)?\s*", "", text)
         text = re.sub(r"\s*```$", "", text)
     try:
-        import json
-
         data = json.loads(text)
     except (ValueError, TypeError):
         return []

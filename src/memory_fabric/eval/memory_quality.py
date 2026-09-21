@@ -147,13 +147,15 @@ def evaluate_memory_quality(cwd: str, root: Path | None = None) -> EvalCategory:
             continue
         template_body = str(SECTION_TEMPLATES.get(required, {}).get("body", "")).strip()
         if _is_placeholder_body(required, body, template_body):
+            status = "fail" if required == "ubiquitous-language" else "warn"
+            severity = "high" if required == "ubiquitous-language" else "medium"
             checks.append(
                 _check(
                     f"{required}_placeholder",
-                    "warn",
-                    "medium",
+                    status,
+                    severity,
                     f"{required}.md still looks like starter template content.",
-                    f"Add project-specific facts to {required}.md.",
+                    f"Add project-specific facts to {required}.md, or demote/omit it.",
                 )
             )
         elif len(body) < 120 and required in {"architecture", "schemas", "decisions"}:
@@ -477,7 +479,7 @@ def _evaluate_retrieval_readiness(cwd: str) -> EvalCategory:
 
 
 def _evaluate_retrieval_quality(cwd: str) -> EvalCategory:
-    """Score precision@k / recall@k / budget-fit from a local retrieval fixture.
+    """Score pack tasks + precision@k from a local retrieval fixture.
 
     Driven by ``.ai-memory/evals/retrieval.yaml`` (or ``.json``). No LLM.
     Missing fixtures are a skip/pass so repos without a harness stay green.
@@ -489,22 +491,26 @@ def _evaluate_retrieval_quality(cwd: str) -> EvalCategory:
     yaml_path = memory_dir / "evals" / "retrieval.yaml"
     json_path = memory_dir / "evals" / "retrieval.json"
     cases = _load_retrieval_cases(yaml_path if yaml_path.exists() else json_path)
-    if not cases:
-        return _category(
-            "retrieval_quality",
-            MEMORY_WEIGHTS["retrieval_quality"],
-            [
-                _check(
-                    "retrieval_fixtures_absent",
-                    "pass",
-                    "info",
-                    "No .ai-memory/evals/retrieval.yaml — retrieval quality not scored.",
-                    "Add {query, expected_store_paths} cases so ranking regressions fail CI.",
-                )
-            ],
-        )
-
     checks: list[EvalCheck] = []
+    checks.extend(_contradiction_pack_hygiene_checks(memory_dir))
+
+    if not cases:
+        if not checks:
+            return _category(
+                "retrieval_quality",
+                MEMORY_WEIGHTS["retrieval_quality"],
+                [
+                    _check(
+                        "retrieval_fixtures_absent",
+                        "pass",
+                        "info",
+                        "No .ai-memory/evals/retrieval.yaml — retrieval quality not scored.",
+                        "Add {query, must_include_store_path / expected_store_paths} cases.",
+                    )
+                ],
+            )
+        return _category("retrieval_quality", MEMORY_WEIGHTS["retrieval_quality"], checks)
+
     try:
         bundle = read_combined_context(cwd)
         if bundle["estimated_tokens"] <= bundle["token_budget"]:
@@ -541,9 +547,72 @@ def _evaluate_retrieval_quality(cwd: str) -> EvalCategory:
 
     for index, case in enumerate(cases):
         query = str(case.get("query") or "")
-        expected = [str(p).strip("/") for p in (case.get("expected_store_paths") or [])]
+        if not query:
+            continue
+        must_include: list[str] = []
+        raw_include = case.get("must_include_store_path")
+        if isinstance(raw_include, str) and raw_include.strip():
+            must_include = [raw_include.strip().strip("/")]
+        elif case.get("must_include_store_paths"):
+            must_include = [
+                str(p).strip("/") for p in case["must_include_store_paths"] if str(p).strip()
+            ]
+        elif case.get("expected_store_paths"):
+            must_include = [
+                str(p).strip("/") for p in case["expected_store_paths"] if str(p).strip()
+            ]
+        must_exclude: list[str] = []
+        raw_exclude = case.get("must_exclude_store_path")
+        if isinstance(raw_exclude, str) and raw_exclude.strip():
+            must_exclude = [raw_exclude.strip().strip("/")]
+        elif case.get("must_exclude_store_paths"):
+            must_exclude = [
+                str(p).strip("/") for p in case["must_exclude_store_paths"] if str(p).strip()
+            ]
         k = int(case.get("k") or 5)
-        if not query or not expected:
+        use_pack = bool(
+            case.get("use_pack")
+            or raw_include
+            or case.get("must_include_store_paths")
+            or raw_exclude
+            or case.get("must_exclude_store_paths")
+        )
+
+        if use_pack:
+            try:
+                pack = read_combined_context(cwd, query=query)
+            except Exception as exc:  # noqa: BLE001
+                checks.append(
+                    _check(
+                        f"retrieval_pack_case_{index}",
+                        "fail",
+                        "high",
+                        f"query={query!r} pack failed: {exc}",
+                        "Fix read_combined_context for task queries.",
+                    )
+                )
+                continue
+            included = [
+                str(s).removeprefix("store/").strip("/")
+                for s in (pack.get("included_sections") or [])
+            ]
+            missing = [p for p in must_include if p not in included]
+            leaked = [p for p in must_exclude if p in included]
+            ok = not missing and not leaked
+            checks.append(
+                _check(
+                    f"retrieval_pack_case_{index}",
+                    "pass" if ok else "fail",
+                    "high" if not ok else "info",
+                    f"query={query!r} must_include={must_include} missing={missing} "
+                    f"must_exclude={must_exclude} leaked={leaked}",
+                    "Fix ranking so live handoffs beat stale / superseded entries.",
+                )
+            )
+            continue
+
+        expected = must_include
+        if not expected:
             continue
         results = keyword_search(cwd, query, max_results=k)
         hit_paths = []
@@ -572,10 +641,56 @@ def _evaluate_retrieval_quality(cwd: str) -> EvalCategory:
                 "warn",
                 "low",
                 "Retrieval fixture file existed but contained no usable cases.",
-                "Each case needs a query and expected_store_paths.",
+                "Each case needs a query and expected_store_paths or must_include_store_path.",
             )
         )
     return _category("retrieval_quality", MEMORY_WEIGHTS["retrieval_quality"], checks)
+
+
+def _contradiction_pack_hygiene_checks(memory_dir: Path) -> list[EvalCheck]:
+    """Fail when index.md frontmatter ships a wall of contradiction spam."""
+    index_path = memory_dir / "index.md"
+    if not index_path.exists():
+        return []
+    try:
+        metadata, _body = parse_frontmatter(index_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, FrontmatterError):
+        return []
+    contradictions = metadata.get("contradictions") or []
+    if not isinstance(contradictions, list):
+        return []
+    count = len(contradictions)
+    tokens = sum(max(1, len(str(item)) // 4) for item in contradictions)
+    if count == 0:
+        return [
+            _check(
+                "contradiction_pack_hygiene",
+                "pass",
+                "info",
+                "index.md has no contradiction pack entries.",
+                "Keep pack surface small; full hits belong in evals/contradictions.json.",
+            )
+        ]
+    if count > 8 or tokens > 150:
+        return [
+            _check(
+                "contradiction_pack_hygiene",
+                "fail",
+                "high",
+                f"index.md ships {count} contradiction strings (~{tokens} tokens) "
+                "into the always-on pack.",
+                "Keep pack ≤5 high-confidence hits; write full list to evals/contradictions.json.",
+            )
+        ]
+    return [
+        _check(
+            "contradiction_pack_hygiene",
+            "pass",
+            "info",
+            f"index.md contradiction pack is bounded ({count} entries, ~{tokens} tokens).",
+            "Keep pack surface small.",
+        )
+    ]
 
 
 def _load_retrieval_cases(path: Path) -> list[dict[str, Any]]:
@@ -604,7 +719,7 @@ def _parse_simple_retrieval_yaml(text: str) -> list[dict[str, Any]]:
     """Minimal parser for the retrieval fixture shape. No PyYAML dependency."""
     cases: list[dict[str, Any]] = []
     current: dict[str, Any] | None = None
-    in_paths = False
+    list_key: str | None = None
     for raw_line in text.splitlines():
         line = raw_line.rstrip()
         stripped = line.strip()
@@ -616,25 +731,44 @@ def _parse_simple_retrieval_yaml(text: str) -> list[dict[str, Any]]:
             current = {
                 "query": stripped.split(":", 1)[1].strip().strip("\"'"),
                 "expected_store_paths": [],
+                "must_include_store_paths": [],
+                "must_exclude_store_paths": [],
                 "k": 5,
             }
-            in_paths = False
+            list_key = None
             continue
         if current is None:
             continue
         if stripped.startswith("query:"):
             current["query"] = stripped.split(":", 1)[1].strip().strip("\"'")
-            in_paths = False
+            list_key = None
         elif stripped.startswith("k:"):
             with contextlib.suppress(ValueError):
                 current["k"] = int(stripped.split(":", 1)[1].strip())
-            in_paths = False
+            list_key = None
+        elif stripped.startswith("use_pack:"):
+            current["use_pack"] = stripped.split(":", 1)[1].strip().lower() in {
+                "1",
+                "true",
+                "yes",
+            }
+            list_key = None
+        elif stripped.startswith("must_include_store_path:"):
+            current["must_include_store_path"] = stripped.split(":", 1)[1].strip().strip("\"'")
+            list_key = None
+        elif stripped.startswith("must_exclude_store_path:"):
+            current["must_exclude_store_path"] = stripped.split(":", 1)[1].strip().strip("\"'")
+            list_key = None
         elif stripped.startswith("expected_store_paths:"):
-            in_paths = True
-        elif in_paths and stripped.startswith("- "):
-            current.setdefault("expected_store_paths", []).append(stripped[2:].strip().strip("\"'"))
+            list_key = "expected_store_paths"
+        elif stripped.startswith("must_include_store_paths:"):
+            list_key = "must_include_store_paths"
+        elif stripped.startswith("must_exclude_store_paths:"):
+            list_key = "must_exclude_store_paths"
+        elif list_key and stripped.startswith("- "):
+            current.setdefault(list_key, []).append(stripped[2:].strip().strip("\"'"))
         else:
-            in_paths = False
+            list_key = None
     if current:
         cases.append(current)
     return cases

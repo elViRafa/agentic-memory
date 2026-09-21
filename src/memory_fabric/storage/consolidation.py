@@ -184,6 +184,7 @@ def _regenerate_index_root(
     mode: str,
     consolidation_hash: str | None = None,
     contradictions: list[str] | None = None,
+    contradiction_count: int | None = None,
     warnings: list[str] | None = None,
     compile_consolidated: bool = True,
 ) -> list[str]:
@@ -316,7 +317,12 @@ def _regenerate_index_root(
     if consolidation_hash is not None:
         metadata["consolidation_hash"] = consolidation_hash
     if contradictions is not None:
+        # Pack surface only — full advisory list lives in evals/contradictions.json.
         metadata["contradictions"] = contradictions
+    if contradiction_count is not None:
+        metadata["contradiction_count"] = contradiction_count
+    elif contradictions is not None:
+        metadata["contradiction_count"] = len(contradictions)
     if warnings is not None:
         metadata["consolidation_warnings"] = warnings
 
@@ -590,6 +596,35 @@ def _normalize_dedupe_line(line: str) -> str | None:
     if len(cleaned) < 24:
         return None
     return cleaned
+
+
+def _is_view_relative(relative: str, root: Path) -> bool:
+    """True for generated indexes / maps / consolidated dumps (not store facts)."""
+    from memory_fabric.templates import GENERATED_MAP_SECTIONS
+
+    norm = str(relative).replace("\\", "/")
+    if norm in {"index.md", "consolidated_memory.md", "memory-store/index.md"}:
+        return True
+    if "/" not in norm and Path(norm).stem in GENERATED_MAP_SECTIONS:
+        return True
+    path = root / relative
+    return bool(path.exists() and _is_generated_file(path))
+
+
+def _is_view_only_delta(
+    affected_files: list[str],
+    *,
+    compiled_changed: bool,
+    candidate_root: Path,
+) -> bool:
+    """True when the candidate only rewrote generated views / pack surface."""
+    if not affected_files and not compiled_changed:
+        return True
+    if affected_files and not all(
+        _is_view_relative(rel, candidate_root) for rel in affected_files
+    ):
+        return False
+    return True
 
 
 def _diff_memory_roots(before_root: Path, after_root: Path) -> tuple[str, list[str]]:

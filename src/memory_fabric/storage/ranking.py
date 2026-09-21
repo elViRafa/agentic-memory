@@ -121,6 +121,22 @@ def lifecycle_penalty(key: str) -> float:
     return 1.0
 
 
+def review_status_penalty(review_status: str | None) -> float:
+    """Omit stale / broken-evidence from query packs (score → 0); keep readable via tools."""
+    status = (review_status or "").strip().lower()
+    if status in {"stale", "broken-evidence"}:
+        return 0.0
+    return 1.0
+
+
+def superseded_penalty(superseded_by: str | None) -> float:
+    """Hard downrank when frontmatter points at a replacement store path."""
+    target = (superseded_by or "").strip()
+    if target:
+        return 0.1
+    return 1.0
+
+
 def query_map_penalty(key: str, *, query_present: bool) -> float:
     """With a query, generated maps must not outrank the matching store hit."""
     if not query_present:
@@ -188,8 +204,10 @@ def blended_score(
     *,
     key: str = "",
     query_present: bool = False,
+    review_status: str | None = None,
+    superseded_by: str | None = None,
 ) -> float:
-    """``bm25 * priority * recency * category * lifecycle * map-query``."""
+    """``bm25 * priority * recency * category * lifecycle * status * map-query``."""
     raw = bm25 if bm25 > 0 else 0.0
     if query_present:
         # Unmatched files must not keep the old "base = 1.0" no-query behavior
@@ -207,6 +225,8 @@ def blended_score(
         * recency_weight(last_updated, half_life_days=_half_life_for_key(key))
         * category_penalty(key)
         * lifecycle_penalty(key)
+        * review_status_penalty(review_status)
+        * superseded_penalty(superseded_by)
         * query_map_penalty(key, query_present=query_present)
     )
 

@@ -28,7 +28,7 @@ from memory_fabric.storage._shared import (
 )
 from memory_fabric.storage.ranking import tokenize
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _CREATE_SQL = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -44,6 +44,8 @@ CREATE TABLE IF NOT EXISTS files (
     summary TEXT,
     tags TEXT,
     last_updated TEXT,
+    review_status TEXT,
+    superseded_by TEXT,
     body_tokens INTEGER,
     content_hash TEXT,
     mtime REAL,
@@ -65,6 +67,8 @@ class IndexRow:
     summary: str
     tags: list[str]
     last_updated: str
+    review_status: str
+    superseded_by: str
     body_tokens: int
     content_hash: str
     mtime: float
@@ -184,9 +188,9 @@ def sync_index(cwd: str) -> sqlite3.Connection | None:
                 """
                 INSERT INTO files (
                     relpath, section_key, store_path, priority, title, summary, tags,
-                    last_updated, body_tokens, content_hash, mtime, is_generated,
-                    is_steering, is_map, rank_text
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    last_updated, review_status, superseded_by, body_tokens, content_hash,
+                    mtime, is_generated, is_steering, is_map, rank_text
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(relpath) DO UPDATE SET
                     section_key=excluded.section_key,
                     store_path=excluded.store_path,
@@ -195,6 +199,8 @@ def sync_index(cwd: str) -> sqlite3.Connection | None:
                     summary=excluded.summary,
                     tags=excluded.tags,
                     last_updated=excluded.last_updated,
+                    review_status=excluded.review_status,
+                    superseded_by=excluded.superseded_by,
                     body_tokens=excluded.body_tokens,
                     content_hash=excluded.content_hash,
                     mtime=excluded.mtime,
@@ -212,6 +218,8 @@ def sync_index(cwd: str) -> sqlite3.Connection | None:
                     summary,
                     json.dumps(tags, ensure_ascii=False),
                     str(metadata.get("last_updated") or ""),
+                    str(metadata.get("review_status") or ""),
+                    str(metadata.get("superseded_by") or ""),
                     estimate_tokens(raw),
                     digest,
                     mtime,
@@ -252,6 +260,8 @@ def load_rows(conn: sqlite3.Connection, memory_dir: Path) -> list[IndexRow]:
                     summary=row["summary"] or "",
                     tags=[str(t) for t in tags],
                     last_updated=row["last_updated"] or "",
+                    review_status=row["review_status"] if "review_status" in row.keys() else "",
+                    superseded_by=row["superseded_by"] if "superseded_by" in row.keys() else "",
                     body_tokens=int(row["body_tokens"] or 0),
                     content_hash=row["content_hash"] or "",
                     mtime=float(row["mtime"] or 0),

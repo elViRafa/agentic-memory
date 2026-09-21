@@ -6,6 +6,8 @@ transcripts, tool calls) and a candidate store, then hand off to
 
 from __future__ import annotations
 
+import os
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -29,11 +31,79 @@ from memory_fabric.storage.finalize import (
     _is_llm_ready,
     _parse_llm_json_response,
     _process_and_finalize_candidate,
+    _store_fingerprint,
     build_consolidation_prompt,
 )
 from memory_fabric.storage.lifecycle import initialize_memory_fabric
 from memory_fabric.storage.maps import regenerate_maps
 from memory_fabric.storage.snapshots import create_snapshot
+
+_DEFAULT_COOLDOWN_MINUTES = 5
+
+
+def _cooldown_minutes() -> int:
+    try:
+        value = int(os.environ.get("MEMORY_FABRIC_DREAM_COOLDOWN_MINUTES", ""))
+        if value >= 0:
+            return value
+    except (TypeError, ValueError):
+        pass
+    return _DEFAULT_COOLDOWN_MINUTES
+
+
+def _dream_cooldown_reason(memory_dir: Path) -> str | None:
+    """Return a skip message when a recent apply left the store unchanged."""
+    minutes = _cooldown_minutes()
+    if minutes <= 0:
+        return None
+    marker = memory_dir / "private" / "last_dream_apply"
+    if not marker.exists():
+        return None
+    try:
+        lines = marker.read_text(encoding="utf-8").strip().splitlines()
+        if not lines:
+            return None
+        stamped = datetime.fromisoformat(lines[0].replace("Z", "+00:00"))
+        if stamped.tzinfo is None:
+            stamped = stamped.replace(tzinfo=UTC)
+        age_sec = (datetime.now(UTC) - stamped.astimezone(UTC)).total_seconds()
+        prev_fp = lines[1].strip() if len(lines) > 1 else ""
+    except (OSError, UnicodeDecodeError, ValueError):
+        return None
+    if age_sec >= minutes * 60:
+        return None
+    # Content fingerprint — not mtime — so Windows coarse timestamps and
+    # same-second writes after apply still unlock the next dream.
+    if prev_fp and _store_fingerprint(memory_dir) != prev_fp:
+        return None
+    if not prev_fp:
+        return None
+    remaining = max(1, int((minutes * 60 - age_sec) / 60) + 1)
+    return (
+        f"Dream skipped: last apply was {int(age_sec // 60)}m ago and the store is "
+        f"unchanged (cooldown {minutes}m; ~{remaining}m left). "
+        "Set MEMORY_FABRIC_DREAM_COOLDOWN_MINUTES=0 to disable."
+    )
+
+
+def _empty_dream_result(memory_dir: Path, warnings: list[str]) -> DreamResult:
+    return {
+        "changed": False,
+        "snapshot": "",
+        "warnings": warnings,
+        "checked_files": [],
+        "candidate_store": "",
+        "patch_preview": "",
+        "affected_files": [],
+        "consolidation": {
+            "duplicates_found": 0,
+            "lines_removed": 0,
+            "files_touched": [],
+        },
+        "rewrite_tasks": [],
+        "apply_required": False,
+        "redactions": 0,
+    }
 
 
 def _read_optional_text(path: Path) -> str:
@@ -87,6 +157,11 @@ async def dream(
     memory_dir = local_memory_dir(cwd)
     if not memory_dir.exists():
         initialize_memory_fabric(cwd)
+
+    if apply and mode == "light":
+        cooldown = _dream_cooldown_reason(memory_dir)
+        if cooldown:
+            return _empty_dream_result(memory_dir, [cooldown])
 
     snapshot = create_snapshot(cwd)
     candidate_root = _create_candidate_store(memory_dir, snapshot)
@@ -175,10 +250,13 @@ async def dream(
             ) = _read_previous_consolidation_metadata(index_path)
 
             if previous_consolidation_hash == current_consolidation_hash:
-                # Skip LLM consolidation call and use cached results
+                # Skip LLM consolidation call and use cached results.
+                # Do not re-inject the prior pack list as "LLM contradictions" —
+                # that padded pack_contradiction_messages and dirtied index.md
+                # on every hash-hit dream. Deterministic detect_* rebuilds the pack.
                 resp_data = {
                     "consolidated_files": {},
-                    "contradictions": previous_contradictions,
+                    "contradictions": [],
                     "warnings": previous_warnings,
                 }
             else:

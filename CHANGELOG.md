@@ -8,6 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Contradiction pack spam.** Polarity IDF drops vocabulary tokens (`lora`,
+  `cpt`), same-topic / successive-version / bugs-vs-other gates cut false
+  hits, and `index.md` keeps at most 5 pack entries. Full advisory list goes
+  to gitignored `evals/contradictions.json`.
+- **Stale / superseded lose retrieval.** `review_status: stale|broken-evidence`
+  and `superseded_by` hard-downrank in `blended_score` (context + search).
+- **Eval measures the pack.** Retrieval fixtures support
+  `must_include` / `must_exclude` via `read_combined_context`;
+  `contradiction_pack_hygiene` fails when index ships >8 contradiction
+  strings. Empty `ubiquitous-language` is now a fail. Index-only dream
+  score deltas are not counted as quality wins.
+- **Dream artifact churn.** Applied dreams prune leftover candidates
+  (`keep_candidates=0`); no-op dreams discard their snapshot/candidate;
+  light-dream cooldown (`MEMORY_FABRIC_DREAM_COOLDOWN_MINUTES`, default 5)
+  skips when the store is unchanged since the last apply.
+- **Doctor smells.** Stale-only `decisions/`, off-topic failures, and
+  ADR-shaped diary-prefix files are warned.
+
 ## [1.4.1] — 2026-09-05
 
 ### Fixed

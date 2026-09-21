@@ -261,7 +261,8 @@ def write_memory_store(
                 extra = f" (+{len(siblings) - 5} more)" if len(siblings) > 5 else ""
                 warnings.append(
                     f"Other high-priority *handoff files still exist under the same "
-                    f"prefix: {sample}{extra}. Demote finished waves to low."
+                    f"prefix: {sample}{extra}. Demote finished waves to low, or stamp "
+                    f"superseded_by: {store_path} on the previous handoff."
                 )
 
     if changed:

@@ -31,11 +31,87 @@ from memory_fabric.storage.consolidation import (
     _apply_candidate_to_live,
     _build_rewrite_tasks,
     _diff_memory_roots,
+    _is_view_only_delta,
     _regenerate_index_root,
 )
-from memory_fabric.storage.contradictions import detect_contradictions
+from memory_fabric.storage.contradictions import (
+    detect_contradictions,
+    pack_contradiction_messages,
+    write_contradiction_report,
+)
 from memory_fabric.storage.maps import regenerate_maps
 from memory_fabric.templates import build_empty_section, now_iso
+
+_LAST_DREAM_APPLY = "last_dream_apply"
+
+
+def _store_fingerprint(memory_dir: Path) -> str:
+    """Stable hash of granular store bodies (excludes generated indexes)."""
+    import hashlib
+
+    digest = hashlib.md5()
+    store = memory_dir / "memory-store"
+    if not store.is_dir():
+        return digest.hexdigest()
+    for path in sorted(_iter_markdown_files(store)):
+        if path.name == "index.md" or _is_generated_file(path):
+            continue
+        try:
+            rel = path.relative_to(store).as_posix()
+            digest.update(rel.encode("utf-8"))
+            digest.update(path.read_bytes())
+        except OSError:
+            continue
+    return digest.hexdigest()
+
+
+def _mark_dream_apply(memory_dir: Path) -> None:
+    private = memory_dir / "private"
+    try:
+        private.mkdir(parents=True, exist_ok=True)
+        stamp = now_iso()
+        fingerprint = _store_fingerprint(memory_dir)
+        (private / _LAST_DREAM_APPLY).write_text(
+            f"{stamp}\n{fingerprint}\n", encoding="utf-8"
+        )
+    except OSError:
+        return
+
+
+def _discard_noop_artifacts(
+    memory_dir: Path, snapshot: str | None, candidate_root: Path
+) -> None:
+    """Remove the snapshot + candidate created for a dream that did not apply."""
+    import shutil
+
+    if snapshot:
+        snap_dir = memory_dir / "snapshots" / snapshot
+        if snap_dir.is_dir():
+            shutil.rmtree(snap_dir, ignore_errors=True)
+    if candidate_root.is_dir():
+        shutil.rmtree(candidate_root, ignore_errors=True)
+
+
+def _pack_surface_unchanged(memory_dir: Path, candidate_root: Path) -> bool:
+    """True when index pack contradictions match live (ignore last_updated)."""
+    volatile = ("last_updated", "consolidation_hash", "summary_hash")
+    for rel in ("index.md", "memory-store/index.md"):
+        live = memory_dir / rel
+        cand = candidate_root / rel
+        if live.exists() != cand.exists():
+            return False
+        if not live.exists():
+            continue
+        try:
+            live_meta, live_body = parse_frontmatter(live.read_text(encoding="utf-8"))
+            cand_meta, cand_body = parse_frontmatter(cand.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, FrontmatterError):
+            return False
+        live_cmp = {k: v for k, v in live_meta.items() if k not in volatile}
+        cand_cmp = {k: v for k, v in cand_meta.items() if k not in volatile}
+        if live_cmp != cand_cmp or live_body.strip("\n") != cand_body.strip("\n"):
+            return False
+    return True
 
 
 def _is_llm_ready(context: Any = None) -> bool:
@@ -323,10 +399,10 @@ async def _process_and_finalize_candidate(
             metadata["last_updated"] = now_iso()
             sec_path.write_text(dump_frontmatter(metadata, new_body), encoding="utf-8")
 
-    dream_contradictions = list(resp_data.get("contradictions", []) or [])
+    llm_contradictions = list(resp_data.get("contradictions", []) or [])
     dream_warnings = resp_data.get("warnings", [])
 
-    for c in dream_contradictions:
+    for c in llm_contradictions:
         warnings.append(f"Contradiction detected: {c}")
     for w in dream_warnings:
         warnings.append(f"Consolidation warning: {w}")
@@ -336,10 +412,22 @@ async def _process_and_finalize_candidate(
     # conflicts, and that failure is silent. Independently of what (or
     # whether) an LLM answered, flag numeric clashes, polarity reversals,
     # and named decision rollbacks. Advisory only — never pick a winner.
-    for hit in detect_contradictions(candidate_root):
-        if hit.message not in dream_contradictions:
-            dream_contradictions.append(hit.message)
-            warnings.append(f"Contradiction detected ({hit.kind}): {hit.message}")
+    # Pack surface is top-N only; full list goes to evals/contradictions.json
+    # so startup context is not poisoned by polarity spam.
+    det_hits = detect_contradictions(candidate_root)
+    write_contradiction_report(candidate_root, det_hits, llm_contradictions)
+    # evals/ is gitignored and excluded from candidate apply — also write to
+    # the live tree so doctor/eval can read the full advisory list.
+    write_contradiction_report(memory_dir, det_hits, llm_contradictions)
+    for hit in det_hits[:5]:
+        warnings.append(f"Contradiction detected ({hit.kind}): {hit.message}")
+    if len(det_hits) > 5:
+        warnings.append(
+            f"…and {len(det_hits) - 5} more contradiction(s); see evals/contradictions.json"
+        )
+    dream_contradictions, contradiction_count = pack_contradiction_messages(
+        det_hits, llm_contradictions
+    )
 
     # Recalculate hash of consolidated candidates (generated maps excluded — they
     # are derived from the store, which is already part of the hash input)
@@ -489,6 +577,7 @@ async def _process_and_finalize_candidate(
         mode=mode,
         consolidation_hash=current_consolidation_hash,
         contradictions=dream_contradictions,
+        contradiction_count=contradiction_count,
         warnings=dream_warnings,
     )
 
@@ -545,9 +634,20 @@ async def _process_and_finalize_candidate(
                 warnings.append(f"Could not compare consolidated_memory.md: {exc}")
                 compiled_changed = True
 
+    # Meaningful store/map/index updates still apply. A follow-up dream that
+    # only rewrites volatile timestamps leaves affected_files empty (see
+    # _write_markdown_if_changed) and becomes a no-op below.
     if apply and (affected_files or compiled_changed):
-        _apply_candidate_to_live(memory_dir, candidate_root, affected_files)
-        changed = True
+        if _is_view_only_delta(
+            affected_files, compiled_changed=compiled_changed, candidate_root=candidate_root
+        ) and _pack_surface_unchanged(memory_dir, candidate_root):
+            warnings.append(
+                "Dream no-op: only generated indexes / pack surface changed; skipped apply."
+            )
+        else:
+            _apply_candidate_to_live(memory_dir, candidate_root, affected_files)
+            changed = True
+            _mark_dream_apply(memory_dir)
 
     if apply:
         # Retention (P-11): every dream leaves one snapshot + one candidate
@@ -556,11 +656,24 @@ async def _process_and_finalize_candidate(
         try:
             from memory_fabric.storage.snapshots import prune_dream_artifacts
 
-            prune_dream_artifacts(
-                cwd="",
-                protect={snapshot or "", candidate_root.name},
-                memory_dir=memory_dir,
-            )
+            if changed:
+                # After a successful apply the candidate is leftover work —
+                # drop all candidates (keep_candidates=0) and keep the snapshot.
+                prune_dream_artifacts(
+                    cwd="",
+                    keep_candidates=0,
+                    protect={snapshot or ""},
+                    memory_dir=memory_dir,
+                )
+            else:
+                _discard_noop_artifacts(memory_dir, snapshot, candidate_root)
+                # No live memory delta — don't report candidate-only churn
+                # (e.g. volatile last_updated on indexes) as affected_files.
+                affected_files = []
+                patch_preview = ""
+                warnings.append(
+                    "Dream produced no live memory changes; discarded snapshot and candidate."
+                )
         except Exception as exc:  # noqa: BLE001 - cleanup is genuinely best-effort; reported, never fatal.
             warnings.append(f"Snapshot/candidate retention cleanup failed (non-fatal): {exc}")
 

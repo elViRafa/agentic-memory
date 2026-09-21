@@ -355,6 +355,9 @@ def _collect_sections_from_index(
                     "title": row.title,
                     "last_updated": row.last_updated,
                     "tags": row.tags,
+                    "review_status": row.review_status,
+                    "superseded_by": row.superseded_by,
+                    "store_path": row.store_path,
                 },
                 "path": row.path,
                 "rank_text": row.rank_text,
@@ -397,6 +400,8 @@ def _rank_sections(sections: list[dict[str, Any]], query: str | None) -> None:
             str(metadata.get("last_updated") or ""),
             key=str(item["key"]),
             query_present=bool(query_tokens),
+            review_status=str(metadata.get("review_status") or "") or None,
+            superseded_by=str(metadata.get("superseded_by") or "") or None,
         )
     sections.sort(key=lambda x: (x["score"], -x["original_index"]), reverse=True)
 

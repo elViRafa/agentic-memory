@@ -89,7 +89,7 @@ async def evaluate_dream_quality(
     else:
         improvements.append("Dreaming made a bounded set of memory changes.")
 
-    score_delta_cat = _dream_score_delta_category(delta)
+    score_delta_cat = _dream_score_delta_category(delta, changed_files)
     regression_safety_cat = _dream_regression_category(regressions)
     index_summary_cat = _dream_index_summary_category(changed_files, before_category, after_eval)
     change_safety_cat = _dream_change_safety_category(changed_files, new_secret_files, churn_ratio)
@@ -201,7 +201,40 @@ def _churn_ratio(before_root: Path, after_root: Path) -> float:
     return changed_count / len(paths)
 
 
-def _dream_score_delta_category(delta: int) -> EvalCategory:
+def _is_index_only_change(changed_files: list[str]) -> bool:
+    if not changed_files:
+        return False
+    allowed = {
+        "index.md",
+        "memory-store/index.md",
+        "consolidated_memory.md",
+    }
+    for rel in changed_files:
+        norm = str(rel).replace("\\", "/")
+        if norm in allowed:
+            continue
+        if "/" not in norm and norm.endswith(".md"):
+            # root maps — still view-only churn
+            continue
+        return False
+    return True
+
+
+def _dream_score_delta_category(
+    delta: int, changed_files: list[str] | None = None
+) -> EvalCategory:
+    if changed_files is not None and _is_index_only_change(changed_files) and delta > 0:
+        checks = [
+            _check(
+                "dream_score_delta_index_only",
+                "warn",
+                "low",
+                f"Memory score rose by {delta} but only indexes / maps changed — "
+                "not counting this as a quality win.",
+                "Prefer store-content improvements over index contradiction churn.",
+            )
+        ]
+        return _category("score_delta", DREAM_WEIGHTS["score_delta"], checks)
     if delta > 0:
         checks = [
             _check(

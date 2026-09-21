@@ -764,9 +764,10 @@ store entries).
 
 Keep the invariant: **zero required dependencies; every new capability degrades gracefully.**
 
-- E1. `[ ]` **Temporal facts.** Optional frontmatter `valid_from`, `superseded_by`.
-  Dreaming marks contradicted facts superseded (never silent-delete). `read_combined_context`
-  filters superseded by default; `include_history=true` to see evolution.
+- E1. `[~]` **Temporal facts.** Optional frontmatter `valid_from` still open.
+  `superseded_by` + `review_status: stale` retrieve-path demotion shipped
+  2026-09-21. Contradiction *detection* precision + pack surface also shipped.
+  `read_combined_context` does not yet interpret `valid_from` ranges.
 - E2. `[ ]` **Link graph.** Parse `[[wiki-links]]` in memory bodies; Dreaming maintains a
   generated `links.md` index; retrieval pulls 1-hop neighbors of top-scoring sections when
   budget allows.
@@ -782,15 +783,14 @@ Each E-task: implement → tests → one README paragraph → minor version bump
 
 ## Milestone F — Prove it (benchmarks)
 
-- F1. `[ ]` `ai-memory bench` subcommand: reproducible harness, JSON + markdown reports
-  (reuse the eval report plumbing).
+- F1. `[x]` `ai-memory bench` subcommand: reproducible harness, JSON + markdown reports
+  (reuse the eval report plumbing). Shipped 2026-08-15.
 - F2. `[ ]` LongMemEval-S adapter: ingest sessions → memory writes; answer questions →
   retrieval + configured LLM. Publish score + exact reproduction script in `benchmarks/`.
   Then LoCoMo. Honest framing: these are conversational benchmarks, we're a project-memory
   system — publish numbers anyway.
-- F3. `[ ]` **Own benchmark: `coding-memory-bench`** (separate repo). N repos × M sessions;
-  later tasks depend on earlier decisions ("which auth approach did we choose and why?").
-  Score agent-with-memory vs agent-without. This defines the category we claim to lead.
+- F3. `[~]` **Own benchmark: `coding-memory-bench`**. First fixture shipped in-tree at
+  `benchmarks/coding-memory/` (extractable). Multi-repo expansion still open.
 - F4. `[ ]` Results table + reproduction commands in README.
 
 ## Milestone G — Launch

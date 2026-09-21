@@ -861,6 +861,9 @@ def doctor(cwd: str, check_network: bool = False) -> DoctorResult:
     _check_stale_candidates(memory_dir, warnings)
     _check_mangled_slugs(memory_dir, warnings)
     _check_contradictions(memory_dir, warnings)
+    _check_stale_only_decisions(memory_dir, warnings)
+    _check_off_topic_failures(memory_dir, warnings)
+    _check_adr_in_diary_prefix(memory_dir, warnings)
     if check_network:
         _check_pypi_drift(warnings)
 
@@ -942,8 +945,125 @@ def _check_contradictions(memory_dir: Path, warnings: list[str]) -> None:
     extra = len(hits) - 5
     if extra > 0:
         warnings.append(
-            f"…and {extra} more contradiction(s). Review them; Dreaming will not pick a winner."
+            f"…and {extra} more contradiction(s). Full list: evals/contradictions.json "
+            "(after Dream). Review them; Dreaming will not pick a winner."
         )
+
+
+def _check_stale_only_decisions(memory_dir: Path, warnings: list[str]) -> None:
+    """Warn when the decisions category is entirely stale / superseded."""
+    store_root = memory_dir / "memory-store" / "decisions"
+    if not store_root.is_dir():
+        return
+    files = [p for p in _iter_markdown_files(store_root) if p.name != "index.md"]
+    if not files:
+        return
+    stale_n = 0
+    for path in files:
+        try:
+            metadata, _body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, FrontmatterError):
+            continue
+        status = str(metadata.get("review_status") or "").strip().lower()
+        if status in {"stale", "broken-evidence"} or str(metadata.get("superseded_by") or "").strip():
+            stale_n += 1
+    if stale_n and stale_n == len(files):
+        warnings.append(
+            f"decisions/ has {stale_n} file(s) and all are stale or superseded — "
+            "the decisions map no longer reflects the live stack. Archive or "
+            "replace them with current ADRs."
+        )
+
+
+def _check_off_topic_failures(memory_dir: Path, warnings: list[str]) -> None:
+    """Flag failure memories with near-zero overlap against project vocabulary."""
+    from memory_fabric.storage.ranking import tokenize
+
+    store_root = memory_dir / "memory-store"
+    failures = store_root / "failures"
+    if not failures.is_dir():
+        return
+    vocab: set[str] = set()
+    for rel in ("framework-rules.md", "architecture.md", "schemas.md"):
+        path = memory_dir / rel
+        if not path.exists():
+            continue
+        try:
+            _meta, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, FrontmatterError):
+            continue
+        vocab.update(tokenize(body))
+    for path in _iter_markdown_files(store_root):
+        if path.name == "index.md":
+            continue
+        sp = str(path.relative_to(store_root)).replace("\\", "/")
+        if not sp.startswith(("pretraining/", "fine-tuning/", "architecture/", "decisions/")):
+            continue
+        try:
+            _meta, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, FrontmatterError):
+            continue
+        vocab.update(tokenize(body)[:80])
+    if len(vocab) < 20:
+        return
+    flagged = 0
+    for path in _iter_markdown_files(failures):
+        if path.name == "index.md":
+            continue
+        try:
+            _meta, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, FrontmatterError):
+            continue
+        tokens = set(tokenize(body))
+        if len(tokens) < 8:
+            continue
+        overlap = len(tokens & vocab) / max(1, len(tokens))
+        if overlap < 0.05:
+            flagged += 1
+            if flagged <= 3:
+                rel = path.relative_to(memory_dir).as_posix()
+                warnings.append(
+                    f"off_topic_failure: {rel} has near-zero token overlap with "
+                    "project maps — consider quarantining or deleting it."
+                )
+    if flagged > 3:
+        warnings.append(f"…and {flagged - 3} more off-topic failure memories.")
+
+
+def _check_adr_in_diary_prefix(memory_dir: Path, warnings: list[str]) -> None:
+    """Advisory: decision-shaped bodies living under diary prefixes."""
+    store_root = memory_dir / "memory-store"
+    if not store_root.is_dir():
+        return
+    adr_re = re.compile(
+        r"\b(we decided|decision:|must not|do not use|adr\b|we chose)\b",
+        re.IGNORECASE,
+    )
+    diary_prefixes = ("pretraining/", "fine-tuning/")
+    flagged = 0
+    for path in _iter_markdown_files(store_root):
+        if path.name == "index.md":
+            continue
+        sp = path.relative_to(store_root).as_posix()
+        if not any(sp.startswith(p) for p in diary_prefixes):
+            continue
+        if "handoff" in sp or sp.endswith("-complete.md") or "/complete" in sp:
+            continue
+        try:
+            metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, FrontmatterError):
+            continue
+        blob = f"{metadata.get('title', '')}\n{body}"
+        if not adr_re.search(blob):
+            continue
+        flagged += 1
+        if flagged <= 3:
+            warnings.append(
+                f"{sp} looks like an ADR under a diary prefix — consider "
+                "copying the durable decision to decisions/ (advisory)."
+            )
+    if flagged > 3:
+        warnings.append(f"…and {flagged - 3} more diary-prefix ADR-shaped files.")
 
 
 def _check_resolved_high_priority(memory_dir: Path, warnings: list[str]) -> None:

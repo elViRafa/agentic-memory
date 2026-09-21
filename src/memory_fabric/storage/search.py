@@ -99,23 +99,30 @@ def _rank_search_results(
         unique_paths.append(Path(key))
 
     docs: list[list[str]] = []
-    metas: list[tuple[str, str]] = []
+    metas: list[tuple[str, str, str, str]] = []
     for path in unique_paths:
         try:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             text = ""
         docs.append(tokenize(text))
-        priority, last_updated = _priority_and_updated(text)
-        metas.append((priority, last_updated))
+        metas.append(_rank_metadata(text))
 
     query_tokens = tokenize(query)
     scores = bm25_scores(query_tokens, docs)
     path_scores = {
         str(path): blended_score(
-            score, priority, last_updated, key=str(path), query_present=True
+            score,
+            priority,
+            last_updated,
+            key=str(path),
+            query_present=True,
+            review_status=review_status or None,
+            superseded_by=superseded_by or None,
         )
-        for path, score, (priority, last_updated) in zip(unique_paths, scores, metas, strict=True)
+        for path, score, (priority, last_updated, review_status, superseded_by) in zip(
+            unique_paths, scores, metas, strict=True
+        )
     }
 
     decorated: list[tuple[float, int, SearchResult]] = []
@@ -131,17 +138,29 @@ def _rank_search_results(
 
 
 def _priority_and_updated(text: str) -> tuple[str, str]:
+    priority, last_updated, _review, _superseded = _rank_metadata(text)
+    return priority, last_updated
+
+
+def _rank_metadata(text: str) -> tuple[str, str, str, str]:
     priority = "medium"
     last_updated = ""
+    review_status = ""
+    superseded_by = ""
     if not text.lstrip().startswith("---"):
-        return priority, last_updated
+        return priority, last_updated, review_status, superseded_by
     try:
         from memory_fabric.frontmatter import parse_frontmatter
 
         metadata, _body = parse_frontmatter(text)
     except Exception:  # noqa: BLE001 - ranking metadata is best-effort.
-        return priority, last_updated
-    return str(metadata.get("priority") or "medium"), str(metadata.get("last_updated") or "")
+        return priority, last_updated, review_status, superseded_by
+    return (
+        str(metadata.get("priority") or "medium"),
+        str(metadata.get("last_updated") or ""),
+        str(metadata.get("review_status") or ""),
+        str(metadata.get("superseded_by") or ""),
+    )
 
 
 def _keyword_search_rg(query: str, roots: list[Path], max_results: int) -> list[SearchResult]:

@@ -65,6 +65,14 @@ def context_for_task(
         if taken >= top_k or remaining <= 0:
             omitted.append(item["key"])
             continue
+        meta = item.get("metadata") or {}
+        status = str(meta.get("review_status") or "").strip().lower()
+        superseded = str(meta.get("superseded_by") or "").strip()
+        if float(item.get("score") or 0) <= 0 and (
+            status in {"stale", "broken-evidence"} or superseded
+        ):
+            omitted.append(item["key"])
+            continue
         if not _ensure_section_body(item, warnings, omitted):
             continue
         text = item["text"]
@@ -226,4 +234,6 @@ def _score_candidates(candidates: list[dict[str, Any]], query: str) -> None:
             str(metadata.get("last_updated") or ""),
             key=str(item["key"]),
             query_present=True,
+            review_status=str(metadata.get("review_status") or "") or None,
+            superseded_by=str(metadata.get("superseded_by") or "") or None,
         ) + float(item.get("boost") or 0.0)

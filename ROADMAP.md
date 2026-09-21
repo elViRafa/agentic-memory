@@ -734,6 +734,9 @@ Keep the zero-dependency, no-vector-DB default. Add optional layers that degrade
       Shipped 2026-08-15: numeric + polarity + named-reversal net in
       `storage/contradictions.py`; `doctor` re-scans; deep dream can ask the same LLM
       about remaining overlapping pairs. Still advisory — no silent winner.
+      **Precision + pack surface (2026-09-21):** IDF / same-topic / successive-version /
+      bugs-skip gates; `index.md` keeps ≤5 pack hits; full list in
+      `evals/contradictions.json`.
 - [ ] **Latency budget.** Measured 2026-07-13 (§2.1 Q10, `test_robustness.py`):
       p95 is **~390 ms at 500 files, ~740 ms at 1000** — 2-5x over the 150 ms target
       here, and the gap is structural, not incidental: `read_combined_context`
