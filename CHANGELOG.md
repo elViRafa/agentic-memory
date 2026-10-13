@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.4] — 2026-10-13
+
+### Changed
+
+- **Public artifacts.** Repository history was reset to a single root commit;
+  field documentation uses generic workspace labels only. PyPI **1.4.3** should
+  be yanked after installing **1.4.4** (see `scripts/pypi_yank_version.py`).
+
 ## [1.4.3] — 2026-10-13
 
 ### Fixed

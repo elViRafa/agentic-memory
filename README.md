@@ -37,9 +37,8 @@ Memory is stored as human-readable Markdown with YAML frontmatter. No vector dat
 
 ## Status
 
-**v1.4.3 — sentence search, a fixture-free eval probe, and SSH field hygiene
-(index pack, query share, doctor version drift) on top of 1.4.2.
-[Live on PyPI](https://pypi.org/project/memory-fabric/).**
+**v1.4.4 — same 1.4.3 product fixes, scrubbed public artifacts and a fresh
+git history. [Live on PyPI](https://pypi.org/project/memory-fabric/).**
 Core CLI and MCP tools work end-to-end. See [`ROADMAP.md`](ROADMAP.md) for what
 shipped, what's in progress, and what's next.
 
