@@ -1,0 +1,451 @@
+"""Generated project memory templates."""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Any
+
+from memory_fabric.frontmatter import dump_frontmatter
+
+SCHEMA_VERSION = "1.3"
+
+SECTION_TEMPLATES: dict[str, dict[str, Any]] = {
+    "index": {
+        "priority": "high",
+        "summary": "Map of available project memory sections.",
+        "tags": ["index", "memory"],
+        "frontmatter": {"generated": True},
+        "body": "# Project Memory Index\n\nGenerated discovery index — rebuilt by Dreaming. Root maps are generated views over `memory-store/`; granular files are indexed in `memory-store/index.md`.\n",
+    },
+    "architecture": {
+        "priority": "high",
+        "summary": "Generated map of memory-store/architecture/ (empty until first Dream).",
+        "tags": ["architecture"],
+        "frontmatter": {"generated": True, "generated_from": "memory-store/architecture"},
+        "body": "# Architecture Map\n\nGenerated view over `memory-store/architecture/` — rebuilt by Dreaming; do not edit by hand. Write granular architecture facts with `write_memory_store_tool`.\n",
+    },
+    "schemas": {
+        "priority": "high",
+        "summary": "Generated map of memory-store/schemas/ (empty until first Dream).",
+        "tags": ["schemas", "contracts"],
+        "frontmatter": {"generated": True, "generated_from": "memory-store/schemas"},
+        "body": "# Schemas Map\n\nGenerated view over `memory-store/schemas/` — rebuilt by Dreaming; do not edit by hand. Write granular data contracts with `write_memory_store_tool`.\n",
+    },
+    "decisions": {
+        "priority": "high",
+        "summary": "Generated map of memory-store/decisions/ (empty until first Dream).",
+        "tags": ["decisions", "adr"],
+        "frontmatter": {"generated": True, "generated_from": "memory-store/decisions"},
+        "body": "# Decisions Map\n\nGenerated view over `memory-store/decisions/` — rebuilt by Dreaming; do not edit by hand. Write granular decisions and ADRs with `write_memory_store_tool`.\n",
+    },
+    "debt": {
+        "priority": "low",
+        "summary": "Generated map of memory-store/debt/ (empty until first Dream).",
+        "tags": ["debt", "risk"],
+        "frontmatter": {"generated": True, "generated_from": "memory-store/debt"},
+        "body": "# Technical Debt Map\n\nGenerated view over `memory-store/debt/` — rebuilt by Dreaming; do not edit by hand. Write granular debt items with `write_memory_store_tool`.\n",
+    },
+    "ubiquitous-language": {
+        "priority": "medium",
+        "summary": "Always-loaded steering: project-specific vocabulary and domain terms.",
+        "tags": ["domain", "language", "steering"],
+        "frontmatter": {"role": "steering"},
+        "body": "# Ubiquitous Language\n\nHand-curated steering section, always loaded into context (never evicted by the token budget). Keep entries short: `term — meaning`. Granular term histories belong in `memory-store/ubiquitous-language/`.\n",
+    },
+    "framework-rules": {
+        "priority": "medium",
+        "summary": "Always-loaded steering: framework conventions and constraints.",
+        "tags": ["framework", "rules", "steering"],
+        "frontmatter": {"role": "steering"},
+        "body": "# Framework Rules\n\nHand-curated steering section, always loaded into context (never evicted by the token budget). Keep this file short and universally applicable. Granular rule records belong in `memory-store/rules/`.\n",
+    },
+}
+
+# Canonical steering built-ins, derived from SECTION_TEMPLATES so the set
+# can't drift from what `init` scaffolds. Mirrors storage._shared's
+# STEERING_SECTIONS (kept separate to avoid a templates↔storage import cycle);
+# used to order built-ins ahead of user directives in the composed block.
+STEERING_BUILTIN_SECTIONS: frozenset[str] = frozenset(
+    name
+    for name, template in SECTION_TEMPLATES.items()
+    if template.get("frontmatter", {}).get("role") == "steering"
+)
+
+# Store categories pre-scaffolded by `ai-memory init` (ROADMAP Phase 2.2).
+# The map categories are derived from SECTION_TEMPLATES' `generated_from` so
+# the two can't drift; episodic/failures/rules are the categories written by
+# session journaling, failure memory, and the steering templates' granular-
+# record pointers respectively.
+STORE_CATEGORY_SCAFFOLD: tuple[str, ...] = tuple(
+    sorted(
+        {
+            str(template["frontmatter"]["generated_from"]).split("/", 1)[1]
+            for template in SECTION_TEMPLATES.values()
+            if "generated_from" in template.get("frontmatter", {})
+        }
+        | {"episodic", "failures", "rules"}
+    )
+)
+
+# Root map sections that are generated views over memory-store/<category>/,
+# rebuilt by Dreaming. Derived from SECTION_TEMPLATES's `generated_from` so it
+# can't drift — this deliberately excludes `index.md`, which is a discovery index
+# generated by a different path (Dreaming's `_regenerate_index_root`) that does
+# not stamp `generated: true`, so flagging it as legacy would be a false positive.
+# Under the store-first model (v1.0) a category-map file without `generated: true`
+# is legacy hand-written content that `ai-memory doctor` flags for migration.
+GENERATED_MAP_SECTIONS: frozenset[str] = frozenset(
+    name
+    for name, template in SECTION_TEMPLATES.items()
+    if "generated_from" in template.get("frontmatter", {})
+)
+
+LOCAL_GITIGNORE = """*.patch
+*.tmp
+*.log
+*.lock
+consolidated_memory.md
+evals/
+snapshots/
+candidates/
+private/
+.DS_Store
+Thumbs.db
+"""
+
+# ---------------------------------------------------------------------------
+# Canonical Content Blocks — THE single source of truth for agent instructions.
+# All platform-specific files are generated from these two blocks.
+# ---------------------------------------------------------------------------
+
+# Rule 0 of the protocol, kept as a named constant so every generated artifact
+# embeds byte-identical text and tests can assert on one source of truth.
+#
+# Field report (consumer project, v1.1.1): on a machine where the memory-fabric
+# MCP server was not configured, an agent read the "MANDATORY STARTUP … No
+# exceptions" rule, could not comply, concluded the whole instruction file was
+# inapplicable, and fell back to its own native memory — silently dropping the
+# project directives that live in the same file. The protocol needs an explicit
+# exit that does not take the surrounding project rules down with it.
+GRACEFUL_DEGRADATION_RULE = (
+    "0. **If the memory-fabric MCP tools are NOT available in this session, skip this memory "
+    "protocol entirely** — do NOT substitute another memory system for it. Any Project "
+    "Directives block (in this file, or in a generated `project-directives` rule file) still "
+    "applies in full; missing MCP tools never excuse ignoring project rules.\n"
+)
+
+MEMORY_INSTRUCTIONS = (
+    """## Memory Fabric — Semantic Store Agent Instructions
+
+🚨 **CRITICAL RULES - READ FIRST** 🚨
+"""
+    + GRACEFUL_DEGRADATION_RULE
+    + """1. **NEVER use the native VS Code Copilot `memory` tool.** You MUST ONLY use the `memory-fabric` MCP tools (like `write_memory_store_tool`). The native `memory` tool writes to VS Code workspace storage, bypassing this project's memory system.
+2. **NEVER use raw file system tools** (like `create_file`, `write_to_file`, `bash`, etc.) to read or write files inside the `.ai-memory/` directory. Doing so bypasses secret scanning, token budgeting, and the Dreaming system. (Sole exception: hand-curated `role: steering` directive files — see the project directives exception in section 3.)
+3. **MANDATORY STARTUP:** You MUST call `read_combined_context_tool(cwd="<absolute project root path>")` before doing anything else at the start of a session. No exceptions — other than rule 0 above, which is the only sanctioned way out of this protocol.
+   > **MCP Resources alternative:** If your client supports MCP Resources and has auto-fetched `memory-fabric://context/<encoded-cwd>`, that context is already in your system prompt — skip the tool call.
+4. **NEVER call `dream_tool` as a substitute for saving new knowledge.** Before triggering any Dream tool, you MUST first call `write_memory_store_tool` to persist specific, isolated memories from the current session (e.g., bugs fixed, features built, architecture decisions). Dreaming consolidates existing memory — it does NOT capture new knowledge.
+5. **MANDATORY SESSION END:** Before your final response in a session, you MUST call `write_session_journal_tool` to log what was accomplished. Skip ONLY for trivial Q&A sessions with no code changes, decisions, or debugging.
+
+### 1. Active Retrieval Workflow
+- **Search:** Use `keyword_search_tool(cwd, query)` to find specific documented topics. A sentence is a normal query: it matches content words and returns one hit per file.
+- **Pack:** Use `context_for_task_tool` when that file should be packed into a token budget.
+- **Deep Dive:** Use `read_memory_store_tool(cwd, store_path)` or `read_section(cwd, section)` for detailed content.
+
+### 2. Store Writes & Rules
+Use `write_memory_store_tool` to register standalone memories.
+- **`store_path` Rules:** Must be lowercase, alphanumeric segments separated by slashes. No spaces, capitals, or `.md` extension (e.g., `architecture/decisions/jwt-auth`). Max 5 levels of nesting.
+- **Parameters:** `cwd`, `store_path`, `content`, `title` (optional), `tags` (optional), `priority` (`high`/`medium`/`low`), `mode` (`replace`/`append`).
+
+### 3. Root Maps Are Generated — Never Write Them
+Root map files (`index`, `architecture`, `decisions`, `debt`, `schemas`) are **generated views** over `memory-store/`, rebuilt by Dreaming. Writing them with `write_local_memory_tool` is rejected (store-first model): the tool now writes only steering sections. Write granular facts with `write_memory_store_tool`, then run `dream_tool` to refresh the maps.
+**Exception:** the steering sections `framework-rules` and `ubiquitous-language` are hand-curated and always loaded into context; update those with `write_local_memory_tool(cwd, section, content)` — this is the tool's only remaining use.
+
+> **Project directives exception:** files in `.ai-memory/` whose frontmatter declares `role: steering` (e.g. `framework-rules`, `ubiquitous-language`, and project directives such as `development-guidelines`) are hand-curated policy — humans and agents MAY edit them directly with file tools (review via MR). Everything else in `.ai-memory/` remains MCP-tools-only. After editing a directive, run `ai-memory sync-agents` (or rely on the pre-commit hook) so per-tool files regenerate.
+
+### 4. Security & Maintenance
+- **Security:** Do NOT store credentials, tokens, or passwords.
+- **Dreaming:** Use `dream_tool` for consolidation only — after new knowledge has already been saved with `write_memory_store_tool`. Refer to `.agents/rules/dreaming.md` for guidelines.
+- **Bug fixes:** Call `write_failure_memory_tool(cwd, error_summary, fix_summary)` right after fixing a bug. Repeat occurrences of the same error accumulate onto one entry instead of scattering — this is the highest-value memory category for future debugging.
+
+### 5. Session End — Automatic Journaling
+Before completing a session, call `write_session_journal_tool(cwd, summary, key_decisions, files_changed, session_label)` to capture what happened.
+
+**Always journal after:** feature implementations, bug fixes, refactoring, architecture decisions, debugging, config changes, or any session where you wrote or modified code.
+
+**Skip only for:** simple Q&A, quick lookups, or read-only explanations that produced no actionable changes.
+
+Parameters:
+- `summary`: 2-4 sentence description of what was accomplished.
+- `key_decisions`: List of architecture/design decisions made (optional).
+- `files_changed`: List of files created or significantly modified (optional).
+- `session_label`: Short descriptive label, e.g. `"auth-refactor"` (optional).
+"""
+)
+
+DREAMING_INSTRUCTIONS = """## Memory Fabric — Dreaming Process Instructions
+
+⚠️ **Pre-requisite — Save discrete knowledge first:** Before calling any Dream tool, ensure all specific, isolated learnings from the current session have been persisted via `write_memory_store_tool`. Dream consolidates EXISTING memory — it does NOT substitute for creating new standalone memory files.
+
+Trigger a dream after significant changes or bug fixes to refresh indices and resolve contradictions.
+
+### 1. Direct Dreaming
+Call `dream_tool` with parameters:
+- `cwd`: Absolute path to project root.
+- `mode`: `"light"` (index/summaries) or `"deep"` (comprehensive review).
+- `apply`: Set `True` to persist updates; `False` runs dry-run/candidate mode.
+- `llm_rewrite`: Set `True` to generate rewrite tasks.
+- `with_eval`: Set `True` (with `apply=True`) to run quality evaluation.
+
+### 2. Split-Tool Protocol (Avoiding Client Deadlocks)
+If client-side LLM consolidation is needed (e.g., no direct LLM or to bypass JSON-RPC deadlocks):
+1. Call `prepare_dream_payload_tool(cwd, mode="deep")`.
+2. If response contains `"skip_required": true`, stop here.
+3. Pass the returned `consolidation_prompt` to your LLM.
+4. Call `apply_dream_results_tool(cwd, candidate_store, llm_response)` passing the LLM's raw JSON response and `candidate_store` value.
+"""
+
+# ---------------------------------------------------------------------------
+# Managed-block markers (v1.1)
+#
+# Shared user files (AGENTS.md, CLAUDE.md, .github/copilot-instructions.md) are
+# never rewritten wholesale by sync-agents: only the content between these
+# marker pairs is owned by Memory Fabric (same pattern as installer.py's
+# _TOML_START/_TOML_END). Everything outside the markers belongs to the user.
+# ---------------------------------------------------------------------------
+
+INSTRUCTIONS_BLOCK_START = (
+    "<!-- >>> memory-fabric:instructions (managed block; regenerated by "
+    "`ai-memory sync-agents`) >>> -->"
+)
+INSTRUCTIONS_BLOCK_END = "<!-- <<< memory-fabric:instructions <<< -->"
+
+DIRECTIVES_BLOCK_START = (
+    "<!-- >>> memory-fabric:project-directives (managed block; edit .ai-memory "
+    "steering files instead) >>> -->"
+)
+DIRECTIVES_BLOCK_END = "<!-- <<< memory-fabric:project-directives <<< -->"
+
+
+def wrap_managed_block(start_marker: str, inner: str, end_marker: str) -> str:
+    """Render a managed block: markers on their own lines around the content."""
+    return f"{start_marker}\n{inner.strip()}\n{end_marker}"
+
+
+# ---------------------------------------------------------------------------
+# Project directives (v1.1): user-created, hand-curated steering sections with
+# `sync: true` are composed into one document distributed to every agent vendor.
+# ---------------------------------------------------------------------------
+
+_DIRECTIVES_PREAMBLE = """## Project Directives — Memory Fabric
+
+Hand-curated development guidelines shared by every AI agent working on this repo.
+Source of truth: the `role: steering` section files in `.ai-memory/`. Edit those
+files (review via MR), then run `ai-memory sync-agents` — never edit this
+generated copy in place.
+"""
+
+
+def order_directive_sections(names: list[str]) -> list[str]:
+    """Deterministic composition order: steering built-ins first, then
+    user directives, each group alphabetical by section name."""
+    return sorted(names, key=lambda name: (name not in STEERING_BUILTIN_SECTIONS, name))
+
+
+def build_project_directives_block(sections: list[tuple[str, str]]) -> str:
+    """Compose the project-directives document from `(section_name, body)` pairs.
+
+    Bodies arrive frontmatter-stripped; ordering follows
+    ``order_directive_sections``. Each directive is delimited by an HTML
+    comment so consumers (and tests) can locate individual sources.
+    """
+    by_name = dict(sections)
+    fragments = [_DIRECTIVES_PREAMBLE.strip()]
+    for name in order_directive_sections(list(by_name)):
+        fragments.append(f"<!-- directive: {name} -->\n{by_name[name].strip()}")
+    return "\n\n".join(fragments) + "\n"
+
+
+def build_agents_rule_directives(directives_block: str) -> str:
+    """Build .agents/rules/project-directives.md — generic IDE rule."""
+    return "---\ntrigger: always_on\n---\n\n" + directives_block
+
+
+def build_cursor_directives(directives_block: str) -> str:
+    """Build .cursor/rules/project-directives.mdc — Cursor IDE rule."""
+    return (
+        "---\n"
+        "description: Project directives — hand-curated development guidelines (memory-fabric)\n"
+        "alwaysApply: true\n"
+        "---\n\n" + directives_block
+    )
+
+
+def build_windsurf_directives(directives_block: str) -> str:
+    """Build .windsurf/rules/project-directives.md — Windsurf IDE rule."""
+    return "---\ntrigger: always_on\n---\n\n" + directives_block
+
+
+# ---------------------------------------------------------------------------
+# Platform-specific builder functions
+# ---------------------------------------------------------------------------
+
+
+def build_agents_md_instructions() -> str:
+    """Inner content of AGENTS.md's managed instructions block."""
+    return (
+        "# Agent Instructions — Memory Fabric\n\n"
+        "This file is read automatically by Claude Code, Gemini CLI, Codex, Antigravity, and other MCP-aware AI agents.\n"
+        "GitHub Copilot reads `.github/copilot-instructions.md` instead.\n\n"
+        "---\n\n" + MEMORY_INSTRUCTIONS
+    )
+
+
+def build_agents_md() -> str:
+    """Build AGENTS.md — universal fallback for Gemini CLI, Codex, Antigravity, etc.
+
+    The fabric content is wrapped in the instructions markers so later syncs
+    can refresh it without ever touching user content outside the block.
+    """
+    return (
+        wrap_managed_block(
+            INSTRUCTIONS_BLOCK_START, build_agents_md_instructions(), INSTRUCTIONS_BLOCK_END
+        )
+        + "\n"
+    )
+
+
+def build_agents_rule_memory() -> str:
+    """Build .agents/rules/memory-store.md — generic IDE rule with YAML trigger."""
+    return "---\ntrigger: always_on\n---\n\n" + MEMORY_INSTRUCTIONS
+
+
+def build_agents_rule_dreaming() -> str:
+    """Build .agents/rules/dreaming.md — generic IDE rule with YAML trigger."""
+    return "---\ntrigger: always_on\n---\n\n" + DREAMING_INSTRUCTIONS
+
+
+THIN_CURSOR_RULE = (
+    """## Memory Fabric — compact Cursor rule
+
+"""
+    + GRACEFUL_DEGRADATION_RULE
+    + """
+1. **Startup:** call `read_combined_context_tool(cwd="<absolute project root>")` unless the MCP Resource `memory-fabric://context/<encoded-cwd>` was already auto-fetched. Skip a second dump.
+2. **Writes:** use `write_memory_store_tool` for facts. Never raw file tools into `.ai-memory/` (except hand-curated `role: steering` directives). Cursor hooks will deny store writes and redirect here.
+3. **Retrieval:** `keyword_search_tool` for a sentence or a keyword (content words, one hit per file); `context_for_task_tool` to pack a file into a token budget; `read_memory_store_tool` for a full file. Do not re-dump combined context mid-session.
+4. **Session end:** `write_session_journal_tool` before the last response (skip only trivial Q&A).
+
+Full protocol (on demand): `.agents/rules/memory-store.md`
+Dreaming parameters (on demand): `.agents/rules/dreaming.md`
+Which tool when: `.agents/skills/agent-router/SKILL.md`
+Available skills: `.agents/skills/INDEX.md`
+"""
+)
+
+
+def build_cursor_rule() -> str:
+    """Build .cursor/rules/memory-fabric.mdc — thin always-on Cursor rule."""
+    return (
+        "---\n"
+        "description: Memory Fabric — project memory management via MCP tools\n"
+        "alwaysApply: true\n"
+        "---\n\n" + THIN_CURSOR_RULE
+    )
+
+
+def build_agent_router_skill() -> str:
+    """One-page router: guidelines vs memory vs code vs skills. Not always-on."""
+    return (
+        "---\n"
+        "name: agent-router\n"
+        "description: When to use guidelines, memory-fabric, code-graph tools, or skills.\n"
+        "---\n\n"
+        "# Agent router\n\n"
+        "Use the cheapest channel that answers the question.\n\n"
+        "| Question | Where |\n"
+        "|---|---|\n"
+        "| What is the golden rule / naming / test layout? | Project directives (always-on) and `docs/guidelines/` |\n"
+        "| Why did we choose this? ADR, reversal, known failure | `keyword_search_tool` for a sentence or keyword (one hit per file); `context_for_task_tool` to pack the file; `read_memory_store_tool` for the full file |\n"
+        "| How does this function run? call graph | Code-graph / repo search tools — not memory |\n"
+        "| How do I perform a named workflow? | `.agents/skills/` (see `INDEX.md`) |\n\n"
+        "Do not dump `read_combined_context_tool` mid-session. Do not write `.ai-memory/` with file tools.\n"
+    )
+
+
+def build_skills_index(entries: list[tuple[str, str, str]]) -> str:
+    """Generated skills ToC: ``(name, one_liner, relative_path)``."""
+    lines = [
+        "<!-- generated by ai-memory sync-agents; do not edit -->",
+        "# Available skills",
+        "",
+    ]
+    if not entries:
+        lines.append("No skills found under `.agents/skills/`.")
+    else:
+        for name, one_liner, rel in entries:
+            lines.append(f"- **{name}** — {one_liner} (`{rel}`)")
+    return "\n".join(lines) + "\n"
+
+
+def build_windsurf_rule() -> str:
+    """Build .windsurf/rules/memory-fabric.md — Windsurf IDE rule."""
+    return MEMORY_INSTRUCTIONS + "\n" + DREAMING_INSTRUCTIONS
+
+
+def build_combined_instructions() -> str:
+    """Inner content of the CLAUDE.md/copilot managed instructions block."""
+    return MEMORY_INSTRUCTIONS + "\n" + DREAMING_INSTRUCTIONS
+
+
+def build_claude_md() -> str:
+    """Build standalone CLAUDE.md content for Claude Code (marker-wrapped)."""
+    return (
+        wrap_managed_block(
+            INSTRUCTIONS_BLOCK_START, build_combined_instructions(), INSTRUCTIONS_BLOCK_END
+        )
+        + "\n"
+    )
+
+
+def build_copilot_md() -> str:
+    """Build standalone .github/copilot-instructions.md content for GitHub Copilot
+    (marker-wrapped)."""
+    return build_claude_md()
+
+
+# Legacy aliases kept for backward compatibility in imports
+AGENT_INSTRUCTIONS_TEMPLATE = build_agents_md()
+MEMORY_STORE_RULE_TEMPLATE = build_agents_rule_memory()
+DREAMING_RULE_TEMPLATE = build_agents_rule_dreaming()
+
+
+def now_iso() -> str:
+    return datetime.now().astimezone().isoformat(timespec="seconds")
+
+
+def build_memory_file(section: str) -> str:
+    template = SECTION_TEMPLATES[section]
+    metadata = {
+        "section": section,
+        "summary": template["summary"],
+        "priority": template["priority"],
+        "tags": template["tags"],
+        "schema_version": SCHEMA_VERSION,
+        "last_updated": now_iso(),
+    }
+    # Extra frontmatter carried by the template (e.g. `generated`/`role` markers).
+    metadata.update(template.get("frontmatter", {}))
+    return dump_frontmatter(metadata, template["body"])
+
+
+def build_empty_section(section: str, body: str = "") -> str:
+    metadata = {
+        "section": section,
+        "summary": f"Project memory section for {section}.",
+        "priority": "medium",
+        "tags": [section],
+        "schema_version": SCHEMA_VERSION,
+        "last_updated": now_iso(),
+    }
+    return dump_frontmatter(metadata, body or f"# {section.replace('-', ' ').title()}\n")

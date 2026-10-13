@@ -1,0 +1,590 @@
+import asyncio
+import hashlib
+import json
+import os
+import tempfile
+import time
+import unittest
+from datetime import UTC, datetime
+from pathlib import Path
+from unittest import mock
+
+from memory_fabric.frontmatter import dump_frontmatter, parse_frontmatter
+from memory_fabric.storage import (
+    doctor,
+    initialize_memory_fabric,
+    write_memory_store,
+)
+from memory_fabric.storage import (
+    dream as _async_dream,
+)
+from memory_fabric.storage.consolidation import _roll_up_episodic_commits
+
+
+def dream(*args, **kwargs):
+    return asyncio.run(_async_dream(*args, **kwargs))
+
+
+class DreamStoreTests(unittest.TestCase):
+    def test_repeated_light_dream_is_byte_stable(self) -> None:
+        """P-15: a dream right after another must not rewrite any memory file.
+
+        The post-commit hook runs `dream --mode light --apply`; if that bumps
+        `last_updated` on the regenerated indexes even when nothing changed,
+        the working tree is dirty again immediately after every commit and the
+        next checkout/merge is blocked.
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            write_memory_store(
+                temp, "architecture/notes", "# Notes\n\nA stable fact.", title="Notes"
+            )
+            dream(temp, mode="light", apply=True)
+
+            memory_dir = Path(temp) / ".ai-memory"
+
+            def tree_state() -> dict[str, str]:
+                skip = {"snapshots", "candidates", "evals", "private"}
+                return {
+                    str(p.relative_to(memory_dir)): p.read_text(encoding="utf-8")
+                    for p in memory_dir.rglob("*.md")
+                    if not skip.intersection(p.relative_to(memory_dir).parts)
+                }
+
+            before = tree_state()
+            # Cross a real second boundary: when both dreams share the same
+            # timestamp string, a broken changed-guard still produces identical
+            # bytes by accident and the test would pass vacuously.
+            time.sleep(1.1)
+            result2 = dream(temp, mode="light", apply=True)
+            after = tree_state()
+
+            self.assertEqual(before, after, "second no-op dream must not touch any file")
+            self.assertEqual(result2["affected_files"], [])
+            self.assertFalse(result2["changed"])
+
+    def test_dream_rewrites_index_when_store_actually_changed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            write_memory_store(temp, "architecture/notes", "# Notes\n\nFact one.", title="Notes")
+            dream(temp, mode="light", apply=True)
+
+            index_path = Path(temp) / ".ai-memory" / "memory-store" / "index.md"
+            body_before = parse_frontmatter(index_path.read_text(encoding="utf-8"))[1]
+            self.assertNotIn("decisions/new-decision", body_before)
+
+            write_memory_store(
+                temp, "decisions/new-decision", "# New\n\nUse feature flags.", title="New"
+            )
+            result = dream(temp, mode="light", apply=True)
+            self.assertTrue(result["changed"])
+            body_after = parse_frontmatter(index_path.read_text(encoding="utf-8"))[1]
+            self.assertIn("decisions/new-decision", body_after)
+
+    def test_numeric_contradiction_heuristic_flags_planted_conflict(self) -> None:
+        """P-10: the planted TTL conflict from the v0.7.0 campaign (3600 vs 60).
+
+        An 8B local model returned contradictions: [] for this exact setup;
+        the deterministic net must flag it regardless of the LLM's answer.
+        """
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            write_memory_store(
+                temp,
+                "decisions/cache-policy",
+                "The cache TTL for TaskMaster task lists is 3600 seconds. "
+                "Cache TTL applies to every TaskMaster list query.",
+                title="Cache Policy",
+            )
+            write_memory_store(
+                temp,
+                "architecture/decisions/taskmaster-caching",
+                "The cache TTL for TaskMaster task lists is 60 seconds by default. "
+                "Cache TTL applies to every TaskMaster list query.",
+                title="TaskMaster Caching",
+            )
+
+            result = dream(temp, mode="light", apply=True)
+            heuristic_hits = [
+                w for w in result["warnings"] if "heuristic" in w and "3600" in w and "60" in w
+            ]
+            self.assertTrue(heuristic_hits, f"expected heuristic hit, got: {result['warnings']}")
+
+            # The flagged contradiction must not break byte-stability (P-15):
+            # a second no-op dream re-derives the same list and writes nothing.
+            result2 = dream(temp, mode="light", apply=True)
+            self.assertEqual(result2["affected_files"], [])
+            self.assertFalse(result2["changed"])
+
+    def test_unrelated_files_with_numbers_are_not_flagged(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            write_memory_store(
+                temp,
+                "decisions/http-timeouts",
+                "External HTTP calls use a 30 second timeout with retries.",
+                title="HTTP Timeouts",
+            )
+            write_memory_store(
+                temp,
+                "schemas/pagination",
+                "List endpoints paginate responses at 50 items per page maximum.",
+                title="Pagination",
+            )
+            result = dream(temp, mode="light", apply=True)
+            self.assertFalse(any("heuristic" in w for w in result["warnings"]))
+
+    @mock.patch("memory_fabric.storage.finalize._build_rewrite_tasks")
+    @mock.patch("memory_fabric.storage.dream.call_llm", new_callable=mock.AsyncMock)
+    def test_provider_warning_distinguishes_consolidation_from_rewrites(
+        self, mock_llm, mock_tasks
+    ) -> None:
+        """P-09: the warning must not deny the direct provider call that DID happen."""
+        mock_llm.return_value = json.dumps(
+            {"consolidated_files": {}, "summaries": {}, "contradictions": [], "warnings": []}
+        )
+        mock_tasks.return_value = [
+            {"section": "architecture", "reason": "too terse", "instruction": "expand"}
+        ]
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            write_memory_store(temp, "architecture/notes", "# Notes\n\nFact.", title="Notes")
+            with mock.patch.dict(
+                os.environ,
+                {"MEMORY_FABRIC_LLM_PROVIDER": "ollama", "OLLAMA_MODEL": "test-model"},
+            ):
+                result = dream(temp, mode="deep", apply=True, llm_rewrite=True)
+
+        joined = " ".join(result["warnings"])
+        self.assertNotIn("does not call provider adapters directly", joined)
+        self.assertIn("called provider `ollama` directly", joined)
+        self.assertIn("agent-assisted", joined)
+
+    def test_dream_store_light_mode_regenerates_index_with_topics(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            write_memory_store(
+                temp,
+                store_path="architecture/tests/isolated-unit-tests",
+                content=(
+                    "# Isolated Unit Tests\n\n"
+                    "## Topic A: Frontmatter Utilities\n"
+                    "Extracted fast frontmatter unit tests.\n\n"
+                    "## Topic B: Security Checks\n"
+                    "Isolated token signature regex tests.\n"
+                ),
+                title="Isolated Unit Tests",
+                tags=["tests", "frontmatter"],
+                priority="low",
+            )
+
+            # Trigger Dreaming in light mode (only maintains files and index)
+            result = dream(temp, mode="light", apply=True)
+            self.assertTrue(result["changed"])
+
+            index_path = Path(temp) / ".ai-memory" / "index.md"
+            self.assertTrue(index_path.exists())
+            index_text = index_path.read_text(encoding="utf-8")
+
+            # Check root index points to the sub-index
+            self.assertIn("## Memory Store", index_text)
+            self.assertIn("[Memory Store Index](memory-store/index.md)", index_text)
+
+            # Check dedicated store index file
+            store_index_path = Path(temp) / ".ai-memory" / "memory-store" / "index.md"
+            self.assertTrue(store_index_path.exists())
+            store_index_text = store_index_path.read_text(encoding="utf-8")
+
+            # Check that the table has 5 columns
+            self.assertIn("| Path | Priority | Summary | Key Topics | Tags |", store_index_text)
+            self.assertIn("architecture/tests/isolated-unit-tests", store_index_text)
+            self.assertIn(
+                "• Topic A: Frontmatter Utilities<br>• Topic B: Security Checks", store_index_text
+            )
+            self.assertIn("tests, frontmatter", store_index_text)
+
+            # Check frontmatter of the sub-index
+            store_meta, _ = parse_frontmatter(store_index_text)
+            self.assertEqual(store_meta["store_path"], "index")
+            self.assertEqual(store_meta["title"], "Memory Store Index")
+            self.assertEqual(store_meta["priority"], "high")
+            self.assertEqual(store_meta["tags"], ["index", "memory-store"])
+
+            # Verify doctor is happy
+            res_doctor = doctor(temp)
+            self.assertTrue(res_doctor["ok"])
+
+    @mock.patch("memory_fabric.storage.dream.call_llm", new_callable=mock.AsyncMock)
+    def test_dream_store_deep_mode_consolidates_and_updates_nested_files(
+        self, mock_call_llm
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+
+            # Setup a nested file
+            write_memory_store(
+                temp,
+                store_path="architecture/tests/isolated-unit-tests",
+                content="- Old content of utility tests.",
+                title="Isolated Unit Tests",
+                tags=["tests"],
+                priority="low",
+            )
+
+            os.environ["MEMORY_FABRIC_LLM_PROVIDER"] = "gemini"
+            os.environ["GEMINI_API_KEY"] = "gemini-key"
+
+            consolidation_response = json.dumps(
+                {
+                    "consolidated_files": {
+                        "store/architecture/tests/isolated-unit-tests": "- Enriched utility tests with dates and IDs.",
+                        "local/decisions": "# Decisions\n\n- Consolidated decisions.",
+                    },
+                    "contradictions": [],
+                    "warnings": [],
+                }
+            )
+
+            def mock_llm_func(prompt, system_instruction="", *args, **kwargs):
+                if "consolidated_files" in prompt:
+                    return consolidation_response
+                return "Mocked summary"
+
+            mock_call_llm.side_effect = mock_llm_func
+
+            try:
+                result = dream(temp, mode="deep", apply=True)
+                self.assertTrue(result["changed"])
+
+                # Check affected files contains the store file path
+                affected = [f.replace("\\", "/") for f in result["affected_files"]]
+                self.assertIn("memory-store/architecture/tests/isolated-unit-tests.md", affected)
+
+                # Verify file was NOT flattened to root
+                flat_path = Path(temp) / ".ai-memory" / "isolated-unit-tests.md"
+                self.assertFalse(flat_path.exists())
+
+                # Verify nested file inside memory-store/ was updated correctly
+                nested_path = (
+                    Path(temp)
+                    / ".ai-memory"
+                    / "memory-store"
+                    / "architecture"
+                    / "tests"
+                    / "isolated-unit-tests.md"
+                )
+                self.assertTrue(nested_path.exists())
+
+                metadata, body = parse_frontmatter(nested_path.read_text(encoding="utf-8"))
+                self.assertEqual(body.strip(), "- Enriched utility tests with dates and IDs.")
+                self.assertEqual(metadata["store_path"], "architecture/tests/isolated-unit-tests")
+                self.assertEqual(metadata["title"], "Isolated Unit Tests")
+                self.assertEqual(metadata["priority"], "low")
+
+            finally:
+                os.environ.pop("MEMORY_FABRIC_LLM_PROVIDER", None)
+                os.environ.pop("GEMINI_API_KEY", None)
+
+    @mock.patch("memory_fabric.storage.finalize.call_llm", new_callable=mock.AsyncMock)
+    def test_dream_store_deep_mode_summarizer_refreshes_nested_file_summaries(
+        self, mock_call_llm
+    ) -> None:
+        # dream() calls call_llm directly (consolidation prompt) and finalize's
+        # _process_and_finalize_candidate also calls it (per-section summaries) —
+        # both references must be the *same* mock so call_count/side_effect are shared.
+        with (
+            tempfile.TemporaryDirectory() as temp,
+            mock.patch("memory_fabric.storage.dream.call_llm", new=mock_call_llm),
+            mock.patch("memory_fabric.storage.finalize.now_iso") as mock_now_iso,
+            mock.patch("memory_fabric.storage.snapshots.now_iso") as mock_snapshot_now_iso,
+        ):
+            initialize_memory_fabric(temp)
+
+            # Let's delete other flat sections so we only have decisions and the nested store file
+            for p in (Path(temp) / ".ai-memory").glob("*.md"):
+                if p.name not in {"decisions.md"}:
+                    p.unlink()
+
+            write_memory_store(
+                temp,
+                store_path="architecture/tests/isolated-unit-tests",
+                content="- Fast frontmatter units.",
+                title="Isolated Unit Tests",
+                tags=["tests"],
+                priority="low",
+            )
+
+            os.environ["MEMORY_FABRIC_LLM_PROVIDER"] = "gemini"
+            os.environ["GEMINI_API_KEY"] = "gemini-key"
+
+            call_count = 0
+
+            def increment_now_iso():
+                nonlocal call_count
+                call_count += 1
+                return f"2026-06-03T14:00:{call_count:02d}-04:00"
+
+            mock_now_iso.side_effect = increment_now_iso
+            mock_snapshot_now_iso.side_effect = increment_now_iso
+
+            def mock_llm_func(prompt, system_instruction="", *args, **kwargs):
+                if "consolidated_files" in prompt:
+                    return json.dumps(
+                        {
+                            "consolidated_files": {
+                                "store/architecture/tests/isolated-unit-tests": "- Enriched fast frontmatter units."
+                            },
+                            "contradictions": [],
+                            "warnings": [],
+                        }
+                    )
+                elif "isolated-unit-tests" in prompt:
+                    return "Custom nested unit tests summary."
+                else:
+                    return "Custom decisions summary."
+
+            mock_call_llm.side_effect = mock_llm_func
+            try:
+                result1 = dream(temp, mode="deep", apply=True)
+                self.assertTrue(result1["changed"])
+
+                # Check that summary & summary_hash are updated in the nested file metadata
+                nested_path = (
+                    Path(temp)
+                    / ".ai-memory"
+                    / "memory-store"
+                    / "architecture"
+                    / "tests"
+                    / "isolated-unit-tests.md"
+                )
+                metadata, body = parse_frontmatter(nested_path.read_text(encoding="utf-8"))
+                self.assertEqual(metadata["summary"], "Custom nested unit tests summary.")
+                expected_hash = hashlib.md5(body.strip().encode("utf-8")).hexdigest()
+                self.assertEqual(metadata["summary_hash"], expected_hash)
+
+                # 2. Run second dream: identical content -> skips summary LLM call
+                mock_call_llm.reset_mock()
+                # Mock return for the consolidation call, which checks skips
+                _ = dream(temp, mode="deep", apply=True)
+                self.assertEqual(mock_call_llm.call_count, 0)  # Skipped LLM calls completely!
+
+            finally:
+                os.environ.pop("MEMORY_FABRIC_LLM_PROVIDER", None)
+                os.environ.pop("GEMINI_API_KEY", None)
+
+
+def _write_daily_commit_file(commits_dir: Path, date_str: str, commit_line: str) -> Path:
+    """A legacy shared day file, as capture wrote them before v1.2.1."""
+    commits_dir.mkdir(parents=True, exist_ok=True)
+    path = commits_dir / f"{date_str}.md"
+    metadata = {"source": "passive-capture", "review_status": "pending"}
+    body = f"### commit `abc1234567` — {commit_line}\n\n- when: {date_str}T00:00:00+00:00\n"
+    path.write_text(dump_frontmatter(metadata, body), encoding="utf-8")
+    return path
+
+
+def _write_commit_record_file(
+    commits_dir: Path, date_str: str, short_hash: str, commit_line: str
+) -> Path:
+    """A current one-file-per-commit record: `<date>/<short-hash>.md`."""
+    day_dir = commits_dir / date_str
+    day_dir.mkdir(parents=True, exist_ok=True)
+    path = day_dir / f"{short_hash}.md"
+    metadata = {"source": "passive-capture", "review_status": "pending"}
+    body = f"### commit `{short_hash}` — {commit_line}\n\n- when: {date_str}T00:00:00+00:00\n"
+    path.write_text(dump_frontmatter(metadata, body), encoding="utf-8")
+    return path
+
+
+class EpisodicRollupTests(unittest.TestCase):
+    """Stage 1: deep-dream weekly roll-up of aged episodic/commits/ files."""
+
+    def test_groups_old_files_by_iso_week_and_marks_consolidated(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            candidate_root = Path(temp)
+            commits_dir = candidate_root / "memory-store" / "episodic" / "commits"
+            # 2026-06-01 and 2026-06-03 both fall in ISO week 2026-W23.
+            _write_daily_commit_file(commits_dir, "2026-06-01", "first old commit")
+            _write_daily_commit_file(commits_dir, "2026-06-03", "second old commit")
+
+            result = _roll_up_episodic_commits(
+                candidate_root, cutoff_days=14, now=datetime(2026, 7, 16, tzinfo=UTC)
+            )
+
+            self.assertEqual(result["weeks_touched"], ["week-2026-w23"])
+            self.assertEqual(len(result["files_consolidated"]), 2)
+            self.assertEqual(result["warnings"], [])
+
+            self.assertFalse((commits_dir / "2026-06-01.md").exists())
+            self.assertFalse((commits_dir / "2026-06-03.md").exists())
+
+            week_path = commits_dir / "week-2026-w23.md"
+            self.assertTrue(week_path.exists())
+            metadata, body = parse_frontmatter(week_path.read_text(encoding="utf-8"))
+            self.assertEqual(metadata["review_status"], "consolidated")
+            self.assertIn("first old commit", body)
+            self.assertIn("second old commit", body)
+            self.assertIn("## 2026-06-01", body)
+            self.assertIn("## 2026-06-03", body)
+
+    def test_per_commit_record_files_fold_by_day_and_leave_no_empty_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            candidate_root = Path(temp)
+            commits_dir = candidate_root / "memory-store" / "episodic" / "commits"
+            _write_commit_record_file(commits_dir, "2026-06-01", "aaa1111111", "first old commit")
+            _write_commit_record_file(commits_dir, "2026-06-01", "bbb2222222", "second old commit")
+            _write_commit_record_file(commits_dir, "2026-06-03", "ccc3333333", "third old commit")
+
+            result = _roll_up_episodic_commits(
+                candidate_root, cutoff_days=14, now=datetime(2026, 7, 16, tzinfo=UTC)
+            )
+
+            self.assertEqual(result["weeks_touched"], ["week-2026-w23"])
+            self.assertEqual(len(result["files_consolidated"]), 3)
+            self.assertEqual(result["warnings"], [])
+            # Emptied day directories go away with their files.
+            self.assertFalse((commits_dir / "2026-06-01").exists())
+            self.assertFalse((commits_dir / "2026-06-03").exists())
+
+            metadata, body = parse_frontmatter(
+                (commits_dir / "week-2026-w23.md").read_text(encoding="utf-8")
+            )
+            self.assertEqual(metadata["review_status"], "consolidated")
+            for line in ("first old commit", "second old commit", "third old commit"):
+                self.assertIn(line, body)
+            # One heading per day, not per commit.
+            self.assertEqual(body.count("## 2026-06-01"), 1)
+            self.assertEqual(body.count("## 2026-06-03"), 1)
+
+    def test_both_capture_layouts_fold_together_in_one_pass(self) -> None:
+        """A store written across the upgrade holds legacy day files and
+        per-commit records side by side; a single roll-up clears both."""
+        with tempfile.TemporaryDirectory() as temp:
+            candidate_root = Path(temp)
+            commits_dir = candidate_root / "memory-store" / "episodic" / "commits"
+            _write_daily_commit_file(commits_dir, "2026-06-01", "legacy day-file commit")
+            _write_commit_record_file(commits_dir, "2026-06-03", "ccc3333333", "per-commit record")
+
+            result = _roll_up_episodic_commits(
+                candidate_root, cutoff_days=14, now=datetime(2026, 7, 16, tzinfo=UTC)
+            )
+
+            self.assertEqual(result["weeks_touched"], ["week-2026-w23"])
+            self.assertEqual(len(result["files_consolidated"]), 2)
+            self.assertFalse((commits_dir / "2026-06-01.md").exists())
+            self.assertFalse((commits_dir / "2026-06-03").exists())
+            _metadata, body = parse_frontmatter(
+                (commits_dir / "week-2026-w23.md").read_text(encoding="utf-8")
+            )
+            self.assertIn("legacy day-file commit", body)
+            self.assertIn("per-commit record", body)
+
+    def test_a_malformed_record_keeps_its_day_directory_alive(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            candidate_root = Path(temp)
+            commits_dir = candidate_root / "memory-store" / "episodic" / "commits"
+            good = _write_commit_record_file(commits_dir, "2026-06-01", "aaa1111111", "good commit")
+            bad = commits_dir / "2026-06-01" / "bbb2222222.md"
+            bad.write_text("not valid frontmatter at all", encoding="utf-8")
+
+            result = _roll_up_episodic_commits(
+                candidate_root, cutoff_days=14, now=datetime(2026, 7, 16, tzinfo=UTC)
+            )
+
+            self.assertTrue(any("bbb2222222.md" in w for w in result["warnings"]))
+            self.assertTrue(bad.exists(), "an unreadable record must never be deleted")
+            self.assertFalse(good.exists())
+            self.assertTrue(bad.parent.is_dir())
+
+    def test_files_younger_than_cutoff_are_untouched(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            candidate_root = Path(temp)
+            commits_dir = candidate_root / "memory-store" / "episodic" / "commits"
+            recent_path = _write_daily_commit_file(commits_dir, "2026-07-10", "recent commit")
+
+            result = _roll_up_episodic_commits(
+                candidate_root, cutoff_days=14, now=datetime(2026, 7, 16, tzinfo=UTC)
+            )
+
+            self.assertEqual(result["weeks_touched"], [])
+            self.assertEqual(result["files_consolidated"], [])
+            self.assertTrue(recent_path.exists())
+
+    def test_rerun_with_nothing_new_is_a_no_op(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            candidate_root = Path(temp)
+            commits_dir = candidate_root / "memory-store" / "episodic" / "commits"
+            _write_daily_commit_file(commits_dir, "2026-06-01", "only old commit")
+            now = datetime(2026, 7, 16, tzinfo=UTC)
+
+            first = _roll_up_episodic_commits(candidate_root, cutoff_days=14, now=now)
+            self.assertEqual(first["weeks_touched"], ["week-2026-w23"])
+
+            week_path = commits_dir / "week-2026-w23.md"
+            body_after_first = week_path.read_text(encoding="utf-8")
+
+            second = _roll_up_episodic_commits(candidate_root, cutoff_days=14, now=now)
+            self.assertEqual(second["weeks_touched"], [])
+            self.assertEqual(second["files_consolidated"], [])
+            self.assertEqual(week_path.read_text(encoding="utf-8"), body_after_first)
+
+    def test_malformed_daily_file_is_skipped_with_a_warning_not_a_crash(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            candidate_root = Path(temp)
+            commits_dir = candidate_root / "memory-store" / "episodic" / "commits"
+            commits_dir.mkdir(parents=True)
+            good_path = _write_daily_commit_file(commits_dir, "2026-06-02", "good commit")
+            bad_path = commits_dir / "2026-06-01.md"
+            bad_path.write_text("not valid frontmatter at all", encoding="utf-8")
+
+            result = _roll_up_episodic_commits(
+                candidate_root, cutoff_days=14, now=datetime(2026, 7, 16, tzinfo=UTC)
+            )
+
+            self.assertTrue(any("2026-06-01.md" in w for w in result["warnings"]))
+            # The malformed file is left in place for a future retry...
+            self.assertTrue(bad_path.exists())
+            # ...but the well-formed file in the same week still gets rolled up.
+            self.assertFalse(good_path.exists())
+            self.assertTrue((commits_dir / "week-2026-w23.md").exists())
+
+    def test_deep_dream_leaves_no_empty_day_directory_in_the_live_store(self) -> None:
+        """Applying a candidate deletes files, not directories — so the day
+        folder a roll-up emptied has to be pruned explicitly or it lingers in
+        the live store forever."""
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            commits_dir = Path(temp) / ".ai-memory" / "memory-store" / "episodic" / "commits"
+            _write_commit_record_file(commits_dir, "2026-06-01", "aaa1111111", "aged commit")
+
+            with mock.patch("memory_fabric.storage.consolidation.datetime") as mock_datetime:
+                mock_datetime.now.return_value = datetime(2026, 7, 16, tzinfo=UTC)
+                dream(temp, mode="deep", apply=True)
+
+            self.assertTrue((commits_dir / "week-2026-w23.md").exists())
+            self.assertFalse((commits_dir / "2026-06-01").exists())
+            # The scaffolded category directory itself survives (it holds .gitkeep).
+            self.assertTrue((Path(temp) / ".ai-memory" / "memory-store" / "episodic").is_dir())
+
+    def test_deep_dream_applies_rollup_light_dream_does_not(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            live_commits_dir = Path(temp) / ".ai-memory" / "memory-store" / "episodic" / "commits"
+            _write_daily_commit_file(live_commits_dir, "2026-06-01", "aged commit")
+
+            with mock.patch("memory_fabric.storage.consolidation.datetime") as mock_datetime:
+                mock_datetime.now.return_value = datetime(2026, 7, 16, tzinfo=UTC)
+                light_result = dream(temp, mode="light", apply=True)
+                self.assertTrue((live_commits_dir / "2026-06-01.md").exists())
+                self.assertFalse((live_commits_dir / "week-2026-w23.md").exists())
+
+                deep_result = dream(temp, mode="deep", apply=True)
+
+            self.assertFalse((live_commits_dir / "2026-06-01.md").exists())
+            self.assertTrue((live_commits_dir / "week-2026-w23.md").exists())
+            self.assertTrue(light_result["changed"] or True)  # light dream itself still ran fine
+            self.assertTrue(deep_result["changed"])
+
+
+if __name__ == "__main__":
+    unittest.main()

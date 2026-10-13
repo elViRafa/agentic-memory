@@ -1,0 +1,750 @@
+"""Candidate-store mechanics for Dreaming: creation, local dedup, diffing against
+live memory, applying approved changes, rewrite-task detection, and regenerating
+the project index / consolidated_memory.md compiled view.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import difflib
+import re
+import shutil
+import tempfile
+from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
+from typing import Any
+
+from memory_fabric.contracts import DreamConsolidation, DreamRewriteTask
+from memory_fabric.frontmatter import FrontmatterError, dump_frontmatter, parse_frontmatter
+from memory_fabric.locking import locked_file
+from memory_fabric.paths import local_memory_dir
+from memory_fabric.storage._shared import (
+    PRIORITY_ORDER,
+    _get_section_key,
+    _index_group_key,
+    _is_generated_file,
+    _is_ignored_local_memory_path,
+    _is_steering_file,
+    _is_store_path,
+    _iter_markdown_files,
+    _path_to_store_path,
+    _read_memory_path,
+    _safe_parse_for_sort,
+    _steering_context_enabled,
+    _write_markdown_if_changed,
+)
+from memory_fabric.templates import build_empty_section, now_iso
+
+
+def _regenerate_index(cwd: str, mode: str) -> list[str]:
+    memory_dir = local_memory_dir(cwd)
+    return _regenerate_index_root(memory_dir, mode=mode)
+
+
+def _extract_key_topics(body: str) -> str:
+    """Extract H2 headings or top-level list items to list as key topics."""
+    topics: list[str] = []
+    # Find h2 headings, e.g. ## Topic Name
+    for line in body.splitlines():
+        line = line.strip()
+        if line.startswith("## "):
+            topic = line[3:].strip()
+            if topic:
+                topics.append(topic)
+    if not topics:
+        # Fallback to top-level list items if no h2 headings exist
+        for line in body.splitlines():
+            if line.startswith("- ") or line.startswith("* "):
+                topic = line[2:].strip()
+                if topic:
+                    if len(topic) > 60:
+                        topic = topic[:57] + "..."
+                    topics.append(topic)
+                    if len(topics) >= 3:
+                        break
+    if not topics:
+        return "None recorded"
+
+    cleaned_topics = [t.replace("|", "\\|") for t in topics]
+    return "<br>".join(f"• {t}" for t in cleaned_topics)
+
+
+# `### commit `<short-hash>` — <subject>`, as storage/capture.py writes it.
+_COMMIT_RECORD_HEADING_RE = re.compile(r"^#{2,6}\s+commit\s+`?([0-9a-f]+)`?\s*(?:—|-)?\s*(.*)$")
+
+
+def _grouped_store_index_row(group_key: str, members: list[tuple[dict[str, Any], str]]) -> str:
+    """One `memory-store/index.md` row standing in for a whole group of files.
+
+    Used for passive commit captures, which are one file per commit: the index
+    lists the day, how many commits it holds, and the first few subjects — the
+    same navigational value a day file's row carried, without a row per commit.
+    """
+    subjects: list[str] = []
+    tags: list[str] = []
+    priority_rank = PRIORITY_ORDER["low"]
+    for metadata, body in members:
+        priority_rank = min(
+            priority_rank, PRIORITY_ORDER.get(str(metadata.get("priority") or "medium"), 1)
+        )
+        for tag in metadata.get("tags", []) if isinstance(metadata.get("tags"), list) else []:
+            if tag not in tags:
+                tags.append(tag)
+        for line in body.splitlines():
+            match = _COMMIT_RECORD_HEADING_RE.match(line.strip())
+            if match and match.group(2).strip():
+                subjects.append(match.group(2).strip())
+                break
+
+    priority = next(name for name, rank in PRIORITY_ORDER.items() if rank == priority_rank)
+    summary = f"{len(members)} passively captured commit(s)."
+    shown = [subject.replace("|", "\\|") for subject in subjects[:3]]
+    if len(subjects) > 3:
+        shown.append(f"…and {len(subjects) - 3} more")
+    topics = "<br>".join(f"• {subject}" for subject in shown) if shown else "None recorded"
+    return f"| `{group_key}` | {priority} | {summary} | {topics} | {', '.join(tags)} |"
+
+
+def _compile_consolidated_memory(memory_dir: Path) -> str:
+    """Compile all active memory sections into a single read-only string."""
+    fragments = []
+
+    prompt_path = memory_dir / "memory_prompt.txt"
+    if not prompt_path.exists():
+        for parent in memory_dir.parents:
+            if parent.name == ".ai-memory":
+                prompt_path = parent / "memory_prompt.txt"
+                break
+
+    if prompt_path.exists():
+        try:
+            p_text = prompt_path.read_text(encoding="utf-8").strip()
+            if p_text:
+                fragments.append(
+                    f"<!-- memory-fabric:local/memory_prompt -->\nMemory Prompt Steering Instructions:\n{p_text}"
+                )
+        except (OSError, UnicodeDecodeError):
+            pass  # optional steering file; absence/unreadability is not an error
+    local_files = [
+        path
+        for path in _iter_markdown_files(memory_dir)
+        if path.name != "consolidated_memory.md"
+        and not _is_ignored_local_memory_path(memory_dir, path)
+        and not _is_store_path(memory_dir, path)
+        and not _is_steering_file(path)
+    ]
+    # Mirror read_combined_context's routing: `context: false` steering files
+    # are distributed via sync-agents, so the compiled cache must omit them
+    # too or the cache fast path would leak them back into context.
+    steering_files = [
+        path
+        for path in sorted(memory_dir.glob("*.md"))
+        if not _is_ignored_local_memory_path(memory_dir, path)
+        and _is_steering_file(path)
+        and _steering_context_enabled(path)
+    ]
+    store_root = memory_dir / "memory-store"
+    store_files = (
+        [p for p in _iter_markdown_files(store_root) if p.name != "index.md"]
+        if store_root.exists()
+        else []
+    )
+
+    def sort_key(path: Path) -> tuple[int, int, str, str]:
+        metadata, _body, _warning = _safe_parse_for_sort(path)
+        priority = str(metadata.get("priority") or "medium")
+        index_rank = 0 if path == memory_dir / "index.md" else 1
+        return (PRIORITY_ORDER.get(priority, 1), index_rank, path.name, str(path))
+
+    # Same order as fresh context assembly: steering first (always loaded),
+    # then local maps and store files interleaved strictly by priority.
+    for path in steering_files:
+        section_name, metadata, body, read_warning = _read_memory_path(path)
+        if read_warning:
+            continue
+        full_text = dump_frontmatter(metadata, body)
+        fragments.append(f"<!-- memory-fabric:local/{section_name} -->\n{full_text.strip()}")
+
+    for path in sorted(local_files + store_files, key=sort_key):
+        section_name, metadata, body, read_warning = _read_memory_path(path)
+        if read_warning:
+            continue
+        full_text = dump_frontmatter(metadata, body)
+        if _is_store_path(memory_dir, path):
+            section_key = f"store/{_path_to_store_path(store_root, path)}"
+        else:
+            section_key = f"local/{section_name}"
+        fragments.append(f"<!-- memory-fabric:{section_key} -->\n{full_text.strip()}")
+
+    return "\n\n".join(fragments).strip() + "\n"
+
+
+def _regenerate_index_root(
+    memory_dir: Path,
+    mode: str,
+    consolidation_hash: str | None = None,
+    contradictions: list[str] | None = None,
+    contradiction_count: int | None = None,
+    warnings: list[str] | None = None,
+    compile_consolidated: bool = True,
+) -> list[str]:
+    checked_files = [
+        str(path)
+        for path in _iter_markdown_files(memory_dir)
+        if path.name != "index.md"
+        and not _is_ignored_local_memory_path(memory_dir, path)
+        and not _is_store_path(memory_dir, path)
+    ]
+    # NOTE: no timestamp in the body — the frontmatter `last_updated` carries
+    # it. A timestamped body would defeat the changed-content check below and
+    # dirty the git tree on every Dream (P-15).
+    lines = [
+        "# Project Memory Index",
+        "",
+        f"Updated by Memory Fabric Dreaming mode `{mode}`.",
+        "",
+        "| Section | Priority | Summary | Key Topics |",
+        "| --- | --- | --- | --- |",
+    ]
+    for path in _iter_markdown_files(memory_dir):
+        if path.name == "index.md" or _is_ignored_local_memory_path(memory_dir, path):
+            continue
+        if _is_store_path(memory_dir, path):
+            continue
+        try:
+            metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, FrontmatterError) as exc:
+            # Same non-fatal-skip pattern as _consolidate_candidate_memory and
+            # _process_and_finalize_candidate (see 7ee983a) — this loop just
+            # wasn't covered by that fix, so a malformed flat section still
+            # crashed every `dream` (light and deep) via index regeneration.
+            if warnings is not None:
+                warnings.append(
+                    f"Skipped {path.relative_to(memory_dir)} during index regeneration: {exc}"
+                )
+            continue
+        section = metadata.get("section", path.stem)
+        priority = metadata.get("priority", "medium")
+        summary = str(metadata.get("summary", "")).replace("|", "\\|")
+        topics = _extract_key_topics(body)
+        lines.append(f"| `{section}` | {priority} | {summary} | {topics} |")
+
+    # Add pointer to dedicated memory-store index
+    store_root = memory_dir / "memory-store"
+    if store_root.exists():
+        store_files = sorted(p for p in _iter_markdown_files(store_root) if p.name != "index.md")
+        if store_files:
+            lines.append("")
+            lines.append("## Memory Store")
+            lines.append("")
+            lines.append(
+                "Please see the dedicated [Memory Store Index](memory-store/index.md) for a map of available semantic memory store files."
+            )
+
+        # Compile memory-store/index.md (body kept timestamp-free, see above).
+        # Written even when the store is still empty so a freshly initialized
+        # project passes doctor's index-consistency checks (P-03).
+        store_index_lines = [
+            "# Memory Store Index",
+            "",
+            f"Updated by Memory Fabric Dreaming mode `{mode}`.",
+            "",
+            "| Path | Priority | Summary | Key Topics | Tags |",
+            "| --- | --- | --- | --- | --- |",
+        ]
+        # Grouped paths (passive commit captures) contribute one row per day
+        # rather than one per file; see `_index_group_key`. The row lands where
+        # the group's first member would have, so the index keeps store order.
+        grouped: dict[str, list[tuple[dict[str, Any], str]]] = {}
+        row_order: list[tuple[str, bool]] = []
+        singles: dict[str, tuple[dict[str, Any], str]] = {}
+        for sf in store_files:
+            try:
+                sf_meta, sf_body = parse_frontmatter(sf.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, FrontmatterError) as exc:
+                if warnings is not None:
+                    warnings.append(
+                        f"Skipped {sf.relative_to(store_root)} during index regeneration: {exc}"
+                    )
+                continue
+            checked_files.append(str(sf))
+            sp = _path_to_store_path(store_root, sf)
+            group = _index_group_key(sp)
+            if group is None:
+                singles[sp] = (sf_meta, sf_body)
+                row_order.append((sp, False))
+                continue
+            if group not in grouped:
+                row_order.append((group, True))
+            grouped.setdefault(group, []).append((sf_meta, sf_body))
+
+        for key, is_group in row_order:
+            if is_group:
+                store_index_lines.append(_grouped_store_index_row(key, grouped[key]))
+                continue
+            sf_meta, sf_body = singles[key]
+            sf_priority = sf_meta.get("priority", "medium")
+            sf_summary = str(sf_meta.get("summary", "")).replace("|", "\\|")
+            sf_topics = _extract_key_topics(sf_body)
+            sf_tags = sf_meta.get("tags", [])
+            tags_str = ", ".join(sf_tags) if isinstance(sf_tags, list) else str(sf_tags)
+            store_index_lines.append(
+                f"| `{key}` | {sf_priority} | {sf_summary} | {sf_topics} | {tags_str} |"
+            )
+
+        store_index_path = store_root / "index.md"
+        store_root.mkdir(parents=True, exist_ok=True)
+
+        store_metadata = {
+            "store_path": "index",
+            "title": "Memory Store Index",
+            "summary": "Index of all semantic memory store files.",
+            "priority": "high",
+            "tags": ["index", "memory-store"],
+            "schema_version": "1.3",
+            "last_updated": now_iso(),
+        }
+        _write_markdown_if_changed(
+            store_index_path, store_metadata, "\n".join(store_index_lines) + "\n"
+        )
+
+    index_path = memory_dir / "index.md"
+    if index_path.exists():
+        metadata, _body = parse_frontmatter(index_path.read_text(encoding="utf-8"))
+    else:
+        metadata, _body = parse_frontmatter(build_empty_section("index"))
+
+    if consolidation_hash is not None:
+        metadata["consolidation_hash"] = consolidation_hash
+    if contradictions is not None:
+        # Pack surface only — full advisory list lives in evals/contradictions.json.
+        metadata["contradictions"] = contradictions
+    if contradiction_count is not None:
+        metadata["contradiction_count"] = contradiction_count
+    elif contradictions is not None:
+        metadata["contradiction_count"] = len(contradictions)
+    if warnings is not None:
+        metadata["consolidation_warnings"] = warnings
+
+    metadata["last_updated"] = now_iso()
+    metadata["summary"] = "Map of available project memory sections."
+    metadata["priority"] = "high"
+    _write_markdown_if_changed(index_path, metadata, "\n".join(lines) + "\n")
+
+    if compile_consolidated:
+        try:
+            consolidated_content = _compile_consolidated_memory(memory_dir)
+            consolidated_path = memory_dir / "consolidated_memory.md"
+            if (
+                not consolidated_path.exists()
+                or consolidated_path.read_text(encoding="utf-8") != consolidated_content
+            ):
+                consolidated_path.write_text(consolidated_content, encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            if warnings is not None:
+                warnings.append(f"Failed to write consolidated_memory.md: {exc}")
+
+    return checked_files
+
+
+def _create_candidate_store(memory_dir: Path, snapshot: str) -> Path:
+    source = memory_dir / "snapshots" / snapshot
+    if not source.exists():
+        raise FileNotFoundError(f"Snapshot not found: {snapshot}")
+
+    candidates_dir = memory_dir / "candidates"
+    candidates_dir.mkdir(parents=True, exist_ok=True)
+    candidate_root = Path(tempfile.mkdtemp(prefix=f"{snapshot}-", dir=str(candidates_dir)))
+    for path in _iter_markdown_files(source):
+        relative = path.relative_to(source)
+        target = candidate_root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, target)
+    return candidate_root
+
+
+# Passive captures are filed under the commit's author date (capture.py): one
+# file per commit in a `<date>/` directory, plus — in stores written before that
+# layout — a shared `<date>.md` day file. A plain date pattern identifies both;
+# anything else already under episodic/commits/ (e.g. a prior week-*.md summary)
+# is left alone.
+_EPISODIC_COMMITS_DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})(\.md)?$")
+
+
+def _episodic_commit_date(name: str) -> date | None:
+    """The author date a daily capture file or directory is filed under, if any."""
+    match = _EPISODIC_COMMITS_DATE_RE.match(name)
+    if not match:
+        return None
+    try:
+        return date(int(match.group(1)), int(match.group(2)), int(match.group(3)))
+    except ValueError:
+        return None  # a well-formed name that isn't a real date (2026-13-40)
+
+
+def _daily_commit_units(commits_dir: Path) -> list[tuple[date, list[Path], Path | None]]:
+    """Every daily capture unit under `episodic/commits/`, oldest first.
+
+    Returns `(author_date, files, directory)` per day. `directory` is the
+    per-day folder of the one-file-per-commit layout (removed once emptied) and
+    None for a legacy shared day file. Both layouts fold into the same weekly
+    summary, so a store written across an upgrade rolls up in one pass.
+    """
+    units: list[tuple[date, list[Path], Path | None]] = []
+    try:
+        entries = sorted(commits_dir.iterdir())
+    except OSError:
+        return units
+    for entry in entries:
+        file_date = _episodic_commit_date(entry.name)
+        if file_date is None:
+            continue
+        if entry.is_dir():
+            files = sorted(path for path in entry.glob("*.md") if path.is_file())
+            if files:
+                units.append((file_date, files, entry))
+        elif entry.is_file():
+            units.append((file_date, [entry], None))
+    return sorted(units, key=lambda unit: (unit[0], str(unit[1][0])))
+
+
+# Default age, in days, at which a daily commit-capture file becomes eligible
+# for weekly roll-up in deep Dreaming. No filter at capture time catches every
+# noise commit, and passive capture otherwise leaves an ever-growing pile of
+# `review_status: pending` daily files with no consumer — this gives that
+# residual accumulation a real destination.
+_EPISODIC_ROLLUP_CUTOFF_DAYS = 14
+
+
+def _roll_up_episodic_commits(
+    candidate_root: Path,
+    cutoff_days: int = _EPISODIC_ROLLUP_CUTOFF_DAYS,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Fold daily passive-capture files older than `cutoff_days` into weekly
+    `episodic/commits/week-<iso-year>-w<ww>.md` summaries, marked
+    `review_status: consolidated`. Deep dream only (called from `dream()` /
+    `prepare_dream_payload()` before the candidate is otherwise processed).
+
+    Handles both capture layouts: the current `<date>/<short-hash>.md` (one file
+    per commit) and the legacy shared `<date>.md` day file. A day's records are
+    folded together under one `## <date>` heading regardless of which layout
+    they came from.
+
+    Idempotent and lossless-by-default: a daily file's content is appended to
+    its week's summary and the daily file is deleted only once that append
+    succeeds; a re-run with nothing newly eligible finds no daily files left
+    and is a no-op. A snapshot of the live store already precedes this (the
+    caller creates it before building the candidate), so this never operates
+    on the only copy of the content.
+    """
+    commits_dir = candidate_root / "memory-store" / "episodic" / "commits"
+    warnings: list[str] = []
+    if not commits_dir.exists():
+        return {"weeks_touched": [], "files_consolidated": [], "warnings": warnings}
+
+    today = (now or datetime.now(UTC)).date()
+    cutoff = today - timedelta(days=cutoff_days)
+
+    groups: dict[tuple[int, int], list[tuple[date, list[Path], Path | None]]] = {}
+    for file_date, files, day_dir in _daily_commit_units(commits_dir):
+        if file_date >= cutoff:
+            continue
+        iso_year, iso_week, _ = file_date.isocalendar()
+        groups.setdefault((iso_year, iso_week), []).append((file_date, files, day_dir))
+
+    weeks_touched: set[str] = set()
+    files_consolidated: list[str] = []
+
+    for (iso_year, iso_week), entries in groups.items():
+        entries.sort(key=lambda entry: entry[0])
+        week_slug = f"week-{iso_year}-w{iso_week:02d}"
+        week_path = commits_dir / f"{week_slug}.md"
+
+        if week_path.exists():
+            try:
+                metadata, body = parse_frontmatter(week_path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, FrontmatterError) as exc:
+                warnings.append(
+                    f"Skipped rolling up into {week_path.relative_to(candidate_root)}: {exc}"
+                )
+                continue
+        else:
+            metadata = {
+                "store_path": f"episodic/commits/{week_slug}",
+                "title": f"Commit Log — Week {iso_year}-W{iso_week:02d}",
+                "summary": f"Consolidated commit history for ISO week {iso_year}-W{iso_week:02d}.",
+                "priority": "low",
+                "tags": ["episodic", "passive-capture", "consolidated"],
+                "source": "passive-capture",
+            }
+            body = ""
+
+        rolled_up_any = False
+        for file_date, day_files, day_dir in entries:
+            day_records: list[str] = []
+            folded_paths: list[Path] = []
+            for day_path in day_files:
+                try:
+                    _day_meta, day_body = parse_frontmatter(day_path.read_text(encoding="utf-8"))
+                except (OSError, UnicodeDecodeError, FrontmatterError) as exc:
+                    warnings.append(
+                        f"Skipped {day_path.relative_to(candidate_root)} "
+                        f"during episodic roll-up: {exc}"
+                    )
+                    continue  # left on disk: an unreadable file is never deleted
+                if day_body.strip():
+                    day_records.append(day_body.strip())
+                folded_paths.append(day_path)
+
+            if not folded_paths:
+                continue
+            if day_records:
+                body = (
+                    body.rstrip()
+                    + f"\n\n## {file_date.isoformat()}\n\n"
+                    + "\n\n".join(day_records)
+                    + "\n"
+                )
+            for day_path in folded_paths:
+                day_path.unlink()
+                files_consolidated.append(str(day_path.relative_to(candidate_root)))
+            if day_dir is not None:
+                # Empty only when every file in it folded; a skipped unreadable
+                # record keeps its directory (and its content) alive.
+                with contextlib.suppress(OSError):
+                    day_dir.rmdir()
+            rolled_up_any = True
+
+        if not rolled_up_any:
+            continue
+
+        metadata["review_status"] = "consolidated"
+        metadata["last_updated"] = now_iso()
+        week_path.write_text(dump_frontmatter(metadata, body.strip() + "\n"), encoding="utf-8")
+        weeks_touched.add(week_slug)
+
+    return {
+        "weeks_touched": sorted(weeks_touched),
+        "files_consolidated": sorted(files_consolidated),
+        "warnings": warnings,
+    }
+
+
+def _consolidate_candidate_memory(candidate_root: Path) -> DreamConsolidation:
+    seen: dict[str, tuple[str, int]] = {}
+    files_touched: list[str] = []
+    duplicates_found = 0
+    lines_removed = 0
+    warnings: list[str] = []
+
+    for path in sorted(
+        path for path in _iter_markdown_files(candidate_root) if path.name != "index.md"
+    ):
+        if _is_generated_file(path):
+            continue  # derived views are rebuilt from the store, not deduped
+        try:
+            metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, FrontmatterError) as exc:
+            # A single malformed memory file (hand-edited, BOM, etc.) must not
+            # take down the whole Dream cycle — skip it and surface a warning
+            # instead, matching how _is_generated_file/_is_steering_file
+            # already treat unparsable files as non-fatal.
+            warnings.append(
+                f"Skipped {path.relative_to(candidate_root)} during consolidation: {exc}"
+            )
+            continue
+        original_lines = body.splitlines()
+        deduped_lines: list[str] = []
+        removed_this_file = 0
+
+        for line_number, line in enumerate(original_lines, start=1):
+            normalized = _normalize_dedupe_line(line)
+            if not normalized:
+                deduped_lines.append(line)
+                continue
+            if normalized in seen:
+                duplicates_found += 1
+                lines_removed += 1
+                removed_this_file += 1
+                continue
+            seen[normalized] = (str(path.relative_to(candidate_root)), line_number)
+            deduped_lines.append(line)
+
+        if removed_this_file:
+            path.write_text(
+                dump_frontmatter(metadata, "\n".join(deduped_lines) + "\n"), encoding="utf-8"
+            )
+            files_touched.append(str(path.relative_to(candidate_root)))
+
+    return {
+        "duplicates_found": duplicates_found,
+        "lines_removed": lines_removed,
+        "files_touched": sorted(files_touched),
+        "warnings": warnings,
+    }
+
+
+def _normalize_dedupe_line(line: str) -> str | None:
+    stripped = line.strip()
+    if not stripped:
+        return None
+    if stripped.startswith("#"):
+        return None
+    cleaned = re.sub(r"^[-*+]\s+", "", stripped)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip().lower()
+    if len(cleaned) < 24:
+        return None
+    return cleaned
+
+
+def _is_view_relative(relative: str, root: Path) -> bool:
+    """True for generated indexes / maps / consolidated dumps (not store facts)."""
+    from memory_fabric.templates import GENERATED_MAP_SECTIONS
+
+    norm = str(relative).replace("\\", "/")
+    if norm in {"index.md", "consolidated_memory.md", "memory-store/index.md"}:
+        return True
+    if "/" not in norm and Path(norm).stem in GENERATED_MAP_SECTIONS:
+        return True
+    path = root / relative
+    return bool(path.exists() and _is_generated_file(path))
+
+
+def _is_view_only_delta(
+    affected_files: list[str],
+    *,
+    compiled_changed: bool,
+    candidate_root: Path,
+) -> bool:
+    """True when the candidate only rewrote generated views / pack surface."""
+    if not affected_files and not compiled_changed:
+        return True
+    if affected_files and not all(
+        _is_view_relative(rel, candidate_root) for rel in affected_files
+    ):
+        return False
+    return True
+
+
+def _diff_memory_roots(before_root: Path, after_root: Path) -> tuple[str, list[str]]:
+    relative_paths = sorted(
+        set(_relative_markdown_paths(before_root, ignore_local_paths=True))
+        | set(_relative_markdown_paths(after_root, ignore_local_paths=False))
+    )
+    patch_fragments: list[str] = []
+    changed: list[str] = []
+
+    for relative in relative_paths:
+        before_path = before_root / relative
+        after_path = after_root / relative
+        before_text = before_path.read_text(encoding="utf-8") if before_path.exists() else ""
+        after_text = after_path.read_text(encoding="utf-8") if after_path.exists() else ""
+        if before_text == after_text:
+            continue
+        changed.append(str(relative))
+        patch_fragments.append(
+            "".join(
+                difflib.unified_diff(
+                    before_text.splitlines(keepends=True),
+                    after_text.splitlines(keepends=True),
+                    fromfile=str(before_path),
+                    tofile=str(after_path),
+                )
+            )
+        )
+
+    return "".join(patch_fragments), changed
+
+
+def _relative_markdown_paths(root: Path, ignore_local_paths: bool = False) -> set[Path]:
+    if not root.exists():
+        return set()
+    paths: set[Path] = set()
+    for path in _iter_markdown_files(root):
+        if _is_ignored_local_memory_path(root, path):
+            continue
+        paths.add(path.relative_to(root))
+    return paths
+
+
+def _prune_empty_dirs(directory: Path, stop_at: Path) -> None:
+    """Remove directories an apply just emptied, innermost first.
+
+    Applying a candidate deletes files but knows nothing about directories, so a
+    commit-capture day folder whose records were all folded into a weekly summary
+    would linger as an empty `episodic/commits/<date>/`. Stops at the first
+    directory that still holds anything (a `.gitkeep` counts, which is what keeps
+    the scaffolded store categories intact) and never removes `stop_at` itself.
+    """
+    current = directory
+    while current != stop_at and current.is_relative_to(stop_at):
+        try:
+            if any(current.iterdir()):
+                return
+            current.rmdir()
+        except OSError:
+            return
+        current = current.parent
+
+
+def _apply_candidate_to_live(
+    memory_dir: Path, candidate_root: Path, affected_files: list[str]
+) -> None:
+    for relative_text in affected_files:
+        relative = Path(relative_text)
+        source = candidate_root / relative
+        target = memory_dir / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if source.exists():
+            with locked_file(target):
+                shutil.copy2(source, target)
+            continue
+        if target.exists():
+            with locked_file(target):
+                target.unlink()
+            _prune_empty_dirs(target.parent, stop_at=memory_dir)
+
+    # Also promote consolidated_memory.md if it exists in candidate_root
+    source_compiled = candidate_root / "consolidated_memory.md"
+    target_compiled = memory_dir / "consolidated_memory.md"
+    if source_compiled.exists():
+        target_compiled.parent.mkdir(parents=True, exist_ok=True)
+        with locked_file(target_compiled):
+            shutil.copy2(source_compiled, target_compiled)
+
+
+def _build_rewrite_tasks(candidate_root: Path, max_rewrite_tasks: int) -> list[DreamRewriteTask]:
+    tasks: list[DreamRewriteTask] = []
+    for path in sorted(
+        path for path in _iter_markdown_files(candidate_root) if path.name != "index.md"
+    ):
+        if _is_ignored_local_memory_path(candidate_root, path):
+            continue
+        if _is_generated_file(path):
+            continue  # maps are regenerated, never rewritten by agents
+        try:
+            _metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, FrontmatterError):
+            continue  # unparsable file — surfaced earlier in consolidation warnings
+        section = _get_section_key(candidate_root, path)
+        lines = [line.strip() for line in body.splitlines() if line.strip()]
+        if len(lines) < 5:
+            reason = "Section is short and may benefit from enrichment with concrete details."
+        elif len(lines) > 80:
+            reason = "Section is long and may benefit from compression and clearer structure."
+        else:
+            continue
+        tasks.append(
+            {
+                "section": section,
+                "reason": reason,
+                "instruction": (
+                    f"Rewrite section `{section}` to preserve factual content while improving clarity, "
+                    "removing repetition, and keeping frontmatter unchanged. Return a unified diff patch."
+                ),
+            }
+        )
+        if len(tasks) >= max_rewrite_tasks:
+            break
+    return tasks

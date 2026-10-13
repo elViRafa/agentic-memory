@@ -1,0 +1,205 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: {}
+
+jobs:
+  tag:
+    name: Resolve / create release tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Resolve version from package
+        id: resolve
+        run: |
+          VERSION=$(python -c "import sys; sys.path.insert(0, 'src'); from memory_fabric.version import __version__; print(__version__)")
+          if [ "${{ github.event_name }}" = "push" ]; then
+            TAG_VERSION="${GITHUB_REF_NAME#v}"
+            if [ "$TAG_VERSION" != "$VERSION" ]; then
+              echo "::error::Tag ${GITHUB_REF_NAME} does not match package version $VERSION"
+              exit 1
+            fi
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+      # A manual run has no tag yet — the version comes straight from version.py (the
+      # project's single source of truth, per test_version_truth.py) and this step creates
+      # and pushes the matching tag using the job's own contents:write token, since the
+      # session that dispatches this workflow may not have direct git-push access itself.
+      - name: Create and push tag (manual dispatch only)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          TAG="${{ steps.resolve.outputs.tag }}"
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "::error::Tag $TAG already exists on origin — refusing to move it. Bump the version first."
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+
+  test:
+    name: Test before release
+    needs: tag
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install package with MCP extras
+        run: pip install -e ".[mcp,test]"
+
+      - name: Run tests
+        run: pytest tests/ -v
+
+  build:
+    name: Build distribution
+    needs: [test, tag]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tooling
+        run: pip install build
+
+      - name: Build sdist and wheel
+        run: python -m build
+
+      - name: Check version matches tag
+        run: |
+          PKG_VERSION=$(python -c "import sys; sys.path.insert(0, 'src'); from memory_fabric.version import __version__; print(__version__)")
+          echo "Tag version: ${{ needs.tag.outputs.version }}"
+          echo "Package version: $PKG_VERSION"
+          test "${{ needs.tag.outputs.version }}" = "$PKG_VERSION"
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # required for PyPI trusted publishing (OIDC) — no API token stored.
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  build-mcpb:
+    name: Build MCPB bundle
+    needs: [test, tag]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "lts/*"
+
+      - name: Sync manifest version to release tag
+        run: |
+          VERSION="${{ needs.tag.outputs.version }}"
+          jq --arg v "$VERSION" '.version = $v' mcpb/manifest.json > mcpb/manifest.tmp
+          mv mcpb/manifest.tmp mcpb/manifest.json
+
+      - name: Pack .mcpb bundle
+        run: npx -y @anthropic-ai/mcpb pack mcpb/ "memory-fabric-${{ needs.tag.outputs.version }}.mcpb"
+
+      - name: Upload .mcpb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcpb-dist
+          path: "*.mcpb"
+
+  registry-publish:
+    name: Publish to MCP Registry
+    needs: [publish, tag]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # required for MCP Registry GitHub OIDC auth — no token stored.
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install mcp-publisher
+        run: |
+          curl -L "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
+
+      - name: Sync server.json version to release tag
+        run: |
+          VERSION="${{ needs.tag.outputs.version }}"
+          jq --arg v "$VERSION" '.version = $v | .packages[0].version = $v' server.json > server.json.tmp
+          mv server.json.tmp server.json
+
+      - name: Authenticate to MCP Registry
+        run: ./mcp-publisher login github-oidc
+
+      - name: Publish server to MCP Registry
+        run: ./mcp-publisher publish
+
+  github-release:
+    name: Create GitHub Release
+    needs: [publish, build-mcpb, tag]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Download .mcpb bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: mcpb-dist
+          path: dist/
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ needs.tag.outputs.tag }}" dist/* --generate-notes

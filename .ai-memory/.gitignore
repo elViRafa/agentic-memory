@@ -1,0 +1,11 @@
+*.patch
+*.tmp
+*.log
+*.lock
+consolidated_memory.md
+evals/
+snapshots/
+candidates/
+private/
+.DS_Store
+Thumbs.db
