@@ -15,12 +15,10 @@ gh api "repos/$REPO/branches" --jq '.[].name' | while read -r branch; do
   gh api -X DELETE "repos/$REPO/git/refs/heads/$branch"
 done
 
-echo "Deleting all GitHub releases..."
-gh release list -R "$REPO" --limit 500 | awk '{print $1}' | while read -r tag; do
-  [[ -z "$tag" ]] && continue
-  echo "  - $tag"
-  gh release delete "$tag" -R "$REPO" --yes --cleanup-tag 2>/dev/null || \
-    gh release delete "$tag" -R "$REPO" --yes
+echo "Deleting all GitHub releases (including tagless drafts)..."
+gh api "repos/$REPO/releases" --paginate --jq '.[].id' | while read -r id; do
+  echo "  - release id $id"
+  gh api -X DELETE "repos/$REPO/releases/$id"
 done
 
 echo "Done. Optional: gh repo delete $REPO --yes && recreate empty repo, then push main."
