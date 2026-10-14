@@ -247,7 +247,7 @@ async def dream(
             index_path = memory_dir / "index.md"
             (
                 previous_consolidation_hash,
-                previous_contradictions,
+                _previous_contradictions,
                 previous_warnings,
             ) = _read_previous_consolidation_metadata(index_path)
 

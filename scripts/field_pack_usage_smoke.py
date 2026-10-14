@@ -1,4 +1,4 @@
-"""Almost-real field pack usage smoke (U1–U5).
+"""Almost-real field pack usage smoke (U1-U5).
 
 Simulates an agent session over a search-sermons-*shaped* synthetic store
 (or a live ``--cwd`` project): write → startup pack → task pack → light dream
@@ -21,7 +21,6 @@ import json
 import os
 import re
 import shutil
-import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -503,7 +502,7 @@ def main(argv: list[str] | None = None) -> int:
         "--cwd",
         type=str,
         default=None,
-        help="Live project root (skip seed; run B–G). Default: synthetic temp store.",
+        help="Live project root (skip seed; run B-G). Default: synthetic temp store.",
     )
     parser.add_argument(
         "--tmpdir",

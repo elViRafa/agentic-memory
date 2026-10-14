@@ -620,11 +620,9 @@ def _is_view_only_delta(
     """True when the candidate only rewrote generated views / pack surface."""
     if not affected_files and not compiled_changed:
         return True
-    if affected_files and not all(
+    return not affected_files or all(
         _is_view_relative(rel, candidate_root) for rel in affected_files
-    ):
-        return False
-    return True
+    )
 
 
 def _diff_memory_roots(before_root: Path, after_root: Path) -> tuple[str, list[str]]:

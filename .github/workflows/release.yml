@@ -124,6 +124,10 @@ jobs:
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # Idempotent re-runs (e.g. after history scrub / tag re-push) must still
+          # reach github-release + MCP registry when the wheel is already on PyPI.
+          skip-existing: true
 
   build-mcpb:
     name: Build MCPB bundle

@@ -92,7 +92,6 @@ _STOPWORDS = frozenset(
         "umas",
         "de",
         "da",
-        "do",
         "das",
         "dos",
         "e",

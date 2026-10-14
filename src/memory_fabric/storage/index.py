@@ -250,6 +250,8 @@ def load_rows(conn: sqlite3.Connection, memory_dir: Path) -> list[IndexRow]:
                 tags = []
             if not isinstance(tags, list):
                 tags = []
+            # sqlite3.Row has no .get(); membership is via keys().
+            row_keys = row.keys()
             rows.append(
                 IndexRow(
                     relpath=row["relpath"],
@@ -260,8 +262,8 @@ def load_rows(conn: sqlite3.Connection, memory_dir: Path) -> list[IndexRow]:
                     summary=row["summary"] or "",
                     tags=[str(t) for t in tags],
                     last_updated=row["last_updated"] or "",
-                    review_status=row["review_status"] if "review_status" in row.keys() else "",
-                    superseded_by=row["superseded_by"] if "superseded_by" in row.keys() else "",
+                    review_status=row["review_status"] if "review_status" in row_keys else "",
+                    superseded_by=row["superseded_by"] if "superseded_by" in row_keys else "",
                     body_tokens=int(row["body_tokens"] or 0),
                     content_hash=row["content_hash"] or "",
                     mtime=float(row["mtime"] or 0),
