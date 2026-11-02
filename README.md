@@ -37,8 +37,8 @@ Memory is stored as human-readable Markdown with YAML frontmatter. No vector dat
 
 ## Status
 
-**v1.4.4 — same 1.4.3 product fixes, scrubbed public artifacts and a fresh
-git history. [Live on PyPI](https://pypi.org/project/memory-fabric/).**
+**v1.4.5 — field diary pack/analyze and live posture pinning.
+[Live on PyPI](https://pypi.org/project/memory-fabric/).**
 Core CLI and MCP tools work end-to-end. See [`ROADMAP.md`](ROADMAP.md) for what
 shipped, what's in progress, and what's next.
 
@@ -68,7 +68,11 @@ unless you push it.
 An optional, **off-by-default** field diary can record operational counts on
 your machine after you run `ai-memory diary approve`. That is not the session
 journal, and it is not telemetry: nothing is transmitted. `MEMORY_FABRIC_DIARY=0`
-is a kill switch. This is a deliberate guarantee, not a default we might change.
+is a kill switch. `ai-memory diary pack` builds a shareable folder under the
+app data `field-packs/` directory (Windows: `%APPDATA%/memory-fabric/field-packs/`);
+you copy that folder yourself. `ai-memory diary analyze` scores product signals
+from a pack or the local diary. This is a deliberate guarantee, not a default
+we might change.
 
 ---
 
@@ -583,7 +587,7 @@ Commands:
   sync-global     Preview local-to-global promotions
   rollback        Restore from a snapshot (--to <name>, or --list to discover valid names)
   clean           Prune old snapshots/candidates (--keep-snapshots, --keep-candidates, --dry-run)
-  diary           Local field diary (approve|revoke|mute|unmute|status|checkpoint|wipe) — off by default, never sent
+  diary           Local field diary (approve|revoke|mute|unmute|status|checkpoint|pack|analyze|wipe) — off by default, never sent
 ```
 
 Eval examples:

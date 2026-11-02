@@ -159,6 +159,9 @@ def write_local_memory(
 
         metadata["section"] = section
         metadata["last_updated"] = now_iso()
+        # Body rewrite clears sticky stale so fresh steering packs in full again.
+        if str(metadata.get("review_status") or "").strip().lower() == "stale":
+            metadata.pop("review_status", None)
 
         changed = True
         if mode == "replace":

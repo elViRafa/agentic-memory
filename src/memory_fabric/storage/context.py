@@ -24,7 +24,11 @@ from memory_fabric.storage._shared import (
     _steering_context_enabled,
     estimate_tokens,
 )
-from memory_fabric.storage.hygiene import MAP_QUERY_CAP_TOKENS, steering_body_is_placeholder
+from memory_fabric.storage.hygiene import (
+    MAP_QUERY_CAP_TOKENS,
+    is_posture_path,
+    steering_body_is_placeholder,
+)
 from memory_fabric.storage.ranking import (
     blended_score,
     bm25_scores,
@@ -96,7 +100,14 @@ def _skip_dump_bundle(cwd: str, max_tokens: int) -> ContextBundle:
             "MEMORY_FABRIC_SKIP_STARTUP_DUMP is set."
         ],
     }
-    return _with_pack_stats(cwd, bundle, startup_mode="skipped", index_used=False, query=None)
+    return _with_pack_stats(
+        cwd,
+        bundle,
+        startup_mode="skipped",
+        index_used=False,
+        query=None,
+        posture_slot="unknown",
+    )
 
 
 def _cap_section_text(full_text: str, metadata: dict[str, Any], cap: int) -> tuple[str, bool]:
@@ -178,7 +189,12 @@ def _try_consolidated_cache(
             "warnings": [f"Tier 0 directives not found: {tier0}"],
         }
         return _with_pack_stats(
-            cwd, cached_bundle, startup_mode="full", index_used=False, query=query
+            cwd,
+            cached_bundle,
+            startup_mode="full",
+            index_used=False,
+            query=query,
+            posture_slot="unknown",
         )
     except (OSError, UnicodeDecodeError):
         return None
@@ -228,7 +244,21 @@ def _load_always_on(
                 "occupy the always-on budget."
             )
             continue
-        full_text = dump_frontmatter(metadata, body)
+        status = str(metadata.get("review_status") or "").strip().lower()
+        if status == "stale":
+            summary = str(metadata.get("summary") or "").strip()
+            stub_body = (
+                f"Summary: {summary}\n\n"
+                "[stale steering — full body omitted; refresh content or clear "
+                "review_status]\n"
+            )
+            full_text = dump_frontmatter(metadata, stub_body)
+            warnings.append(
+                f"Packed stale steering `{path.name}` as summary only so it does "
+                "not consume the always-on budget."
+            )
+        else:
+            full_text = dump_frontmatter(metadata, body)
         key = f"local/{section_name}"
         fragment = _format_fragment(key, full_text)
         fragments.append(fragment)
@@ -360,6 +390,7 @@ def _collect_sections_from_index(
                     "review_status": row.review_status,
                     "superseded_by": row.superseded_by,
                     "store_path": row.store_path,
+                    "role": getattr(row, "role", "") or "",
                 },
                 "path": row.path,
                 "rank_text": row.rank_text,
@@ -404,8 +435,130 @@ def _rank_sections(sections: list[dict[str, Any]], query: str | None) -> None:
             query_present=bool(query_tokens),
             review_status=str(metadata.get("review_status") or "") or None,
             superseded_by=str(metadata.get("superseded_by") or "") or None,
+            role=str(metadata.get("role") or "") or None,
         )
     sections.sort(key=lambda x: (x["score"], -x["original_index"]), reverse=True)
+
+
+def _posture_slot_eligible(metadata: dict[str, Any], store_path: str) -> bool:
+    """True when a store file may occupy the always-pinned posture slot."""
+    if str(metadata.get("superseded_by") or "").strip():
+        return False
+    status = str(metadata.get("review_status") or "").strip().lower()
+    if status in {"stale", "broken-evidence"}:
+        return False
+    role = str(metadata.get("role") or "") or None
+    return is_posture_path(store_path, role=role)
+
+
+def _select_live_posture(
+    memory_dir: Path, sections: list[dict[str, Any]]
+) -> dict[str, Any] | None:
+    """Pick the newest eligible posture file from ranked sections or the store tree."""
+    candidates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in sections:
+        key = str(item.get("key") or "")
+        if not key.startswith("store/"):
+            continue
+        store_path = key[len("store/") :]
+        metadata = item.get("metadata") or {}
+        if not _posture_slot_eligible(metadata, store_path):
+            continue
+        candidates.append(item)
+        seen.add(store_path)
+
+    store_root = memory_dir / "memory-store"
+    if store_root.is_dir():
+        for path in _iter_markdown_files(store_root):
+            if path.name == "index.md":
+                continue
+            try:
+                store_path = _path_to_store_path(store_root, path)
+            except ValueError:
+                continue
+            if store_path in seen:
+                continue
+            _section_name, metadata, body, read_warning = _read_memory_path(path)
+            if read_warning or not _posture_slot_eligible(metadata, store_path):
+                continue
+            full_text = dump_frontmatter(metadata, body)
+            candidates.append(
+                {
+                    "key": f"store/{store_path}",
+                    "text": full_text,
+                    "metadata": metadata,
+                    "path": path,
+                    "rank_text": full_text,
+                    "original_index": -1,
+                }
+            )
+
+    if not candidates:
+        return None
+
+    def sort_key(item: dict[str, Any]) -> tuple[str, str]:
+        meta = item.get("metadata") or {}
+        return (str(meta.get("last_updated") or ""), str(item.get("key") or ""))
+
+    return max(candidates, key=sort_key)
+
+
+def _compute_posture_slot(
+    memory_dir: Path,
+    included: list[str],
+    omitted: list[str],
+) -> str:
+    """Closed diary label for the live posture pin. Never returns a section key."""
+    chosen = _select_live_posture(memory_dir, [])
+    if chosen is None:
+        return "absent"
+    key = str(chosen["key"])
+    if key in included:
+        return "included"
+    if key in omitted:
+        return "omitted"
+    return "unknown"
+
+
+def _pin_posture_section(
+    memory_dir: Path,
+    sections: list[dict[str, Any]],
+    remaining: int,
+    max_tokens: int,
+    fragments: list[str],
+    included: list[str],
+    omitted: list[str],
+    warnings: list[str],
+) -> int:
+    """Always pack the live posture file after steering. Returns tokens used."""
+    chosen = _select_live_posture(memory_dir, sections)
+    if chosen is None:
+        return 0
+    key = str(chosen["key"])
+    if key in included:
+        return 0
+    if not _ensure_section_body(chosen, warnings, omitted):
+        return 0
+    cap = _file_share_cap_tokens(max_tokens)
+    capped, truncated = _cap_section_text(chosen["text"], chosen["metadata"], cap)
+    fragment = _format_fragment(key, capped)
+    cost = estimate_tokens(fragment)
+    if cost > remaining:
+        omitted.append(key)
+        warnings.append(
+            f"Live posture `{key}` did not fit the remaining budget ({remaining} tokens)."
+        )
+        return 0
+    fragments.append(fragment)
+    included.append(key)
+    if truncated:
+        warnings.append(f"Truncated `{key}` to the per-file share cap ({cap} tokens).")
+    # Remove from competing sections so BM25 packing does not double-include.
+    sections[:] = [item for item in sections if item.get("key") != key]
+    if key in omitted:
+        omitted[:] = [k for k in omitted if k != key]
+    return cost
 
 
 def _assemble_fragments(fragments: list[str]) -> str:
@@ -592,6 +745,19 @@ def read_combined_context(
         )
 
     _rank_sections(sections, query)
+    posture_cost = _pin_posture_section(
+        memory_dir,
+        sections,
+        remaining,
+        max_tokens,
+        fragments,
+        included,
+        omitted,
+        warnings,
+    )
+    remaining -= posture_cost
+    # Posture is always-on for this pack; protect it from budget trim like steering.
+    always_on_n = len(fragments)
     _pack_sections(
         sections, remaining, max_tokens, fragments, included, omitted, warnings, query=query
     )
@@ -627,6 +793,7 @@ def read_combined_context(
         query=query,
         fragments=fragments,
         priority_by_key=priority_by_key,
+        posture_slot=_compute_posture_slot(memory_dir, included, omitted),
     )
 
 
@@ -728,6 +895,7 @@ def _with_pack_stats(
     query: str | None,
     fragments: list[str] | None = None,
     priority_by_key: dict[str, str] | None = None,
+    posture_slot: str | None = None,
 ) -> ContextBundle:
     from memory_fabric.diary.instrument import record_context_pack
     from memory_fabric.diary.stats import attach_pack_stats
@@ -740,5 +908,15 @@ def _with_pack_stats(
         query=query,
         fragments=fragments,
     )
-    record_context_pack(cwd, finished, query=query)
+    slot = posture_slot
+    if slot is None:
+        try:
+            slot = _compute_posture_slot(
+                local_memory_dir(cwd),
+                list(finished.get("included_sections") or []),
+                list(finished.get("omitted_sections") or []),
+            )
+        except Exception:  # noqa: BLE001 - diary must never break packing
+            slot = "unknown"
+    record_context_pack(cwd, finished, query=query, posture_slot=slot)
     return finished

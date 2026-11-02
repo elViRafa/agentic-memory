@@ -55,6 +55,21 @@ def _category(name: str, weight: int, checks: list[EvalCheck]) -> EvalCategory:
     }
 
 
+# High-severity checks that must keep the composite off ``pass`` even when
+# the weighted mean of hundreds of metadata checks still looks green.
+_COMPOSITE_BLOCKING_GATES = frozenset({"priority_inflation"})
+
+
+def _blocking_gates_triggered(categories: list[EvalCategory]) -> bool:
+    for category in categories:
+        for check in category.get("checks") or []:
+            if check.get("id") not in _COMPOSITE_BLOCKING_GATES:
+                continue
+            if check.get("status") in {"fail", "warn"} and check.get("severity") == "high":
+                return True
+    return False
+
+
 def _memory_result(
     *,
     generated_at: str,
@@ -66,13 +81,16 @@ def _memory_result(
     llm_notes: list[str],
 ) -> EvalResult:
     score = _weighted_score(categories, MEMORY_WEIGHTS)
+    status = _score_status(score)
+    if _blocking_gates_triggered(categories) and status == "pass":
+        status = "fail"
     return {
         "kind": "memory",
         "generated_at": generated_at,
         "cwd": str(cwd),
         "memory_dir": str(memory_dir),
         "score": score,
-        "status": _score_status(score),
+        "status": status,
         "categories": categories,
         "recommendations": _recommendations_from_categories(categories),
         "report_paths": report_paths,

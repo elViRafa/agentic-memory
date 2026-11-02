@@ -236,4 +236,5 @@ def _score_candidates(candidates: list[dict[str, Any]], query: str) -> None:
             query_present=True,
             review_status=str(metadata.get("review_status") or "") or None,
             superseded_by=str(metadata.get("superseded_by") or "") or None,
+            role=str(metadata.get("role") or "") or None,
         ) + float(item.get("boost") or 0.0)

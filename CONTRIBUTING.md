@@ -48,7 +48,8 @@ mypy src/memory_fabric              # types — the package ships py.typed, so t
   no account, no cloud. Optional network checks (PyPI drift, provider preflight)
   must respect `--offline`. Do not add analytics or phone-home behavior. A
   local field diary is not phone-home and must stay default-off; do not add an
-  MCP tool that can approve it.
+  MCP tool that can approve it. `diary pack` / `diary analyze` stay local-copy
+  only — no upload helper.
 - **Never delete user content.** Migrations copy and snapshot before rewriting;
   destructive operations are opt-in and reversible.
 - **Keep a Changelog.** Add an entry under `## [Unreleased]` in

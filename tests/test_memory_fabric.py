@@ -1968,12 +1968,22 @@ class MemoryStoreTests(unittest.TestCase):
             metadata, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
             self.assertNotIn("review_status", metadata)
 
-            # append keeps derived state untouched
+            # Append that changes the body clears sticky stale (dream re-marks
+            # only when last_updated is still older than 30 days).
+            metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
             metadata["review_status"] = "stale"
-            path.write_text(dump_frontmatter(metadata, _), encoding="utf-8")
+            path.write_text(dump_frontmatter(metadata, body), encoding="utf-8")
             write_memory_store(temp, "schemas/rewrite-me", "More.", mode="append")
             metadata, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
-            self.assertEqual(metadata.get("review_status"), "stale")
+            self.assertNotIn("review_status", metadata)
+
+            # broken-evidence is kept on append so verify can still see it.
+            metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+            metadata["review_status"] = "broken-evidence"
+            path.write_text(dump_frontmatter(metadata, body), encoding="utf-8")
+            write_memory_store(temp, "schemas/rewrite-me", "Even more.", mode="append")
+            metadata, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
+            self.assertEqual(metadata.get("review_status"), "broken-evidence")
 
     def test_propose_memory_patch_produces_parseable_unified_diff(self) -> None:
         """P-06: header lines must not be concatenated (`--- x+++ y@@`)."""

@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from memory_fabric.frontmatter import FrontmatterError, parse_frontmatter
+from memory_fabric.frontmatter import FrontmatterError, dump_frontmatter, parse_frontmatter
 from memory_fabric.storage._shared import _iter_markdown_files
 
 _GENERIC_SUMMARIES = frozenset(
@@ -33,9 +33,11 @@ _TIMESTAMP_SUMMARY_RE = re.compile(
 )
 _UPDATED_PREFIX_RE = re.compile(r"^\s*\*{0,2}updated\*{0,2}\s*:", re.IGNORECASE)
 _RESOLVED_RE = re.compile(
-    r"\b(resolvido|resolved|fixed|done|obsolete|superseded|do not re-run)\b",
+    r"\b(resolvido|resolved|fixed|done|obsolete|superseded|do not re-run|"
+    r"historical|executed|not the live queue)\b",
     re.IGNORECASE,
 )
+_POSTURE_STEM_RE = re.compile(r"^current-posture(?:-.*)?$", re.IGNORECASE)
 _PLACEHOLDER_STEERING = (
     "record project terminology here",
     "record project terminology",
@@ -88,9 +90,23 @@ def looks_resolved_text(text: str) -> bool:
     return bool(text and _RESOLVED_RE.search(text))
 
 
-def is_live_handoff_path(store_path: str) -> bool:
+def is_posture_path(store_path: str, *, role: str | None = None) -> bool:
+    """True for ``current-posture`` / ``current-posture-*`` or ``role: posture``."""
+    if (role or "").strip().lower() == "posture":
+        return True
+    return bool(_POSTURE_STEM_RE.match(_path_stem(store_path)))
+
+
+def is_next_session_path(store_path: str) -> bool:
+    """True when the last path segment contains ``next-session``."""
+    return "next-session" in _path_stem(store_path).lower()
+
+
+def is_live_handoff_path(store_path: str, *, role: str | None = None) -> bool:
+    if is_posture_path(store_path, role=role):
+        return True
     last = _path_stem(store_path)
-    return last in {"next-session-handoff", "current"} or last.endswith("/current")
+    return last in {"next-session-handoff", "current"}
 
 
 def sibling_high_handoffs(store_root: Path, store_path: str) -> list[str]:
@@ -118,6 +134,48 @@ def sibling_high_handoffs(store_root: Path, store_path: str) -> list[str]:
         if str(metadata.get("priority") or "").lower() == "high":
             found.append(sp)
     return found
+
+
+def demote_sibling_next_session_files(store_root: Path, posture_store_path: str) -> list[str]:
+    """Demote sibling ``*next-session*`` files under the same first segment.
+
+    Sets ``priority: low`` and ``superseded_by`` to *posture_store_path*.
+    Does not bump ``last_updated`` (recency must stay meaningful).
+    Returns the demoted store paths.
+    """
+    parts = [p for p in posture_store_path.replace("\\", "/").strip("/").split("/") if p]
+    if len(parts) < 2:
+        return []
+    prefix = parts[0]
+    folder = store_root / prefix
+    if not folder.is_dir():
+        return []
+    current = "/".join(parts)
+    demoted: list[str] = []
+    for path in folder.rglob("*.md"):
+        relative = path.relative_to(store_root).as_posix()
+        sp = relative[:-3] if relative.endswith(".md") else relative
+        if sp == current or not is_next_session_path(sp):
+            continue
+        try:
+            metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, FrontmatterError):
+            continue
+        changed = False
+        if str(metadata.get("priority") or "").lower() != "low":
+            metadata["priority"] = "low"
+            changed = True
+        if str(metadata.get("superseded_by") or "").strip() != current:
+            metadata["superseded_by"] = current
+            changed = True
+        if not changed:
+            continue
+        try:
+            path.write_text(dump_frontmatter(metadata, body), encoding="utf-8")
+        except OSError:
+            continue
+        demoted.append(sp)
+    return demoted
 
 
 def store_priority_counts(store_root: Path) -> tuple[int, int]:

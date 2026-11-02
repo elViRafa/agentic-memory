@@ -29,10 +29,13 @@ HANDOFF_RECENCY_HALF_LIFE_DAYS = 14.0
 _COMPLETE_STEM_RE = re.compile(r"(?:^|/)([^/]*-complete)(?:\.md)?$", re.IGNORECASE)
 _V2_STEM_RE = re.compile(r"(?:^|/)([^/]*-v2-[^/]*)(?:\.md)?$", re.IGNORECASE)
 _LIVE_STEM_RE = re.compile(
-    r"(?:^|/)(next-session-handoff|current)(?:\.md)?$",
+    r"(?:^|/)(next-session-handoff|current|current-posture(?:-[^/]*)?)(?:\.md)?$",
     re.IGNORECASE,
 )
-_LIFECYCLE_KEY_RE = re.compile(r"handoff|complete|(?:^|/)current(?:\.md)?$", re.IGNORECASE)
+_LIFECYCLE_KEY_RE = re.compile(
+    r"handoff|complete|next-session|(?:^|/)current(?:-posture)?(?:-[^/]*)?(?:\.md)?$",
+    re.IGNORECASE,
+)
 
 
 def tokenize(text: str) -> list[str]:
@@ -104,13 +107,18 @@ def _normalized_key(key: str) -> str:
     return (key or "").replace("\\", "/").strip("/")
 
 
-def lifecycle_penalty(key: str) -> float:
+def lifecycle_penalty(key: str, *, role: str | None = None) -> float:
     """Boost live handoffs; bury completed waves and historical v2 copies.
 
     BM25 treats every file that says ``handoff`` as equal. Field stores keep
     ``*-complete`` and ``cpt-v2-next-session-handoff`` at priority=high, so
     recency alone (90-day half-life) cannot break the tie.
+
+    ``role: posture`` (or a ``current-posture`` stem) gets the live boost even
+    when the filename is not ``next-session-handoff``.
     """
+    if (role or "").strip().lower() == "posture":
+        return 1.3
     text = _normalized_key(key)
     if _COMPLETE_STEM_RE.search(text):
         return 0.2
@@ -130,10 +138,10 @@ def review_status_penalty(review_status: str | None) -> float:
 
 
 def superseded_penalty(superseded_by: str | None) -> float:
-    """Hard downrank when frontmatter points at a replacement store path."""
+    """Omit superseded files from packs (score → 0); keep readable via tools."""
     target = (superseded_by or "").strip()
     if target:
-        return 0.1
+        return 0.0
     return 1.0
 
 
@@ -206,6 +214,7 @@ def blended_score(
     query_present: bool = False,
     review_status: str | None = None,
     superseded_by: str | None = None,
+    role: str | None = None,
 ) -> float:
     """``bm25 * priority * recency * category * lifecycle * status * map-query``."""
     raw = bm25 if bm25 > 0 else 0.0
@@ -224,7 +233,7 @@ def blended_score(
         * priority_weight(priority)
         * recency_weight(last_updated, half_life_days=_half_life_for_key(key))
         * category_penalty(key)
-        * lifecycle_penalty(key)
+        * lifecycle_penalty(key, role=role)
         * review_status_penalty(review_status)
         * superseded_penalty(superseded_by)
         * query_map_penalty(key, query_present=query_present)

@@ -37,8 +37,8 @@ limitation codes, session outcomes.
 Will NOT record: memory-store contents, tool arguments, absolute paths, or
 query text (unless you pass --level counts+queries).
 
-Will NOT send anything to the internet. Later, `ai-memory diary pack` builds a
-folder you can copy yourself. Nothing is transmitted.
+Will NOT send anything to the internet. `ai-memory diary pack` builds a local
+folder you can copy yourself; `diary analyze` scores it. Nothing is transmitted.
 """
 
 _consent_mtime: float | None = None

@@ -8,6 +8,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.5] — 2026-11-02
+
+### Added
+
+- **Field diary pack.** `ai-memory diary pack [--from|--to|--out]` builds a
+  local shareable folder under `field-packs/field-<UTC stamp>/` from diary
+  JSONL (allowlisted counts, redacted queries only when already present, no
+  store bodies, no upload).
+- **Maintainer analyze.** `ai-memory diary analyze [--pack|--diary|--project]`
+  scores posture-slot inclusion, steering share, priority-inflation shape,
+  tool failure rate, and top redacted queries per `project_id`. Exit 1 on
+  gate failures.
+- **`posture_slot` on `context.pack`.** Closed label `absent`|`included`|
+  `omitted`|`unknown` so packs can measure live posture pinning without
+  recording section paths.
+
+### Fixed
+
+- **Live posture pinning.** Context packs always pin the newest eligible
+  `current-posture` / `role: posture` file after steering. Sibling
+  `*next-session*` notes are demoted with `superseded_by` on posture write
+  and dream; superseded entries hard-omit from packs.
+- **Eval posture and inflation gates.** Built-in `current posture` pack probe
+  when a posture file exists; `priority_inflation` fails the composite score.
+
 ## [1.4.4] — 2026-10-13
 
 ### Changed

@@ -332,7 +332,7 @@ THIN_CURSOR_RULE = (
     + GRACEFUL_DEGRADATION_RULE
     + """
 1. **Startup:** call `read_combined_context_tool(cwd="<absolute project root>")` unless the MCP Resource `memory-fabric://context/<encoded-cwd>` was already auto-fetched. Skip a second dump.
-2. **Writes:** use `write_memory_store_tool` for facts. Never raw file tools into `.ai-memory/` (except hand-curated `role: steering` directives). Cursor hooks will deny store writes and redirect here.
+2. **Writes:** use `write_memory_store_tool` for facts. Never raw file tools into `.ai-memory/` (except hand-curated `role: steering` directives). With Cursor hooks installed (`ai-memory install --client cursor --with-hooks`), raw store writes are denied and redirected here.
 3. **Retrieval:** `keyword_search_tool` for a sentence or a keyword (content words, one hit per file); `context_for_task_tool` to pack a file into a token budget; `read_memory_store_tool` for a full file. Do not re-dump combined context mid-session.
 4. **Session end:** `write_session_journal_tool` before the last response (skip only trivial Q&A).
 

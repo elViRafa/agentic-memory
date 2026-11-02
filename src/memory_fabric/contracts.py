@@ -288,6 +288,35 @@ class DiaryActionResult(TypedDict):
     warnings: list[str]
 
 
+# ``from`` is a keyword, so the pack result uses the functional TypedDict form.
+DiaryPackResult = TypedDict(
+    "DiaryPackResult",
+    {
+        "path": str,
+        "event_n": int,
+        "project_n": int,
+        "queries_included": bool,
+        "from": str | None,
+        "to": str | None,
+        "warnings": list[str],
+        "message": str,
+    },
+)
+
+
+class DiaryAnalyzeResult(TypedDict):
+    """Maintainer analyze report over a pack or local diary. Exit code uses ``ok``."""
+
+    ok: bool
+    source: str
+    event_n: int
+    project_n: int
+    projects: dict[str, Any]
+    rollup: dict[str, Any]
+    warnings: list[str]
+    message: str
+
+
 class MapsRegenResult(TypedDict):
     """Result of regenerating root map sections from the memory-store tree."""
 

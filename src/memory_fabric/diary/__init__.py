@@ -8,6 +8,7 @@ not telemetry — there is no upload path.
 Public surface is imported from here so CLI and (later) MCP stay thin.
 """
 
+from memory_fabric.diary.analyze import analyze_diary as analyze_diary
 from memory_fabric.diary.consent import (
     APPROVE_NOTICE as APPROVE_NOTICE,
 )
@@ -53,12 +54,15 @@ from memory_fabric.diary.consent import (
 from memory_fabric.diary.consent import (
     wipe as wipe,
 )
+from memory_fabric.diary.pack import build_pack as build_pack
 from memory_fabric.diary.recorder import record as record
 
 __all__ = [
     "APPROVE_NOTICE",
     "LEVELS",
+    "analyze_diary",
     "approve",
+    "build_pack",
     "consent_path",
     "diary_dir",
     "field_packs_dir",

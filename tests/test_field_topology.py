@@ -366,6 +366,179 @@ class StaleSupersededRankingTests(unittest.TestCase):
                 )
 
 
+class AskSpurgeonPostureShapeTests(unittest.TestCase):
+    """Medium current-posture vs high historical next-session, identical timestamps."""
+
+    _TS = "2026-10-31T10:57:03-03:00"
+
+    def _seed_posture_shape(self, temp: str) -> None:
+        initialize_memory_fabric(temp)
+        _write_store_file(
+            temp,
+            "fine-tuning/current-posture-2026-10-31",
+            (
+                "Canonical what is live now. Older next-session files are history "
+                "unless linked here. RAG export blocked; OT chase frozen.\n"
+            ),
+            priority="medium",
+            title="Current Posture 2026 10 31",
+            summary="Live posture: OT exported; RAG blocked on refusal; OT chase frozen.",
+            last_updated=self._TS,
+        )
+        _write_store_file(
+            temp,
+            "fine-tuning/open-theology-qa-next-session",
+            (
+                "Historical 2026-10-09 OT planning handoff; pipeline executed. "
+                "Do not treat this file as the live queue.\n"
+            ),
+            priority="high",
+            title="Next session OT planning",
+            summary="Historical OT planning handoff; pipeline executed.",
+            last_updated=self._TS,
+        )
+        _write_store_file(
+            temp,
+            "fine-tuning/next-session-sft-reach-gates",
+            (
+                "Historical SFT reach-gates handoff. Executed. "
+                "Not the live queue — see current-posture.\n"
+            ),
+            priority="high",
+            title="Next session SFT reach gates",
+            summary="Historical SFT reach-gates handoff; executed.",
+            last_updated=self._TS,
+        )
+        # Inflate highs so eval's priority_inflation gate fires (≥24 absolute).
+        for i in range(24):
+            _write_store_file(
+                temp,
+                f"pretraining/legacy-wave-{i:02d}-note",
+                f"Legacy pretraining note {i}. Keep for history only.\n",
+                priority="high",
+                last_updated=self._TS,
+            )
+        rules = Path(temp) / ".ai-memory" / "framework-rules.md"
+        meta, _body = parse_frontmatter(rules.read_text(encoding="utf-8"))
+        meta["review_status"] = "stale"
+        meta["last_updated"] = "2026-06-03T08:33:33-04:00"
+        long_body = (
+            "# Framework Rules\n\n"
+            + ("Use Streamlit and LlamaIndex. Prefer write_local_memory_tool. " * 40)
+            + "\n"
+        )
+        rules.write_text(dump_frontmatter(meta, long_body), encoding="utf-8")
+
+    def test_lifecycle_boosts_current_posture_stem(self) -> None:
+        posture = lifecycle_penalty("store/fine-tuning/current-posture-2026-10-31")
+        handoff = lifecycle_penalty("store/fine-tuning/next-session-handoff")
+        historical = lifecycle_penalty("store/fine-tuning/open-theology-qa-next-session")
+        self.assertEqual(posture, handoff)
+        self.assertGreater(posture, historical)
+
+    def test_pack_pins_posture_and_omits_historical_next_session(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            self._seed_posture_shape(temp)
+            # Write path demotes historical next-session siblings when posture is saved.
+            write_memory_store(
+                temp,
+                "fine-tuning/current-posture-2026-10-31",
+                (
+                    "Canonical what is live now. Older next-session files are history "
+                    "unless linked here. RAG export blocked; OT chase frozen.\n"
+                ),
+                title="Current Posture 2026 10 31",
+                priority="medium",
+                mode="replace",
+            )
+            ns1 = (
+                Path(temp)
+                / ".ai-memory"
+                / "memory-store"
+                / "fine-tuning"
+                / "open-theology-qa-next-session.md"
+            )
+            meta1, _ = parse_frontmatter(ns1.read_text(encoding="utf-8"))
+            self.assertEqual(meta1.get("priority"), "low")
+            self.assertEqual(
+                meta1.get("superseded_by"), "fine-tuning/current-posture-2026-10-31"
+            )
+            self.assertEqual(meta1.get("last_updated"), self._TS)
+
+            pack = read_combined_context(
+                temp, max_tokens=4000, query="project architecture decisions"
+            )
+            included = pack["included_sections"]
+            self.assertIn("store/fine-tuning/current-posture-2026-10-31", included)
+            self.assertNotIn("store/fine-tuning/open-theology-qa-next-session", included)
+            self.assertNotIn("store/fine-tuning/next-session-sft-reach-gates", included)
+
+            text = pack["text"]
+            self.assertIn("stale steering — full body omitted", text)
+            self.assertNotIn("Prefer write_local_memory_tool.", text)
+
+    def test_resolved_historical_write_demotes_to_low(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            result = write_memory_store(
+                temp,
+                "fine-tuning/open-theology-qa-next-session",
+                (
+                    "Historical planning handoff. Executed. "
+                    "Do not treat this file as the live queue.\n"
+                ),
+                title="Next session OT",
+                priority="high",
+            )
+            self.assertTrue(any("priority=low" in w for w in result["warnings"]))
+            path = (
+                Path(temp)
+                / ".ai-memory"
+                / "memory-store"
+                / "fine-tuning"
+                / "open-theology-qa-next-session.md"
+            )
+            metadata, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
+            self.assertEqual(metadata.get("priority"), "low")
+
+    def test_eval_fails_composite_on_priority_inflation(self) -> None:
+        import asyncio
+
+        from memory_fabric.eval import evaluate_memory_fabric as _async_eval
+
+        with tempfile.TemporaryDirectory() as temp:
+            self._seed_posture_shape(temp)
+            write_memory_store(
+                temp,
+                "fine-tuning/current-posture-2026-10-31",
+                (
+                    "Canonical what is live now. Older next-session files are history "
+                    "unless linked here.\n"
+                ),
+                title="Current Posture 2026 10 31",
+                priority="medium",
+                mode="replace",
+            )
+            result = asyncio.run(_async_eval(temp, save_report=False, llm_review=False))
+            inflation = [
+                c
+                for cat in result["categories"]
+                for c in cat["checks"]
+                if c["id"] == "priority_inflation"
+            ]
+            self.assertTrue(inflation)
+            self.assertEqual(inflation[0]["status"], "fail")
+            self.assertNotEqual(result["status"], "pass")
+            posture_probe = [
+                c
+                for cat in result["categories"]
+                for c in cat["checks"]
+                if c["id"] == "live_posture_pack_probe"
+            ]
+            self.assertTrue(posture_probe)
+            self.assertEqual(posture_probe[0]["status"], "pass")
+
+
 class DoctorEvalSmellTests(unittest.TestCase):
     def test_doctor_warns_on_high_percent_empty_steering_and_timestamp(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

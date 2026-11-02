@@ -25,8 +25,10 @@ from memory_fabric.storage._shared import (
     estimate_tokens,
 )
 from memory_fabric.storage.hygiene import (
+    demote_sibling_next_session_files,
     high_priority_inflation,
     is_live_handoff_path,
+    is_posture_path,
     is_weak_summary,
     looks_complete_path,
     looks_resolved_text,
@@ -183,10 +185,14 @@ def write_memory_store(
             str(metadata.get("summary") or "")
         ):
             if str(metadata.get("priority")) == "high":
-                metadata["priority"] = "medium"
+                metadata["priority"] = "low"
                 warnings.append(
-                    f"{store_path} reads as resolved; stored as priority=medium instead of high."
+                    f"{store_path} reads as resolved/historical; stored as priority=low "
+                    "instead of high."
                 )
+        # Body or summary rewrite clears sticky stale — dream re-marks if still old.
+        if str(metadata.get("review_status") or "").strip().lower() == "stale":
+            metadata.pop("review_status", None)
         if evidence is not None:
             metadata["evidence"] = evidence
 
@@ -246,6 +252,17 @@ def write_memory_store(
             path.write_text(dump_frontmatter(metadata, new_body), encoding="utf-8")
 
     store_root = memory_store_dir(cwd)
+    if changed and is_posture_path(
+        store_path, role=str(metadata.get("role") or "") or None
+    ):
+        demoted = demote_sibling_next_session_files(store_root, store_path)
+        if demoted:
+            sample = ", ".join(demoted[:5])
+            extra = f" (+{len(demoted) - 5} more)" if len(demoted) > 5 else ""
+            warnings.append(
+                f"Demoted sibling next-session files to low with "
+                f"superseded_by: {store_path}: {sample}{extra}."
+            )
     if changed and str(metadata.get("priority")) == "high":
         high, total = store_priority_counts(store_root)
         if high_priority_inflation(high, total):
@@ -254,7 +271,9 @@ def write_memory_store(
                 "further high writes stop discriminating in retrieval. "
                 "Use medium unless this is a live constraint."
             )
-        if is_live_handoff_path(store_path):
+        if is_live_handoff_path(
+            store_path, role=str(metadata.get("role") or "") or None
+        ):
             siblings = sibling_high_handoffs(store_root, store_path)
             if siblings:
                 sample = ", ".join(siblings[:5])

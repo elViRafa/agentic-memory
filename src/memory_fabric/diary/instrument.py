@@ -100,6 +100,9 @@ def _consent_level() -> str:
     return level if level in {"counts", "counts+queries"} else "counts"
 
 
+_POSTURE_SLOTS = frozenset({"absent", "included", "omitted", "unknown"})
+
+
 def record_context_pack(
     cwd: str,
     bundle: Mapping[str, Any],
@@ -107,6 +110,7 @@ def record_context_pack(
     query: str | None = None,
     ms: float | None = None,
     surface: str = "core",
+    posture_slot: str | None = None,
 ) -> None:
     if not is_approved(cwd):
         return
@@ -118,6 +122,8 @@ def record_context_pack(
     }
     if ms is not None:
         event["ms"] = round(ms, 3)
+    slot = (posture_slot or "unknown").strip().lower()
+    event["posture_slot"] = slot if slot in _POSTURE_SLOTS else "unknown"
     if _consent_level() == "counts+queries" and query:
         redacted, _count = redact_secrets(query)
         event["query"] = redacted

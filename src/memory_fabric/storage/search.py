@@ -310,7 +310,7 @@ def _rank_search_results(
     scores = bm25_scores(content_tokens, docs)
     phrase_hit = False
     path_scores: dict[str, float] = {}
-    for path, score, text, (priority, last_updated, review_status, superseded_by) in zip(
+    for path, score, text, (priority, last_updated, review_status, superseded_by, role) in zip(
         unique_paths, scores, texts, metas, strict=True
     ):
         blended = blended_score(
@@ -321,6 +321,7 @@ def _rank_search_results(
             query_present=True,
             review_status=review_status or None,
             superseded_by=superseded_by or None,
+            role=role or None,
         )
         if blended > 0 and _contains_phrase(query, text):
             blended *= _PHRASE_BOOST
@@ -346,28 +347,30 @@ def _rank_search_results(
 
 
 def _priority_and_updated(text: str) -> tuple[str, str]:
-    priority, last_updated, _review, _superseded = _rank_metadata(text)
+    priority, last_updated, _review, _superseded, _role = _rank_metadata(text)
     return priority, last_updated
 
 
-def _rank_metadata(text: str) -> tuple[str, str, str, str]:
+def _rank_metadata(text: str) -> tuple[str, str, str, str, str]:
     priority = "medium"
     last_updated = ""
     review_status = ""
     superseded_by = ""
+    role = ""
     if not text.lstrip().startswith("---"):
-        return priority, last_updated, review_status, superseded_by
+        return priority, last_updated, review_status, superseded_by, role
     try:
         from memory_fabric.frontmatter import parse_frontmatter
 
         metadata, _body = parse_frontmatter(text)
     except Exception:  # noqa: BLE001 - ranking metadata is best-effort.
-        return priority, last_updated, review_status, superseded_by
+        return priority, last_updated, review_status, superseded_by, role
     return (
         str(metadata.get("priority") or "medium"),
         str(metadata.get("last_updated") or ""),
         str(metadata.get("review_status") or ""),
         str(metadata.get("superseded_by") or ""),
+        str(metadata.get("role") or ""),
     )
 
 

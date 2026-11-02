@@ -14,6 +14,8 @@ from memory_fabric.clients import CLIENTS
 from memory_fabric.contracts import DreamEvalResult, EvalResult, MigrateResult
 from memory_fabric.diary import (
     APPROVE_NOTICE,
+    analyze_diary,
+    build_pack,
 )
 from memory_fabric.diary import (
     LEVELS as DIARY_LEVELS,
@@ -930,7 +932,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     diary_parser = add_command(
         "diary",
-        help="Local field diary (what Memory Fabric did — not the session journal)",
+        help=(
+            "Local field diary (approve|revoke|mute|unmute|status|checkpoint|"
+            "pack|analyze|wipe) — off by default, never sent"
+        ),
     )
     diary_subs = diary_parser.add_subparsers(dest="diary_action")
     diary_approve_p = diary_subs.add_parser(
@@ -958,6 +963,52 @@ def build_parser() -> argparse.ArgumentParser:
         parents=[common],
         help="Write a store-shape snapshot to the field diary (no-op if not approved)",
     )
+    diary_pack_p = diary_subs.add_parser(
+        "pack",
+        parents=[common],
+        help="Build a shareable local folder from diary counts (nothing is sent)",
+    )
+    diary_pack_p.add_argument(
+        "--from",
+        dest="pack_from",
+        default=None,
+        help="Inclusive start date YYYY-MM-DD",
+    )
+    diary_pack_p.add_argument(
+        "--to",
+        dest="pack_to",
+        default=None,
+        help="Inclusive end date YYYY-MM-DD",
+    )
+    diary_pack_p.add_argument(
+        "--out",
+        dest="pack_out",
+        default=None,
+        help="Output directory (default: field-packs/field-<UTC stamp>/)",
+    )
+    diary_analyze_p = diary_subs.add_parser(
+        "analyze",
+        parents=[common],
+        help="Score product signals from a pack or local diary (maintainer)",
+    )
+    diary_analyze_p.add_argument(
+        "--pack",
+        dest="analyze_pack",
+        default=None,
+        help="Pack folder (events.jsonl) or diary-shaped directory",
+    )
+    diary_analyze_p.add_argument(
+        "--diary",
+        dest="analyze_diary",
+        default=None,
+        help="Raw diary directory with events-*.jsonl",
+    )
+    diary_analyze_p.add_argument(
+        "--project",
+        dest="analyze_project",
+        default=None,
+        help="Limit to one project_id hash",
+    )
     diary_wipe_p = diary_subs.add_parser(
         "wipe", parents=[common], help="Delete the local diary and field packs"
     )
@@ -978,6 +1029,22 @@ def _run_diary_command(args: argparse.Namespace, cwd: str, parser: argparse.Argu
     if action == "checkpoint":
         _print_result(write_manual_checkpoint(cwd), args.json)
         return 0
+    if action == "pack":
+        result = build_pack(
+            from_date=getattr(args, "pack_from", None),
+            to_date=getattr(args, "pack_to", None),
+            out=getattr(args, "pack_out", None),
+        )
+        _print_result(result, args.json)
+        return 0
+    if action == "analyze":
+        result = analyze_diary(
+            pack=getattr(args, "analyze_pack", None),
+            diary=getattr(args, "analyze_diary", None),
+            project=getattr(args, "analyze_project", None),
+        )
+        _print_result(result, args.json)
+        return 0 if result.get("ok") else 1
     if action == "approve":
         if not _diary_confirmed(args, APPROVE_NOTICE, prompt="Approve the field diary? [y/N]: "):
             _print_result(

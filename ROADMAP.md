@@ -4,7 +4,7 @@
 > one command in VS Code, Claude (Code + Desktop), Codex, Antigravity, Cursor, Windsurf,
 > Gemini CLI, Cline, and anything MCP-compatible.
 
-Last updated: 2026-10-13 · Current version: 1.4.4 · Tests: 479 passing (+1 skipped on Windows by design) · Lint: ruff (E4,E7,E9,F,I,B,UP,SIM,RUF,BLE001,S110,S112) + mypy clean · No `src/` file >25 KB except 4 tracked borderline files · Phase 0 exit criteria met · Phase 2.2 migration tooling shipped · Phase 2.3 store-first cutover shipped (flat fact-writes removed) · Phase 3 capture reliability (filter, roll-up, multi-client hooks) shipped · v1.1 project directives (sync/context routing, managed markers, `sync-agents --check`) shipped · v1.1.2 instruction-template graceful degradation shipped · v1.2.0 conflict-free team merges shipped (generated-view union merge, block-level store merge, `resolve-conflicts`) · v1.3.0 maps-first retrieval + Cursor hooks + coding-memory bench shipped · v1.4.1 field write/read hygiene from dogfood stores shipped · v1.4.2 field pack precision (contradictions, stale ranking, dream churn) shipped · v1.4.3 SSH field sentence search, eval probe, and index hygiene shipped
+Last updated: 2026-11-02 · Current version: 1.4.5 · Tests: 479 passing (+1 skipped on Windows by design) · Lint: ruff (E4,E7,E9,F,I,B,UP,SIM,RUF,BLE001,S110,S112) + mypy clean · No `src/` file >25 KB except 4 tracked borderline files · Phase 0 exit criteria met · Phase 2.2 migration tooling shipped · Phase 2.3 store-first cutover shipped (flat fact-writes removed) · Phase 3 capture reliability (filter, roll-up, multi-client hooks) shipped · v1.1 project directives (sync/context routing, managed markers, `sync-agents --check`) shipped · v1.1.2 instruction-template graceful degradation shipped · v1.2.0 conflict-free team merges shipped (generated-view union merge, block-level store merge, `resolve-conflicts`) · v1.3.0 maps-first retrieval + Cursor hooks + coding-memory bench shipped · v1.4.1 field write/read hygiene from dogfood stores shipped · v1.4.2 field pack precision (contradictions, stale ranking, dream churn) shipped · v1.4.3 SSH field sentence search, eval probe, and index hygiene shipped
 
 ---
 
@@ -794,7 +794,8 @@ depend on the v1.0.0 tag going live.
       README ("Privacy — no telemetry"), `SECURITY.md`, and `CONTRIBUTING.md`.
 - [x] **Optional local field diary + recording (no upload)** — v1.4.0: human
       `ai-memory diary approve`, local JSONL `PackStats` / tool / session events.
-      `diary pack` / maintainer analyze remain follow-up. Nothing is transmitted.
+      `diary pack` and maintainer `diary analyze` shipped (local folder only;
+      nothing is transmitted).
 
 ## 10. Success metrics
 

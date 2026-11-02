@@ -39,6 +39,10 @@ from memory_fabric.storage.contradictions import (
     pack_contradiction_messages,
     write_contradiction_report,
 )
+from memory_fabric.storage.hygiene import (
+    demote_sibling_next_session_files,
+    is_posture_path,
+)
 from memory_fabric.storage.maps import regenerate_maps
 from memory_fabric.templates import build_empty_section, now_iso
 
@@ -397,6 +401,9 @@ async def _process_and_finalize_candidate(
 
             sec_path.parent.mkdir(parents=True, exist_ok=True)
             metadata["last_updated"] = now_iso()
+            # Body changed — clear sticky stale so a rewritten file re-enters packs.
+            if str(metadata.get("review_status") or "").strip().lower() == "stale":
+                metadata.pop("review_status", None)
             sec_path.write_text(dump_frontmatter(metadata, new_body), encoding="utf-8")
 
     llm_contradictions = list(resp_data.get("contradictions", []) or [])
@@ -509,12 +516,16 @@ async def _process_and_finalize_candidate(
                 if new_summary_clean and len(new_summary_clean) > 5:
                     metadata["summary"] = new_summary_clean
                     metadata["summary_hash"] = body_hash
+                    # Summary rewrite means the file is still maintained — clear sticky stale.
+                    if str(metadata.get("review_status") or "").strip().lower() == "stale":
+                        metadata.pop("review_status", None)
                     path.write_text(dump_frontmatter(metadata, body), encoding="utf-8")
             except Exception as exc:  # noqa: BLE001 - reported via warnings, not swallowed.
                 warnings.append(f"Failed to generate summary for `{path.name}`: {exc}")
 
     # Stale section detection in candidate files (generated maps regenerate on
-    # every Dream, so a staleness marker would be meaningless on them)
+    # every Dream, so a staleness marker would be meaningless on them).
+    # Clear sticky stale when last_updated is still inside the 30-day window.
     now_dt = datetime.now(UTC)
     for path in _iter_markdown_files(candidate_root):
         if path.name == "index.md" or _is_ignored_local_memory_path(candidate_root, path):
@@ -525,18 +536,56 @@ async def _process_and_finalize_candidate(
             metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
             key = _get_section_key(candidate_root, path)
             lu_str = metadata.get("last_updated")
-            if lu_str:
-                lu_dt = datetime.fromisoformat(lu_str.replace("Z", "+00:00"))
-                if lu_dt.tzinfo is None:
-                    lu_dt = lu_dt.replace(tzinfo=UTC)
-                if (now_dt - lu_dt).days > 30 and metadata.get("review_status") != "stale":
-                    metadata["review_status"] = "stale"
-                    path.write_text(dump_frontmatter(metadata, body), encoding="utf-8")
-                    warnings.append(
-                        f"Section `{key}` has not been updated in over 30 days and is marked as stale."
-                    )
+            status = str(metadata.get("review_status") or "").strip().lower()
+            if not lu_str:
+                continue
+            lu_dt = datetime.fromisoformat(lu_str.replace("Z", "+00:00"))
+            if lu_dt.tzinfo is None:
+                lu_dt = lu_dt.replace(tzinfo=UTC)
+            age_days = (now_dt - lu_dt).days
+            if age_days > 30 and status != "stale":
+                metadata["review_status"] = "stale"
+                path.write_text(dump_frontmatter(metadata, body), encoding="utf-8")
+                warnings.append(
+                    f"Section `{key}` has not been updated in over 30 days and is marked as stale."
+                )
+            elif age_days <= 30 and status == "stale":
+                metadata.pop("review_status", None)
+                path.write_text(dump_frontmatter(metadata, body), encoding="utf-8")
+                warnings.append(
+                    f"Cleared sticky stale on `{key}` (last_updated within 30 days)."
+                )
         except (OSError, UnicodeDecodeError, FrontmatterError, ValueError) as exc:
             warnings.append(f"Skipped staleness check for {path.name}: {exc}")
+
+    # Demote historical next-session siblings when a current-posture file exists.
+    # Does not bump last_updated on demoted files.
+    candidate_store = candidate_root / "memory-store"
+    if candidate_store.is_dir():
+        for path in _iter_markdown_files(candidate_store):
+            if path.name == "index.md":
+                continue
+            try:
+                metadata, _body = parse_frontmatter(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, FrontmatterError):
+                continue
+            store_path = str(metadata.get("store_path") or "")
+            if not store_path:
+                rel = path.relative_to(candidate_store).as_posix()
+                store_path = rel[:-3] if rel.endswith(".md") else rel
+            if not is_posture_path(
+                store_path, role=str(metadata.get("role") or "") or None
+            ):
+                continue
+            if str(metadata.get("superseded_by") or "").strip():
+                continue
+            demoted = demote_sibling_next_session_files(candidate_store, store_path)
+            if demoted:
+                sample = ", ".join(demoted[:5])
+                warnings.append(
+                    f"Dream demoted next-session siblings of `{store_path}` "
+                    f"to low + superseded_by: {sample}."
+                )
 
     # Store-first model: rebuild root maps as generated views over memory-store/.
     # Runs in the candidate root (changes flow through the normal diff/apply) and

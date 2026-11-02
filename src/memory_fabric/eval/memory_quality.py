@@ -33,6 +33,7 @@ from memory_fabric.storage import read_combined_context
 from memory_fabric.storage._shared import STEERING_SECTIONS
 from memory_fabric.storage.hygiene import (
     high_priority_inflation,
+    is_posture_path,
     is_weak_summary,
     steering_body_is_placeholder,
     store_priority_counts,
@@ -573,12 +574,110 @@ def _horizontally_adjacent(body: str, left: str, right: str) -> bool:
     return bool(re.search(pair, folded) or re.search(swapped, folded))
 
 
+_RETRIEVAL_FIXTURE_MIN_STORE_FILES = 50
+
+
+def _store_file_count(memory_dir: Path) -> int:
+    store = memory_dir / "memory-store"
+    if not store.is_dir():
+        return 0
+    high, total = store_priority_counts(store)
+    del high
+    return total
+
+
+def _live_posture_pack_probe(cwd: str, memory_dir: Path) -> EvalCheck | None:
+    """Built-in pack probe: ``current posture`` must include the live posture file.
+
+    Skips when the store has no posture file. Fails when a posture file exists
+    but is omitted, or when a superseded file leaks into the pack.
+    """
+    from memory_fabric.frontmatter import FrontmatterError, parse_frontmatter
+    from memory_fabric.storage._shared import _iter_markdown_files, _path_to_store_path
+
+    store = memory_dir / "memory-store"
+    if not store.is_dir():
+        return None
+    posture_paths: list[str] = []
+    for path in _iter_markdown_files(store):
+        if path.name == "index.md":
+            continue
+        try:
+            store_path = _path_to_store_path(store, path)
+            metadata, _body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, FrontmatterError, ValueError):
+            continue
+        if str(metadata.get("superseded_by") or "").strip():
+            continue
+        status = str(metadata.get("review_status") or "").strip().lower()
+        if status in {"stale", "broken-evidence"}:
+            continue
+        if is_posture_path(store_path, role=str(metadata.get("role") or "") or None):
+            posture_paths.append(store_path)
+    if not posture_paths:
+        return None
+    try:
+        pack = read_combined_context(cwd, query="current posture")
+    except Exception as exc:  # noqa: BLE001
+        return _check(
+            "live_posture_pack_probe",
+            "fail",
+            "high",
+            f"current posture pack failed: {exc}",
+            "Fix read_combined_context so the live posture file is always packed.",
+        )
+    included = [
+        str(s).removeprefix("store/").strip("/")
+        for s in (pack.get("included_sections") or [])
+        if str(s).startswith("store/")
+    ]
+    hit = [p for p in posture_paths if p in included]
+    if not hit:
+        return _check(
+            "live_posture_pack_probe",
+            "fail",
+            "high",
+            f"query='current posture' omitted live posture file(s) {posture_paths}; "
+            f"included={included[:12]}",
+            "Pin current-posture in every pack and demote superseded next-session notes.",
+        )
+    leaked: list[str] = []
+    for path in _iter_markdown_files(store):
+        if path.name == "index.md":
+            continue
+        try:
+            store_path = _path_to_store_path(store, path)
+            if store_path not in included:
+                continue
+            metadata, _body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, FrontmatterError, ValueError):
+            continue
+        if str(metadata.get("superseded_by") or "").strip():
+            leaked.append(store_path)
+    if leaked:
+        return _check(
+            "live_posture_pack_probe",
+            "fail",
+            "high",
+            f"query='current posture' leaked superseded files {leaked}; "
+            f"posture hits={hit}",
+            "Keep superseded_by files out of the posture pack.",
+        )
+    return _check(
+        "live_posture_pack_probe",
+        "pass",
+        "info",
+        f"query='current posture' included live posture {hit} and no superseded leaks.",
+        "Keep the posture pin and superseded demotion on the write/dream path.",
+    )
+
+
 def _evaluate_retrieval_quality(cwd: str) -> EvalCategory:
     """Score pack tasks + precision@k from a local retrieval fixture.
 
     Driven by ``.ai-memory/evals/retrieval.yaml`` (or ``.json``). No LLM.
-    Missing fixtures stay a pass. A sentence probe always runs, so a store
-    with no fixture file still fails when keyword search cannot see content words.
+    Large stores (≥50 granular files) without fixtures fail. A sentence probe
+    and a live-posture pack probe always run when applicable.
     """
     from memory_fabric.paths import local_memory_dir
     from memory_fabric.storage.search import keyword_search
@@ -590,17 +689,33 @@ def _evaluate_retrieval_quality(cwd: str) -> EvalCategory:
     checks: list[EvalCheck] = []
     checks.extend(_contradiction_pack_hygiene_checks(memory_dir))
     checks.append(_sentence_search_probe(cwd))
+    posture_probe = _live_posture_pack_probe(cwd, memory_dir)
+    if posture_probe is not None:
+        checks.append(posture_probe)
 
     if not cases:
-        checks.append(
-            _check(
-                "retrieval_fixtures_absent",
-                "pass",
-                "info",
-                "No .ai-memory/evals/retrieval.yaml — retrieval fixture cases not scored.",
-                "Add {query, must_include_store_path / expected_store_paths} cases.",
+        store_n = _store_file_count(memory_dir)
+        if store_n >= _RETRIEVAL_FIXTURE_MIN_STORE_FILES:
+            checks.append(
+                _check(
+                    "retrieval_fixtures_absent",
+                    "fail",
+                    "high",
+                    f"No .ai-memory/evals/retrieval.yaml on a {store_n}-file store — "
+                    "retrieval quality is unmeasured.",
+                    "Add {query, must_include_store_path / expected_store_paths} cases.",
+                )
             )
-        )
+        else:
+            checks.append(
+                _check(
+                    "retrieval_fixtures_absent",
+                    "pass",
+                    "info",
+                    "No .ai-memory/evals/retrieval.yaml — retrieval fixture cases not scored.",
+                    "Add {query, must_include_store_path / expected_store_paths} cases.",
+                )
+            )
         return _category("retrieval_quality", MEMORY_WEIGHTS["retrieval_quality"], checks)
 
     try:
@@ -989,7 +1104,7 @@ def _evaluate_metadata_quality(
         checks.append(
             _check(
                 "priority_inflation",
-                "warn",
+                "fail",
                 "high",
                 f"{high}/{total} store files are priority=high, so ranking cannot prefer live facts.",
                 "Keep high for live constraints; demote *-complete and historical handoffs to low.",
