@@ -451,10 +451,27 @@ def _posture_slot_eligible(metadata: dict[str, Any], store_path: str) -> bool:
     return is_posture_path(store_path, role=role)
 
 
+def _iter_posture_candidate_paths(store_root: Path) -> list[Path]:
+    """Filename-cheap posture candidates. Does not parse every store file.
+
+    Maps-first packs must not walk/parse the granular tree. A targeted
+    ``current-posture*.md`` glob finds the live page; ``role: posture`` files
+    that already appear in ``sections`` are still considered by the caller.
+    """
+    found: list[Path] = []
+    try:
+        for path in store_root.rglob("current-posture*.md"):
+            if path.is_file():
+                found.append(path)
+    except OSError:
+        return []
+    return found
+
+
 def _select_live_posture(
     memory_dir: Path, sections: list[dict[str, Any]]
 ) -> dict[str, Any] | None:
-    """Pick the newest eligible posture file from ranked sections or the store tree."""
+    """Pick the newest eligible posture file from ranked sections or cheap path scan."""
     candidates: list[dict[str, Any]] = []
     seen: set[str] = set()
     for item in sections:
@@ -470,9 +487,7 @@ def _select_live_posture(
 
     store_root = memory_dir / "memory-store"
     if store_root.is_dir():
-        for path in _iter_markdown_files(store_root):
-            if path.name == "index.md":
-                continue
+        for path in _iter_posture_candidate_paths(store_root):
             try:
                 store_path = _path_to_store_path(store_root, path)
             except ValueError:
@@ -504,19 +519,19 @@ def _select_live_posture(
     return max(candidates, key=sort_key)
 
 
-def _compute_posture_slot(
-    memory_dir: Path,
+def _posture_slot_for_choice(
+    chosen_key: str | None,
+    *,
+    found: bool,
     included: list[str],
     omitted: list[str],
 ) -> str:
-    """Closed diary label for the live posture pin. Never returns a section key."""
-    chosen = _select_live_posture(memory_dir, [])
-    if chosen is None:
+    """Closed diary label from an already-selected posture key."""
+    if not found or not chosen_key:
         return "absent"
-    key = str(chosen["key"])
-    if key in included:
+    if chosen_key in included:
         return "included"
-    if key in omitted:
+    if chosen_key in omitted:
         return "omitted"
     return "unknown"
 
@@ -530,16 +545,22 @@ def _pin_posture_section(
     included: list[str],
     omitted: list[str],
     warnings: list[str],
-) -> int:
-    """Always pack the live posture file after steering. Returns tokens used."""
+) -> tuple[int, str]:
+    """Always pack the live posture file after steering.
+
+    Returns ``(tokens_used, posture_slot)`` where posture_slot is a closed
+    diary label and never a section key.
+    """
     chosen = _select_live_posture(memory_dir, sections)
     if chosen is None:
-        return 0
+        return 0, "absent"
     key = str(chosen["key"])
     if key in included:
-        return 0
+        return 0, "included"
     if not _ensure_section_body(chosen, warnings, omitted):
-        return 0
+        return 0, _posture_slot_for_choice(
+            key, found=True, included=included, omitted=omitted
+        )
     cap = _file_share_cap_tokens(max_tokens)
     capped, truncated = _cap_section_text(chosen["text"], chosen["metadata"], cap)
     fragment = _format_fragment(key, capped)
@@ -549,7 +570,7 @@ def _pin_posture_section(
         warnings.append(
             f"Live posture `{key}` did not fit the remaining budget ({remaining} tokens)."
         )
-        return 0
+        return 0, "omitted"
     fragments.append(fragment)
     included.append(key)
     if truncated:
@@ -558,7 +579,7 @@ def _pin_posture_section(
     sections[:] = [item for item in sections if item.get("key") != key]
     if key in omitted:
         omitted[:] = [k for k in omitted if k != key]
-    return cost
+    return cost, "included"
 
 
 def _assemble_fragments(fragments: list[str]) -> str:
@@ -745,7 +766,7 @@ def read_combined_context(
         )
 
     _rank_sections(sections, query)
-    posture_cost = _pin_posture_section(
+    posture_cost, posture_slot = _pin_posture_section(
         memory_dir,
         sections,
         remaining,
@@ -793,7 +814,7 @@ def read_combined_context(
         query=query,
         fragments=fragments,
         priority_by_key=priority_by_key,
-        posture_slot=_compute_posture_slot(memory_dir, included, omitted),
+        posture_slot=posture_slot,
     )
 
 
@@ -908,15 +929,6 @@ def _with_pack_stats(
         query=query,
         fragments=fragments,
     )
-    slot = posture_slot
-    if slot is None:
-        try:
-            slot = _compute_posture_slot(
-                local_memory_dir(cwd),
-                list(finished.get("included_sections") or []),
-                list(finished.get("omitted_sections") or []),
-            )
-        except Exception:  # noqa: BLE001 - diary must never break packing
-            slot = "unknown"
+    slot = posture_slot if posture_slot is not None else "unknown"
     record_context_pack(cwd, finished, query=query, posture_slot=slot)
     return finished
