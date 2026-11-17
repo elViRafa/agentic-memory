@@ -42,6 +42,9 @@ Memory is stored as human-readable Markdown with YAML frontmatter. No vector dat
 Core CLI and MCP tools work end-to-end. See [`ROADMAP.md`](ROADMAP.md) for what
 shipped, what's in progress, and what's next.
 
+Companion Agensi skill-pack versioning (private ops repo, no paid skill text here):
+[`docs/companion-ops-versioning.md`](docs/companion-ops-versioning.md).
+
 ---
 
 ## Demo
