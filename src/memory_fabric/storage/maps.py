@@ -74,15 +74,25 @@ def _category_entries(
             if warnings is not None:
                 warnings.append(f"Excluded {path.relative_to(store_root)} from its map: {exc}")
             continue
+        superseded = str(metadata.get("superseded_by") or "").strip()
         entries.append(
             {
                 "store_path": _path_to_store_path(store_root, path),
                 "title": str(metadata.get("title") or path.stem.replace("-", " ").title()),
                 "summary": str(metadata.get("summary") or ""),
                 "priority": str(metadata.get("priority") or "medium"),
+                "superseded_by": superseded,
+                "closed": bool(superseded),
             }
         )
-    entries.sort(key=lambda e: (PRIORITY_ORDER.get(e["priority"], 1), e["store_path"]))
+    # Open facts first (by priority), then closed ones with their successor.
+    entries.sort(
+        key=lambda e: (
+            1 if e.get("closed") else 0,
+            PRIORITY_ORDER.get(e["priority"], 1),
+            e["store_path"],
+        )
+    )
     return entries
 
 
@@ -95,7 +105,10 @@ def _fingerprint_entries(entries: list[dict[str, Any]]) -> str:
     """
     digest = hashlib.md5()
     for entry in entries:
-        line = f"{entry['store_path']}|{entry['title']}|{entry['summary']}|{entry['priority']}\n"
+        line = (
+            f"{entry['store_path']}|{entry['title']}|{entry['summary']}|"
+            f"{entry['priority']}|{entry.get('superseded_by') or ''}\n"
+        )
         digest.update(line.encode("utf-8"))
     return digest.hexdigest()
 
@@ -116,7 +129,17 @@ def _build_map_body(category: str, entries: list[dict[str, Any]]) -> str:
     cap = _map_token_cap()
     for included, entry in enumerate(entries):
         summary = entry["summary"].replace("\n", " ").strip()
-        line = f"- **{entry['title']}** (`{entry['store_path']}`, {entry['priority']}) — {summary}"
+        successor = str(entry.get("superseded_by") or "").strip()
+        if successor:
+            line = (
+                f"- **{entry['title']}** (`{entry['store_path']}`, closed) — "
+                f"closed by `{successor}`"
+            )
+        else:
+            line = (
+                f"- **{entry['title']}** (`{entry['store_path']}`, "
+                f"{entry['priority']}) — {summary}"
+            )
         if included > 0 and estimate_tokens("\n".join([*lines, line])) > cap:
             remaining = len(entries) - included
             lines.append(f"- …and {remaining} more entries — see `memory-store/index.md`.")

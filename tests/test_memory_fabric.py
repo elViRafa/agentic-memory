@@ -1009,8 +1009,8 @@ class MemoryFabricTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             initialize_memory_fabric(temp)
 
-            # Generated maps are exempt from staleness (they regenerate on every
-            # Dream); steering sections are hand-curated and still age.
+            # Standing steering is never age-stamped. A non-standing episodic
+            # note older than 30 days still gets the soft stale flag.
             rules_path = Path(temp) / ".ai-memory" / "framework-rules.md"
             rules_text = rules_path.read_text(encoding="utf-8")
             metadata, body = parse_frontmatter(rules_text)
@@ -1018,6 +1018,18 @@ class MemoryFabricTests(unittest.TestCase):
             from memory_fabric.frontmatter import dump_frontmatter
 
             rules_path.write_text(dump_frontmatter(metadata, body), encoding="utf-8")
+
+            write_memory_store(
+                temp,
+                "episodic/old-note",
+                "An old episodic observation.",
+                title="Old Note",
+                priority="low",
+            )
+            epi = Path(temp) / ".ai-memory" / "memory-store" / "episodic" / "old-note.md"
+            epi_meta, epi_body = parse_frontmatter(epi.read_text(encoding="utf-8"))
+            epi_meta["last_updated"] = "2020-01-01T12:00:00-04:00"
+            epi.write_text(dump_frontmatter(epi_meta, epi_body), encoding="utf-8")
 
             private_dir = Path(temp) / ".ai-memory" / "private"
             private_dir.mkdir(exist_ok=True)
@@ -1033,7 +1045,9 @@ class MemoryFabricTests(unittest.TestCase):
 
             new_rules_text = rules_path.read_text(encoding="utf-8")
             new_metadata, _ = parse_frontmatter(new_rules_text)
-            self.assertEqual(new_metadata.get("review_status"), "stale")
+            self.assertNotEqual(new_metadata.get("review_status"), "stale")
+            new_epi_meta, _ = parse_frontmatter(epi.read_text(encoding="utf-8"))
+            self.assertEqual(new_epi_meta.get("review_status"), "stale")
 
     @mock.patch("sys.stdin.isatty", return_value=True)
     @mock.patch("builtins.input", return_value="y")

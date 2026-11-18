@@ -19,6 +19,8 @@ from memory_fabric.storage._shared import (
 )
 from memory_fabric.storage.ranking import blended_score, bm25_scores, tokenize
 
+# Fallback candidate cap when the SQLite index is missing. Index-backed search
+# ranks the full local corpus and does not truncate before BM25.
 _CANDIDATE_CAP = 200
 # A verbatim phrase should outrank a file that only repeats the same words apart.
 _PHRASE_BOOST = 4.0
@@ -150,9 +152,14 @@ def keyword_search(cwd: str, query: str, max_results: int = 10) -> list[SearchRe
     """Search memory files by keyword. Returns score-ordered results.
 
     A sentence is matched on its content words (stopwords removed), not as one
-    fixed phrase. Each result includes a ``backend`` field (``ripgrep`` or
-    ``python``) and a ``score`` from the shared BM25 ranker. A file that also
-    contains the original phrase is boosted above a partial token match.
+    fixed phrase. Each result includes a ``backend`` field (``index``,
+    ``ripgrep``, or ``python``) and a ``score`` from the shared BM25 ranker.
+    A file that also contains the original phrase is boosted above a partial
+    token match.
+
+    When ``.ai-memory/private/index.db`` is available, ranking uses the full
+    local corpus (IDF from every indexed file). Ripgrep/Python scan is only
+    the fallback when the index is missing or corrupt.
     """
     if not query.strip() or max_results <= 0:
         return []
@@ -172,6 +179,24 @@ def keyword_search(cwd: str, query: str, max_results: int = 10) -> list[SearchRe
             phrase_hit=False,
         )
         return []
+
+    indexed = _keyword_search_index(cwd, query, content, max_results)
+    if indexed is not None:
+        ranked, phrase_hit, candidate_n = indexed
+        for result in ranked:
+            result["backend"] = "index"
+        _record_search(
+            cwd,
+            ranked,
+            query=query,
+            started=started,
+            backend="index",
+            token_n=len(tokens),
+            content_token_n=len(content),
+            candidate_n=candidate_n,
+            phrase_hit=phrase_hit,
+        )
+        return ranked
 
     roots = [path for path in [local_memory_dir(cwd), global_memory_dir()] if path.exists()]
     if not roots:
@@ -281,6 +306,297 @@ def _contains_phrase(query: str, text: str) -> bool:
     return phrase in _folded_phrase(text)
 
 
+def _keyword_search_index(
+    cwd: str,
+    query: str,
+    content: list[str],
+    max_results: int,
+) -> tuple[list[SearchResult], bool, int] | None:
+    """Rank the full local corpus from ``index.db``. None → use scan fallback."""
+    from memory_fabric.storage.index import IndexRow, close_quietly, load_rows, sync_index
+
+    memory_dir = local_memory_dir(cwd)
+    if not memory_dir.exists():
+        return None
+    conn = sync_index(cwd)
+    if conn is None:
+        return None
+    try:
+        rows = load_rows(conn, memory_dir)
+    finally:
+        close_quietly(conn)
+    if not rows:
+        return None
+
+    searchable: list[IndexRow] = [
+        row
+        for row in rows
+        if _is_searchable_memory_path(memory_dir, row.path) and row.rank_text.strip()
+    ]
+    if not searchable:
+        return None
+
+    docs = [tokenize(row.rank_text) for row in searchable]
+    # Corpus-wide IDF over every indexed searchable file.
+    scores = bm25_scores(content, docs)
+
+    phrase_hit = False
+    decorated: list[tuple[float, int, SearchResult]] = []
+    for index, (row, score) in enumerate(zip(searchable, scores, strict=True)):
+        if score <= 0:
+            continue
+        blended = blended_score(
+            score,
+            row.priority,
+            row.last_updated,
+            key=row.section_key,
+            query_present=True,
+            review_status=row.review_status or None,
+            superseded_by=row.superseded_by or None,
+        )
+        if blended > 0 and _contains_phrase(query, row.rank_text):
+            blended *= _PHRASE_BOOST
+            phrase_hit = True
+        if blended <= 0:
+            successor = (row.superseded_by or "").strip()
+            if successor and score > 0:
+                # Label closed matches so the agent sees the successor.
+                decorated.append(
+                    (
+                        0.0001,
+                        -index,
+                        {
+                            "section": _search_section_label(row.path),
+                            "path": str(row.path),
+                            "line": 1,
+                            "snippet": f"Closed by `{successor}`",
+                            "score": 0.0,
+                        },
+                    )
+                )
+            continue
+        # Snippet filled after top-k selection so a common token does not
+        # force a full-corpus re-read.
+        decorated.append(
+            (
+                blended,
+                -index,
+                {
+                    "section": _search_section_label(row.path),
+                    "path": str(row.path),
+                    "line": 1,
+                    "snippet": "",
+                    "score": round(float(blended), 6),
+                },
+            )
+        )
+
+    # Global memory sits outside the project index — scan and merge by score.
+    global_root = global_memory_dir()
+    if global_root.exists():
+        global_raw = _keyword_search_python(content, [global_root], _CANDIDATE_CAP)
+        global_ranked, global_phrase = _rank_search_results(
+            query, content, global_raw, max_results
+        )
+        phrase_hit = phrase_hit or global_phrase
+        for offset, result in enumerate(global_ranked):
+            decorated.append((float(result.get("score") or 0.0), -(10_000 + offset), result))
+
+    decorated = _apply_semantic_blend(query, content, searchable, docs, decorated)
+
+    if not decorated:
+        semantic = _semantic_rerank(query, content, searchable, docs, max_results)
+        if semantic is not None:
+            return semantic
+        return [], False, len(searchable)
+
+    decorated.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    ranked: list[SearchResult] = []
+    seen: set[str] = set()
+    for score, _neg, result in decorated:
+        if result["path"] in seen:
+            continue
+        seen.add(result["path"])
+        if not result.get("snippet"):
+            line_number, snippet = _snippet_from_path(Path(result["path"]), content)
+            result["line"] = line_number
+            result["snippet"] = snippet
+        result["score"] = round(float(score), 6)
+        ranked.append(result)
+        if len(ranked) >= max_results:
+            break
+
+    if not ranked:
+        semantic = _semantic_rerank(query, content, searchable, docs, max_results)
+        if semantic is not None:
+            return semantic
+
+    return ranked, phrase_hit, len(searchable)
+
+
+def _first_match_snippet(text: str, content: list[str]) -> tuple[int, str]:
+    needles = set(content)
+    for number, line in enumerate(text.splitlines(), start=1):
+        if needles & set(tokenize(line)):
+            return number, line.strip()
+    first = text.strip().splitlines()
+    if first:
+        return 1, first[0].strip()[:200]
+    return 1, ""
+
+
+def _snippet_from_path(path: Path, content: list[str]) -> tuple[int, str]:
+    """Read the file for a body-accurate snippet (rank_text joins title/summary)."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return 1, ""
+    return _first_match_snippet(text, content)
+
+
+def _semantic_enabled() -> bool:
+    import os
+
+    flag = (os.environ.get("MEMORY_FABRIC_SEMANTIC") or "1").strip().lower()
+    return flag not in {"0", "false", "no", "off"}
+
+
+def _apply_semantic_blend(
+    query: str,
+    content: list[str],
+    searchable: list,
+    docs: list[list[str]],
+    decorated: list[tuple[float, int, SearchResult]],
+) -> list[tuple[float, int, SearchResult]]:
+    """Blend cosine into lexical scores and append strong paraphrase-only hits."""
+    from memory_fabric.storage.index import IndexRow
+
+    if not _semantic_enabled():
+        return decorated
+    from memory_fabric.storage.semantic import (
+        blend_scores,
+        cosine_similarity,
+        embed_texts,
+        semantic_available,
+    )
+
+    rows: list[IndexRow] = list(searchable)
+    if not semantic_available() or not rows:
+        return decorated
+    texts = [query] + [row.rank_text for row in rows]
+    vectors = embed_texts(texts)
+    if not vectors or len(vectors) != len(texts):
+        return decorated
+    query_vec = vectors[0]
+    path_to_cosine: dict[str, float] = {}
+    path_to_tokens: dict[str, set[str]] = {}
+    for row, vec, tokens in zip(rows, vectors[1:], docs, strict=True):
+        path_to_cosine[str(row.path)] = cosine_similarity(query_vec, vec)
+        path_to_tokens[str(row.path)] = set(tokens)
+
+    content_set = set(content)
+    seen_paths = {result["path"] for _score, _neg, result in decorated}
+    blended_rows: list[tuple[float, int, SearchResult]] = []
+    for score, neg_index, result in decorated:
+        path = result["path"]
+        cosine = path_to_cosine.get(path, 0.0)
+        has_exact = bool(content_set & path_to_tokens.get(path, set()))
+        if has_exact:
+            new_score = blend_scores(score, cosine, lexical_weight=0.85)
+        else:
+            new_score = blend_scores(score, cosine, lexical_weight=0.35)
+        blended_rows.append((new_score, neg_index, result))
+
+    # Paraphrase-only files (no shared content token) with strong cosine.
+    for index, row in enumerate(rows):
+        path = str(row.path)
+        if path in seen_paths:
+            continue
+        cosine = path_to_cosine.get(path, 0.0)
+        if cosine < 0.55:
+            continue
+        if content_set & path_to_tokens.get(path, set()):
+            continue
+        line_number, snippet = _snippet_from_path(row.path, content)
+        if not snippet:
+            first = row.rank_text.strip().splitlines()
+            snippet = first[0].strip()[:200] if first else ""
+            line_number = 1
+        blended_rows.append(
+            (
+                cosine * 0.5,
+                -(100_000 + index),
+                {
+                    "section": _search_section_label(row.path),
+                    "path": path,
+                    "line": line_number,
+                    "snippet": snippet,
+                    "score": round(cosine * 0.5, 6),
+                },
+            )
+        )
+    return blended_rows
+
+
+def _semantic_rerank(
+    query: str,
+    content: list[str],
+    searchable: list,
+    docs: list[list[str]],
+    max_results: int,
+) -> tuple[list[SearchResult], bool, int] | None:
+    """When BM25 finds nothing, surface paraphrase hits via embeddings."""
+    from memory_fabric.storage.index import IndexRow
+
+    if not _semantic_enabled():
+        return None
+    from memory_fabric.storage.semantic import (
+        cosine_similarity,
+        embed_texts,
+        semantic_available,
+    )
+
+    rows: list[IndexRow] = list(searchable)
+    if not semantic_available() or not rows:
+        return None
+    texts = [query] + [row.rank_text for row in rows]
+    vectors = embed_texts(texts)
+    if not vectors or len(vectors) != len(texts):
+        return None
+    query_vec = vectors[0]
+    content_set = set(content)
+    scored: list[tuple[float, int, IndexRow, str]] = []
+    for index, (row, vec, tokens) in enumerate(
+        zip(rows, vectors[1:], docs, strict=True)
+    ):
+        sim = cosine_similarity(query_vec, vec)
+        if sim < 0.35:
+            continue
+        exact = bool(content_set & set(tokens))
+        weight = sim * (0.5 if exact else 1.0)
+        scored.append((weight, index, row, row.rank_text))
+    if not scored:
+        return None
+    scored.sort(key=lambda item: item[0], reverse=True)
+    ranked: list[SearchResult] = []
+    for weight, _index, row, text in scored[:max_results]:
+        line_number, snippet = _snippet_from_path(row.path, content) if content else (1, "")
+        if not snippet:
+            first = text.strip().splitlines()
+            snippet = first[0].strip()[:200] if first else ""
+            line_number = 1
+        ranked.append(
+            {
+                "section": _search_section_label(row.path),
+                "path": str(row.path),
+                "line": line_number,
+                "snippet": snippet,
+                "score": round(float(weight), 6),
+            }
+        )
+    return ranked, False, len(rows)
+
+
 def _rank_search_results(
     query: str, content_tokens: list[str], results: list[SearchResult], max_results: int
 ) -> tuple[list[SearchResult], bool]:
@@ -296,7 +612,7 @@ def _rank_search_results(
         unique_paths.append(Path(key))
 
     docs: list[list[str]] = []
-    metas: list[tuple[str, str, str, str]] = []
+    metas: list[tuple[str, str, str, str, str]] = []
     texts: list[str] = []
     for path in unique_paths:
         try:
@@ -326,6 +642,9 @@ def _rank_search_results(
         if blended > 0 and _contains_phrase(query, text):
             blended *= _PHRASE_BOOST
             phrase_hit = True
+        if blended <= 0 and (superseded_by or "").strip() and score > 0:
+            # Keep a tiny score so the closed file can surface as a label.
+            blended = 0.0001
         path_scores[str(path)] = blended
 
     decorated: list[tuple[float, int, SearchResult]] = []
@@ -340,6 +659,15 @@ def _rank_search_results(
             continue
         seen_ranked.add(result["path"])
         result["score"] = round(float(score), 6)
+        # Label closed matches on the scan fallback the same way as the index path.
+        try:
+            text = Path(result["path"]).read_text(encoding="utf-8")
+            _p, _lu, _rs, superseded, _role = _rank_metadata(text)
+            if (superseded or "").strip() and score <= 0.0001:
+                result["snippet"] = f"Closed by `{superseded.strip()}`"
+                result["score"] = 0.0
+        except (OSError, UnicodeDecodeError):
+            pass
         ranked.append(result)
         if len(ranked) >= max_results:
             break

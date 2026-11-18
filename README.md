@@ -28,7 +28,7 @@ Memory is stored as human-readable Markdown with YAML frontmatter. No vector dat
 - **Learns from failure**: `write_failure_memory_tool` deduplicates repeat occurrences of
   the same error into one growing record instead of scattering near-duplicates
 - **Secret-safe**: API keys and credentials are redacted before writing
-- **Token-budget aware**: assembles context within limits; never slices files mid-document
+- **Token-budget aware**: assembles context within limits; oversized episodic and other large notes in a query pack are truncated to a per-file share so one journal cannot monopolize the budget
 - **Quality eval**: scores memory usefulness and Dreaming before/after results locally
 - **Unicode-safe**: works with any human language
 - **Graceful degradation**: works without `rg`, git hooks, or Dreaming configured
@@ -37,7 +37,7 @@ Memory is stored as human-readable Markdown with YAML frontmatter. No vector dat
 
 ## Status
 
-**v1.4.5 — field diary pack/analyze and live posture pinning.
+**v1.4.6 — close events for outdated memory (age is not truth).
 [Live on PyPI](https://pypi.org/project/memory-fabric/).**
 Core CLI and MCP tools work end-to-end. See [`ROADMAP.md`](ROADMAP.md) for what
 shipped, what's in progress, and what's next.

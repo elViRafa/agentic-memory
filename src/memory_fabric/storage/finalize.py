@@ -39,6 +39,13 @@ from memory_fabric.storage.contradictions import (
     pack_contradiction_messages,
     write_contradiction_report,
 )
+from memory_fabric.storage.close import (
+    clear_age_only_stale_on_standing,
+    is_standing_role,
+    live_posture_body,
+    role_for_section_key,
+    role_for_store_path,
+)
 from memory_fabric.storage.hygiene import (
     demote_sibling_next_session_files,
     is_posture_path,
@@ -400,10 +407,8 @@ async def _process_and_finalize_candidate(
             lines_removed += max(0, len(old_body.splitlines()) - len(new_body.splitlines()))
 
             sec_path.parent.mkdir(parents=True, exist_ok=True)
-            metadata["last_updated"] = now_iso()
-            # Body changed — clear sticky stale so a rewritten file re-enters packs.
-            if str(metadata.get("review_status") or "").strip().lower() == "stale":
-                metadata.pop("review_status", None)
+            # Dream paraphrases must not launder obsolete text into looking
+            # fresh: keep last_updated and review_status as they were.
             sec_path.write_text(dump_frontmatter(metadata, new_body), encoding="utf-8")
 
     llm_contradictions = list(resp_data.get("contradictions", []) or [])
@@ -432,9 +437,46 @@ async def _process_and_finalize_candidate(
         warnings.append(
             f"…and {len(det_hits) - 5} more contradiction(s); see evals/contradictions.json"
         )
-    dream_contradictions, contradiction_count = pack_contradiction_messages(
+    _pack_messages, contradiction_count = pack_contradiction_messages(
         det_hits, llm_contradictions
     )
+    # Index surface shows open review count — not truncated polarity spam.
+    # Full advisory list stays in evals/contradictions.json.
+    dream_contradictions: list[str] = []
+    try:
+        from memory_fabric.storage.review import (
+            count_pending_reviews,
+            queue_contradiction_reviews,
+            queue_prose_superseded_reviews,
+        )
+
+        queued = queue_contradiction_reviews(cwd, det_hits)
+        prose_queued = queue_prose_superseded_reviews(cwd)
+        if queued:
+            warnings.append(
+                f"Queued {len(queued)} contradiction review(s); "
+                "promote_review writes superseded_by."
+            )
+        if prose_queued:
+            warnings.append(
+                f"Queued {len(prose_queued)} prose-superseded review(s); "
+                "promote after naming the successor."
+            )
+        pending_n = count_pending_reviews(cwd)
+        if pending_n:
+            dream_contradictions = [
+                f"{pending_n} contradiction/prose review(s) pending; "
+                "promote_review writes superseded_by. "
+                f"Full detector list: evals/contradictions.json ({contradiction_count} hit(s))."
+            ]
+        elif contradiction_count:
+            dream_contradictions = [
+                f"{contradiction_count} contradiction hit(s) recorded in "
+                "evals/contradictions.json; no open reviews."
+            ]
+    except Exception as exc:  # noqa: BLE001 - review queue must not fail a dream.
+        warnings.append(f"Contradiction review queue skipped: {exc}")
+        dream_contradictions = _pack_messages
 
     # Recalculate hash of consolidated candidates (generated maps excluded — they
     # are derived from the store, which is already part of the hash input)
@@ -516,16 +558,25 @@ async def _process_and_finalize_candidate(
                 if new_summary_clean and len(new_summary_clean) > 5:
                     metadata["summary"] = new_summary_clean
                     metadata["summary_hash"] = body_hash
-                    # Summary rewrite means the file is still maintained — clear sticky stale.
-                    if str(metadata.get("review_status") or "").strip().lower() == "stale":
-                        metadata.pop("review_status", None)
+                    # Summary rewrite is not a truth event — keep last_updated
+                    # and review_status unchanged.
                     path.write_text(dump_frontmatter(metadata, body), encoding="utf-8")
             except Exception as exc:  # noqa: BLE001 - reported via warnings, not swallowed.
                 warnings.append(f"Failed to generate summary for `{path.name}`: {exc}")
 
-    # Stale section detection in candidate files (generated maps regenerate on
-    # every Dream, so a staleness marker would be meaningless on them).
-    # Clear sticky stale when last_updated is still inside the 30-day window.
+    # Age is not truth for standing roles. Clear age-only stale on steering /
+    # decisions / schemas / architecture when there is no successor. Other
+    # roles may still receive a soft age stamp for doctor visibility, but
+    # dream paraphrases no longer clear it via last_updated refresh.
+    cleared = clear_age_only_stale_on_standing(candidate_root)
+    for key in cleared[:10]:
+        warnings.append(
+            f"Cleared age-only stale on standing section `{key}` "
+            "(no superseded_by; age is not truth)."
+        )
+    if len(cleared) > 10:
+        warnings.append(f"…and {len(cleared) - 10} more age-only stale clears.")
+
     now_dt = datetime.now(UTC)
     for path in _iter_markdown_files(candidate_root):
         if path.name == "index.md" or _is_ignored_local_memory_path(candidate_root, path):
@@ -535,9 +586,17 @@ async def _process_and_finalize_candidate(
         try:
             metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
             key = _get_section_key(candidate_root, path)
+            role = role_for_section_key(
+                key, role=str(metadata.get("role") or "") or None
+            )
+            if is_standing_role(role):
+                # Standing decisions / steering are never age-stamped.
+                continue
             lu_str = metadata.get("last_updated")
             status = str(metadata.get("review_status") or "").strip().lower()
             if not lu_str:
+                continue
+            if str(metadata.get("superseded_by") or "").strip():
                 continue
             lu_dt = datetime.fromisoformat(lu_str.replace("Z", "+00:00"))
             if lu_dt.tzinfo is None:
@@ -558,15 +617,15 @@ async def _process_and_finalize_candidate(
         except (OSError, UnicodeDecodeError, FrontmatterError, ValueError) as exc:
             warnings.append(f"Skipped staleness check for {path.name}: {exc}")
 
-    # Demote historical next-session siblings when a current-posture file exists.
-    # Does not bump last_updated on demoted files.
+    # Demote historical next-session siblings when a current-posture file exists,
+    # except paths the live posture slice still names.
     candidate_store = candidate_root / "memory-store"
     if candidate_store.is_dir():
         for path in _iter_markdown_files(candidate_store):
             if path.name == "index.md":
                 continue
             try:
-                metadata, _body = parse_frontmatter(path.read_text(encoding="utf-8"))
+                metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
             except (OSError, UnicodeDecodeError, FrontmatterError):
                 continue
             store_path = str(metadata.get("store_path") or "")
@@ -579,7 +638,10 @@ async def _process_and_finalize_candidate(
                 continue
             if str(metadata.get("superseded_by") or "").strip():
                 continue
-            demoted = demote_sibling_next_session_files(candidate_store, store_path)
+            _packed, keep_paths = live_posture_body(body)
+            demoted = demote_sibling_next_session_files(
+                candidate_store, store_path, keep_paths=keep_paths
+            )
             if demoted:
                 sample = ", ".join(demoted[:5])
                 warnings.append(

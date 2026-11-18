@@ -252,6 +252,7 @@ class TokenSearchTests(unittest.TestCase):
             _write_store_file(temp, "frontend/zones", "dashboard filter zones")
             completed = mock.Mock(returncode=1, stdout="", stderr="")
             with (
+                mock.patch("memory_fabric.storage.index.sync_index", return_value=None),
                 mock.patch("shutil.which", return_value="/usr/bin/rg"),
                 mock.patch("subprocess.run", return_value=completed) as run,
             ):
@@ -266,6 +267,152 @@ class TokenSearchTests(unittest.TestCase):
             self.assertNotIn("the", command)
             self.assertEqual(results[0]["section"], "store:frontend/zones")
             self.assertEqual(results[0]["backend"], "python")
+
+    def test_index_backend_is_used_when_available(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            _write_store_file(temp, "frontend/zones", "dashboard filter zones")
+            results = keyword_search(temp, "dashboard filter zones")
+            self.assertTrue(results)
+            self.assertEqual(results[0]["backend"], "index")
+            self.assertEqual(results[0]["section"], "store:frontend/zones")
+
+
+class IndexBuriedFileTests(unittest.TestCase):
+    """Prove the 200-hit scan cap miss, then that index search recovers it."""
+
+    N_COMMON = 210
+
+    def _seed_buried(self, temp: str) -> None:
+        initialize_memory_fabric(temp)
+        for i in range(self.N_COMMON):
+            _write_store_file(
+                temp,
+                f"bulk/common-{i:03d}",
+                f"widget noise filler line {i}",
+            )
+        _write_store_file(
+            temp,
+            "decisions/buried-rare",
+            "widget rarequux distinctive decision note",
+            priority="high",
+            title="Buried rare",
+        )
+
+    def test_scan_fallback_misses_file_past_candidate_cap(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            self._seed_buried(temp)
+            with (
+                mock.patch("memory_fabric.storage.index.sync_index", return_value=None),
+                mock.patch("shutil.which", return_value=None),
+            ):
+                results = keyword_search(temp, "widget rarequux", max_results=10)
+            sections = [r["section"] for r in results]
+            self.assertNotIn(
+                "store:decisions/buried-rare",
+                sections,
+                "scan fallback must miss the buried file so the index fix is measurable",
+            )
+
+    def test_index_search_finds_buried_rare_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            self._seed_buried(temp)
+            results = keyword_search(temp, "widget rarequux", max_results=10)
+            sections = [r["section"] for r in results]
+            self.assertIn("store:decisions/buried-rare", sections)
+            self.assertEqual(results[0]["section"], "store:decisions/buried-rare")
+            self.assertEqual(results[0]["backend"], "index")
+
+    def test_deleting_index_still_finds_sentence_via_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            _write_store_file(
+                temp,
+                "frontend/zones",
+                "dashboard\n\nfilter\n\nzones\n",
+            )
+            delete_index(temp)
+            with (
+                mock.patch("memory_fabric.storage.index.sync_index", return_value=None),
+                mock.patch("shutil.which", return_value=None),
+            ):
+                results = keyword_search(temp, "how does the dashboard filter zones")
+            self.assertTrue(results)
+            self.assertEqual(results[0]["section"], "store:frontend/zones")
+            self.assertEqual(results[0]["backend"], "python")
+
+
+class SemanticSearchTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        from memory_fabric.storage.semantic import set_embedder
+
+        set_embedder(None)
+        os.environ.pop("MEMORY_FABRIC_SEMANTIC", None)
+
+    def test_absent_embedder_stays_lexical(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            _write_store_file(
+                temp,
+                "decisions/jwt-auth",
+                "ADR: we chose JWT for session authentication tokens.",
+            )
+            _write_store_file(
+                temp,
+                "notes/unrelated",
+                "Deploy the batch worker on Tuesday nights.",
+            )
+            results = keyword_search(temp, "which approach keeps users logged in")
+            sections = [r["section"] for r in results]
+            self.assertNotIn("store:decisions/jwt-auth", sections)
+
+    def test_paraphrase_hit_with_embedder_and_exact_still_wins(self) -> None:
+        from memory_fabric.storage.semantic import set_embedder
+
+        def fake_embed(texts: list[str]) -> list[list[float]]:
+            vectors: list[list[float]] = []
+            for text in texts:
+                lowered = text.casefold()
+                # Cluster: login/session/auth paraphrases + JWT ADR body.
+                if any(
+                    needle in lowered
+                    for needle in (
+                        "logged in",
+                        "jwt",
+                        "session authentication",
+                        "keeps users",
+                    )
+                ):
+                    vectors.append([1.0, 0.0, 0.0])
+                elif "deploy the batch" in lowered:
+                    vectors.append([0.0, 1.0, 0.0])
+                else:
+                    vectors.append([0.0, 0.0, 1.0])
+            return vectors
+
+        set_embedder(fake_embed)
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            _write_store_file(
+                temp,
+                "decisions/jwt-auth",
+                "ADR: we chose JWT for session authentication tokens.",
+            )
+            _write_store_file(
+                temp,
+                "notes/unrelated",
+                "Deploy the batch worker on Tuesday nights.",
+            )
+            _write_store_file(
+                temp,
+                "decisions/exact-login",
+                "keeps users logged in after password check",
+            )
+            paraphrase = keyword_search(temp, "which approach keeps users logged in")
+            sections = [r["section"] for r in paraphrase]
+            self.assertIn("store:decisions/jwt-auth", sections)
+            # Exact content-token file outranks paraphrase-only neighbor.
+            self.assertEqual(paraphrase[0]["section"], "store:decisions/exact-login")
 
 
 class MapsFirstAndRetrieveTests(unittest.TestCase):

@@ -8,6 +8,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.6] — 2026-11-18
+
+### Added
+
+- **Close events for outdated memory.** A claim stays current until a later
+  claim closes it. Optional `valid_from`, `closed_at`, and `close_kind`
+  (`update`|`revision`) sit beside `last_updated` and `superseded_by`.
+  `write_memory_store` accepts `supersedes:` (argument or leading body line)
+  and only closes when the writer is at least as entrenched and its
+  `valid_from` is not earlier than the target's.
+- **Contradiction / prose review queue.** Dream queues detector hits and
+  prose-only "superseded" claims as pending reviews; `promote_review` is what
+  writes `superseded_by`. Index frontmatter shows open review count instead of
+  truncated polarity spam.
+- **Live posture slice.** Packs keep the latest dated section of a
+  `current-posture` / `role: posture` file; sibling `*next-session*` files the
+  live slice still names stay open.
+- **Claim-level contradiction heuristics.** Advisory detection compares
+  claims (not whole-file digit bags), aligns numbers by head/unit, adds
+  Portuguese polarity cues and a `replacement` kind, scans up to 150 files
+  per top-level category, and caps pair work with inverted indexes so doctor
+  and dream stay fast. No new dependencies; still never writes `superseded_by`
+  on its own.
+- **Index-backed `keyword_search`.** When `.ai-memory/private/index.db` is
+  available, search ranks the full local corpus with corpus-wide BM25 IDF
+  instead of truncating at the first 200 ripgrep/Python hits. Ripgrep and the
+  Python scan remain the fallback when the index is missing.
+- **Optional semantic search.** Extra `memory-fabric[semantic]` (fastembed)
+  blends cosine similarity for paraphrase hits. Absent the extra, or with
+  `MEMORY_FABRIC_SEMANTIC=0`, search stays lexical. Tests inject an embedder
+  so CI never downloads a model.
+- **Diary search gate.** `ai-memory diary analyze` fails a project when
+  content-token `search.run` rows show a high zero-hit rate or repeatedly hit
+  the 200-candidate scan cap.
+
+### Changed
+
+- **Age is not truth for standing roles.** Dream no longer stamps steering,
+  decisions, schemas, or architecture `review_status: stale` only because
+  `last_updated` is older than 30 days, and clears existing age-only stale on
+  those roles when `superseded_by` is empty. Standing roles do not decay by
+  edit age in ranking. Age-only stale steering packs its full body.
+- **Closed facts stay visible as history.** Maps, search (index and ripgrep
+  fallback), `read_memory_store`, and task packs label closed hits with
+  `Closed by <successor>` instead of dropping the link. Episodic journals and
+  failures leave no-query constraint packs.
+- **Merge driver / CLI resolution.** Prefer a verified absolute `ai-memory`
+  binary (and user-site Scripts) over a broken PATH shim so hooks and merges
+  keep working when Scoop/uv shims shadow the install.
+
+### Fixed
+
+- **Docs truth.** README no longer claims context never slices a file; query
+  packs truncate oversized notes to a per-file share. ROADMAP marks the
+  no-query 150 ms latency budget and the SSH field code items as shipped.
+- **Journal docstring.** Session journals are history; deep dream folds
+  `episodic/commits/` after 14 days and does not auto-fold session journals
+  at 7 days.
+
 ## [1.4.5] — 2026-11-02
 
 ### Added

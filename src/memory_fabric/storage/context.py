@@ -24,6 +24,12 @@ from memory_fabric.storage._shared import (
     _steering_context_enabled,
     estimate_tokens,
 )
+from memory_fabric.storage.close import (
+    closed_by_line,
+    is_history_role,
+    live_posture_body,
+    role_for_section_key,
+)
 from memory_fabric.storage.hygiene import (
     MAP_QUERY_CAP_TOKENS,
     is_posture_path,
@@ -245,17 +251,21 @@ def _load_always_on(
             )
             continue
         status = str(metadata.get("review_status") or "").strip().lower()
-        if status == "stale":
+        successor = str(metadata.get("superseded_by") or "").strip()
+        # Age-only stale is not a reason to hide steering. Stub only when a
+        # successor closed it or evidence is broken.
+        if successor or status == "broken-evidence":
             summary = str(metadata.get("summary") or "").strip()
+            reason = (
+                f"closed by `{successor}`" if successor else "broken-evidence"
+            )
             stub_body = (
                 f"Summary: {summary}\n\n"
-                "[stale steering — full body omitted; refresh content or clear "
-                "review_status]\n"
+                f"[closed steering — full body omitted ({reason})]\n"
             )
             full_text = dump_frontmatter(metadata, stub_body)
             warnings.append(
-                f"Packed stale steering `{path.name}` as summary only so it does "
-                "not consume the always-on budget."
+                f"Packed closed steering `{path.name}` as summary only ({reason})."
             )
         else:
             full_text = dump_frontmatter(metadata, body)
@@ -327,15 +337,22 @@ def _collect_sections_full_scan(
     for path in _ordered_context_files(cwd):
         if maps_only and not _is_startup_map_path(memory_dir, path):
             continue
-        if query is None and is_commit_capture(str(path).replace("\\", "/")):
+        section_key_guess = str(path).replace("\\", "/")
+        if query is None and is_commit_capture(section_key_guess):
             continue
         section_name, metadata, body, read_warning = _read_memory_path(path)
         if read_warning:
             warnings.append(read_warning)
             omitted.append(str(path))
             continue
-        full_text = dump_frontmatter(metadata, body)
         section_key = _section_key(path, section_name)
+        if query is None and is_history_role(
+            role_for_section_key(
+                section_key, role=str(metadata.get("role") or "") or None
+            )
+        ):
+            continue
+        full_text = dump_frontmatter(metadata, body)
         sections.append(
             {
                 "key": section_key,
@@ -377,6 +394,11 @@ def _collect_sections_from_index(
             continue
         if query is None and is_commit_capture(row.section_key):
             continue
+        row_role = getattr(row, "role", "") or ""
+        if query is None and is_history_role(
+            role_for_section_key(row.section_key, role=row_role or None)
+        ):
+            continue
         sections.append(
             {
                 "key": row.section_key,
@@ -390,7 +412,7 @@ def _collect_sections_from_index(
                     "review_status": row.review_status,
                     "superseded_by": row.superseded_by,
                     "store_path": row.store_path,
-                    "role": getattr(row, "role", "") or "",
+                    "role": row_role,
                 },
                 "path": row.path,
                 "rank_text": row.rank_text,
@@ -561,6 +583,17 @@ def _pin_posture_section(
         return 0, _posture_slot_for_choice(
             key, found=True, included=included, omitted=omitted
         )
+    # Pack only the live dated slice so earlier next-steps stay out of context.
+    meta = chosen.get("metadata") or {}
+    raw_text = str(chosen.get("text") or "")
+    try:
+        from memory_fabric.frontmatter import parse_frontmatter as _pf
+
+        _m, body_only = _pf(raw_text) if raw_text.lstrip().startswith("---") else ({}, raw_text)
+        packed_body, _keep = live_posture_body(body_only)
+        chosen["text"] = dump_frontmatter(meta or _m, packed_body)
+    except Exception:  # noqa: BLE001 - posture slice is best-effort.
+        pass
     cap = _file_share_cap_tokens(max_tokens)
     capped, truncated = _cap_section_text(chosen["text"], chosen["metadata"], cap)
     fragment = _format_fragment(key, capped)
@@ -677,7 +710,21 @@ def _pack_sections(
         if budget_exhausted:
             omitted.append(key)
             continue
-        if query_present and float(item.get("score") or 0) <= 0:
+        metadata = item.get("metadata") or {}
+        score = float(item.get("score") or 0)
+        successor = str(metadata.get("superseded_by") or "").strip()
+        if score <= 0 and (query_present or successor):
+            # Closed facts stay out of the body but leave a one-line pointer.
+            if successor and packable > 0:
+                line = f"`{key}` closed by `{successor}`"
+                fragment = _format_fragment(key, line)
+                cost = estimate_tokens(fragment)
+                if cost <= packable:
+                    fragments.append(fragment)
+                    included.append(key)
+                    packable -= cost
+                    remaining -= cost
+                    continue
             omitted.append(key)
             continue
         if not _ensure_section_body(item, warnings, omitted):

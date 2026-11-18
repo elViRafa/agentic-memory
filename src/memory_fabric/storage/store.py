@@ -24,6 +24,16 @@ from memory_fabric.storage._shared import (
     _resolve_store_file,
     estimate_tokens,
 )
+from memory_fabric.storage.close import (
+    body_claims_superseded_without_field,
+    can_close,
+    can_close_by_valid_time,
+    close_store_file,
+    ensure_valid_from,
+    live_posture_body,
+    parse_supersedes_paths,
+    role_for_store_path,
+)
 from memory_fabric.storage.hygiene import (
     demote_sibling_next_session_files,
     high_priority_inflation,
@@ -85,6 +95,8 @@ def write_memory_store(
     priority: str | None = None,
     mode: WriteMode = "replace",
     evidence: list[str] | None = None,
+    supersedes: list[str] | None = None,
+    close_kind: str = "update",
 ) -> StoreWriteResult:
     """Write a memory file to a semantic store path.
 
@@ -97,11 +109,19 @@ def write_memory_store(
                   ``ai-memory verify`` checks these still resolve and flags the
                   memory when they don't — the mechanism that lets rot be
                   caught by a machine instead of a human noticing years later.
+        supersedes: Optional store paths this write closes. Also accepted as a
+                    leading ``supersedes: path`` line in *content*. Closes only
+                    when this writer is at least as entrenched as the target.
+        close_kind: ``update`` (world changed) or ``revision`` (earlier record
+                    was wrong). Stored on the closed file.
     """
     if mode not in {"append", "replace"}:
         raise ValueError("mode must be 'append' or 'replace'")
     if priority is not None and priority not in {"high", "medium", "low"}:
         raise ValueError("priority must be 'high', 'medium', or 'low'")
+    kind = (close_kind or "update").strip().lower()
+    if kind not in {"update", "revision"}:
+        raise ValueError("close_kind must be 'update' or 'revision'")
 
     path = _resolve_store_file(cwd, store_path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -168,6 +188,7 @@ def write_memory_store(
         # Update metadata
         metadata["store_path"] = store_path
         metadata["last_updated"] = now_iso()
+        metadata = ensure_valid_from(metadata)
         if title:
             metadata["title"] = title
         if tags is not None:
@@ -190,11 +211,18 @@ def write_memory_store(
                     f"{store_path} reads as resolved/historical; stored as priority=low "
                     "instead of high."
                 )
-        # Body or summary rewrite clears sticky stale — dream re-marks if still old.
+        # Body rewrite clears sticky stale — standing roles are not age-restamped.
         if str(metadata.get("review_status") or "").strip().lower() == "stale":
             metadata.pop("review_status", None)
         if evidence is not None:
             metadata["evidence"] = evidence
+        # Honour supersedes: in content frontmatter when the caller embedded it.
+        if "supersedes" in metadata and supersedes is None:
+            raw = metadata.pop("supersedes")
+            if isinstance(raw, list):
+                supersedes = [str(x) for x in raw]
+            elif raw:
+                supersedes = [str(raw)]
 
         changed = True
         if mode == "replace":
@@ -252,10 +280,75 @@ def write_memory_store(
             path.write_text(dump_frontmatter(metadata, new_body), encoding="utf-8")
 
     store_root = memory_store_dir(cwd)
+    writer_role = role_for_store_path(
+        store_path, role=str(metadata.get("role") or "") or None
+    )
+    named_closes = parse_supersedes_paths(redacted if changed else content, explicit=supersedes)
+    if changed and named_closes:
+        for target in named_closes:
+            if target == store_path:
+                continue
+            target_path = store_root / f"{target}.md"
+            if not target_path.is_file():
+                parts = target.split("/")
+                target_path = store_root.joinpath(*parts[:-1], f"{parts[-1]}.md")
+            target_role = "other"
+            target_meta: dict = {}
+            if target_path.is_file():
+                try:
+                    target_meta, _ = parse_frontmatter(
+                        target_path.read_text(encoding="utf-8")
+                    )
+                    target_role = role_for_store_path(
+                        target, role=str(target_meta.get("role") or "") or None
+                    )
+                except (OSError, UnicodeDecodeError, FrontmatterError):
+                    target_role = role_for_store_path(target)
+            else:
+                target_role = role_for_store_path(target)
+            if not can_close(writer_role, target_role):
+                warnings.append(
+                    f"Refused to close `{target}` ({target_role}) from `{store_path}` "
+                    f"({writer_role}): writer is less entrenched. Recorded as a "
+                    "contradiction candidate instead."
+                )
+                continue
+            if not can_close_by_valid_time(metadata, target_meta):
+                warnings.append(
+                    f"Refused to close `{target}` from `{store_path}`: writer "
+                    "`valid_from` is earlier than the target's (backfill cannot "
+                    "close a later claim)."
+                )
+                continue
+            if close_store_file(
+                store_root, target, successor=store_path, close_kind=kind
+            ):
+                warnings.append(
+                    f"Closed `{target}` with superseded_by: {store_path} "
+                    f"(close_kind={kind})."
+                )
+            else:
+                warnings.append(
+                    f"Could not close `{target}` (file missing or already closed)."
+                )
+    elif changed and body_claims_superseded_without_field(metadata, redacted):
+        warnings.append(
+            f"`{store_path}` says a memory was superseded in prose but has no "
+            "`supersedes:` field — queue it for review; nothing was closed."
+        )
+
     if changed and is_posture_path(
         store_path, role=str(metadata.get("role") or "") or None
     ):
-        demoted = demote_sibling_next_session_files(store_root, store_path)
+        keep_paths: list[str] = []
+        try:
+            _meta, written_body = parse_frontmatter(path.read_text(encoding="utf-8"))
+            _packed, keep_paths = live_posture_body(written_body)
+        except (OSError, UnicodeDecodeError, FrontmatterError):
+            _packed, keep_paths = live_posture_body(redacted)
+        demoted = demote_sibling_next_session_files(
+            store_root, store_path, keep_paths=keep_paths
+        )
         if demoted:
             sample = ", ".join(demoted[:5])
             extra = f" (+{len(demoted) - 5} more)" if len(demoted) > 5 else ""
@@ -308,16 +401,25 @@ def read_memory_store(
         raise FileNotFoundError(f"Memory store file not found: {store_path}")
 
     metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+    from memory_fabric.storage.close import closed_by_line, is_closed_metadata
+
+    close_banner = closed_by_line(metadata)
+    if close_banner:
+        body = f"{close_banner}\n\n{body.lstrip()}"
+        warnings.append(close_banner.rstrip("."))
     text = dump_frontmatter(metadata, body)
     truncated = False
     if estimate_tokens(text) > max_tokens:
         summary = str(metadata.get("summary") or "No summary available.")
+        prefix = f"{close_banner}\n" if close_banner else ""
         text = (
-            f"Store file `{store_path}` omitted because it exceeded the token budget.\n"
+            f"{prefix}Store file `{store_path}` omitted because it exceeded the token budget.\n"
             f"Summary: {summary}\n"
         )
         truncated = True
         warnings.append("Store file exceeded token budget; returned summary only.")
+    elif is_closed_metadata(metadata) and not close_banner:
+        warnings.append("File is closed but has no successor pointer.")
 
     return {
         "store_path": store_path,

@@ -635,27 +635,26 @@ def install_merge_driver(cwd: str) -> dict[str, Any]:
 def build_driver_command() -> str:
     """The shell command git runs for a matched path.
 
-    PATH first, the interpreter that registered it only as a fallback. Git
-    stores this per-clone in `.git/config`, where it long outlives the
-    environment that wrote it: a hardcoded absolute interpreter path
-    (`/home/<user>/<project>/env/bin/python`) breaks the moment the venv is
-    moved, rebuilt, or the clone is copied to another machine — and a broken
-    driver command is worse than none, because git falls back to a plain
-    textual merge and writes conflict markers into memory files. Resolving
-    `ai-memory` from PATH at merge time survives all of that; the absolute
-    path still covers the case where the CLI is only installed in a venv.
+    Prefer the absolute CLI that ``resolve_cli_binary`` verified can import
+    this package, then fall back to PATH. PATH-first used to hide broken
+    Scoop/uv shims that share the name ``ai-memory`` but cannot import
+    ``memory_fabric`` — git then wrote conflict markers into memory files.
+    The absolute path is the install that registered the driver; PATH remains
+    as a secondary so a relocated venv can still work when that path is gone.
 
     %P is the real pathname being merged (%A is a temp file), which is what
     lets the driver recognize index.md as a rebuilt view.
     """
     args = "merge-driver '%O' '%A' '%B' '%P'"
-    fallback, _warning = resolve_cli_binary()
-    if fallback == "ai-memory":
+    resolved, _warning = resolve_cli_binary()
+    if resolved == "ai-memory":
         # No absolute path to fall back to; PATH is all there is.
         return f"ai-memory {args}"
+    quoted = f'"{resolved}"'
     return (
-        f"if command -v ai-memory >/dev/null 2>&1; then ai-memory {args}; "
-        f'else "{fallback}" {args}; fi'
+        f"if [ -f {quoted} ]; then {quoted} {args}; "
+        f"elif command -v ai-memory >/dev/null 2>&1; then ai-memory {args}; "
+        f"else {quoted} {args}; fi"
     )
 
 

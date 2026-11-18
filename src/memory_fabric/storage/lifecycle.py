@@ -916,6 +916,7 @@ def doctor(cwd: str, check_network: bool = False) -> DoctorResult:
     _check_mangled_slugs(memory_dir, warnings)
     _check_contradictions(memory_dir, warnings)
     _check_stale_only_decisions(memory_dir, warnings)
+    _check_prose_superseded(memory_dir, warnings)
     _check_off_topic_failures(memory_dir, warnings)
     _check_adr_in_diary_prefix(memory_dir, warnings)
     if check_network:
@@ -1026,6 +1027,41 @@ def _check_stale_only_decisions(memory_dir: Path, warnings: list[str]) -> None:
             f"decisions/ has {stale_n} file(s) and all are stale or superseded — "
             "the decisions map no longer reflects the live stack. Archive or "
             "replace them with current ADRs."
+        )
+
+
+def _check_prose_superseded(memory_dir: Path, warnings: list[str]) -> None:
+    """Warn when bodies say 'superseded' without a supersedes/superseded_by field."""
+    from memory_fabric.storage.close import body_claims_superseded_without_field
+
+    store_root = memory_dir / "memory-store"
+    if not store_root.is_dir():
+        return
+    flagged: list[str] = []
+    for path in _iter_markdown_files(store_root):
+        if path.name == "index.md":
+            continue
+        try:
+            rel = path.relative_to(store_root).as_posix()
+        except ValueError:
+            continue
+        if rel.startswith("reviews/"):
+            continue
+        try:
+            metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, FrontmatterError):
+            continue
+        if body_claims_superseded_without_field(metadata, body):
+            flagged.append(rel[:-3] if rel.endswith(".md") else rel)
+            if len(flagged) >= 5:
+                break
+    if flagged:
+        sample = ", ".join(f"`{p}`" for p in flagged[:3])
+        extra = f" (+{len(flagged) - 3} more shown capped)" if len(flagged) > 3 else ""
+        warnings.append(
+            f"Prose claims supersession without a close field: {sample}{extra}. "
+            "Add `supersedes: <path>` on write, or promote a review — age alone "
+            "does not close a fact."
         )
 
 

@@ -21,6 +21,9 @@ dependencies = []
 # API is its own piece of work; this pin is the stopgap that keeps installs
 # working, not the destination.
 mcp = ["mcp>=1.0.0,<2"]
+# Optional local embeddings for paraphrase search. Absent this extra,
+# keyword_search stays lexical (BM25 over the frontmatter index).
+semantic = ["fastembed>=0.4"]
 test = ["pytest>=8", "pytest-cov>=5"]
 
 [project.scripts]

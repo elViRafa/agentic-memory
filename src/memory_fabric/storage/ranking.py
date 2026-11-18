@@ -99,8 +99,14 @@ def is_commit_capture(key: str) -> bool:
 
 
 def category_penalty(key: str) -> float:
-    """Deprioritize per-commit captures below every other category."""
-    return 0.05 if is_commit_capture(key) else 1.0
+    """Deprioritize history roles and per-commit captures for current packs."""
+    if is_commit_capture(key):
+        return 0.05
+    from memory_fabric.storage.close import is_history_role, role_for_section_key
+
+    if is_history_role(role_for_section_key(key)):
+        return 0.1
+    return 1.0
 
 
 def _normalized_key(key: str) -> str:
@@ -129,10 +135,25 @@ def lifecycle_penalty(key: str, *, role: str | None = None) -> float:
     return 1.0
 
 
-def review_status_penalty(review_status: str | None) -> float:
-    """Omit stale / broken-evidence from query packs (score → 0); keep readable via tools."""
+def review_status_penalty(
+    review_status: str | None,
+    *,
+    role: str | None = None,
+    superseded_by: str | None = None,
+) -> float:
+    """Omit stale / broken-evidence from query packs (score → 0); keep readable via tools.
+
+    Age-only ``stale`` on standing roles (no ``superseded_by``) does not hide
+    the file — age is not truth for decisions / steering / schemas / architecture.
+    """
     status = (review_status or "").strip().lower()
-    if status in {"stale", "broken-evidence"}:
+    if status == "broken-evidence":
+        return 0.0
+    if status == "stale":
+        from memory_fabric.storage.close import is_standing_role
+
+        if is_standing_role(role) and not (superseded_by or "").strip():
+            return 1.0
         return 0.0
     return 1.0
 
@@ -154,9 +175,16 @@ def query_map_penalty(key: str, *, query_present: bool) -> float:
     return 0.15 if classify_role(key) == "map" else 1.0
 
 
-def _half_life_for_key(key: str) -> float:
+def _half_life_for_key(key: str, *, role: str | None = None) -> float:
+    """Standing decisions do not decay by edit age. Handoffs use 14 days."""
+    from memory_fabric.storage.close import is_standing_role, role_for_section_key
+
+    resolved = role_for_section_key(key, role=role)
+    if is_standing_role(resolved):
+        # half_life_days <= 0 → recency_weight returns 1.0 (no decay).
+        return 0.0
     text = _normalized_key(key)
-    if _LIFECYCLE_KEY_RE.search(text):
+    if _LIFECYCLE_KEY_RE.search(text) or resolved == "posture":
         return HANDOFF_RECENCY_HALF_LIFE_DAYS
     return RECENCY_HALF_LIFE_DAYS
 
@@ -228,13 +256,20 @@ def blended_score(
         # No-query / zero-BM25 still needs a priority*recency order so a high
         # architecture map outranks a low resolved-debt entry.
         base = raw if raw > 0 else 1.0
+    from memory_fabric.storage.close import role_for_section_key
+
+    resolved_role = role_for_section_key(key, role=role) if key else (role or None)
     return (
         base
         * priority_weight(priority)
-        * recency_weight(last_updated, half_life_days=_half_life_for_key(key))
+        * recency_weight(
+            last_updated, half_life_days=_half_life_for_key(key, role=role)
+        )
         * category_penalty(key)
         * lifecycle_penalty(key, role=role)
-        * review_status_penalty(review_status)
+        * review_status_penalty(
+            review_status, role=resolved_role, superseded_by=superseded_by
+        )
         * superseded_penalty(superseded_by)
         * query_map_penalty(key, query_present=query_present)
     )

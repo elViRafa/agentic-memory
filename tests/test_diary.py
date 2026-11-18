@@ -273,7 +273,15 @@ class PackStatsRecordingTests(_DiaryHome):
 
         initialize_memory_fabric(str(self.project))
         approve("counts", confirmed=True)
-        with mock.patch("shutil.which", return_value=None):
+        # Force the scan fallback so this asserts the non-index path even when
+        # init left a private/index.db behind.
+        with (
+            mock.patch("shutil.which", return_value=None),
+            mock.patch(
+                "memory_fabric.storage.search._keyword_search_index",
+                return_value=None,
+            ),
+        ):
             keyword_search(str(self.project), "zzznomatchtoken")
         events = [e for e in self._events() if e.get("event") == "search.run"]
         self.assertEqual(len(events), 1)

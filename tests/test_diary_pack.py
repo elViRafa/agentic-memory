@@ -311,6 +311,82 @@ class DiaryAnalyzeTests(_DiaryHome):
         self.assertFalse(report["projects"]["aaaaaaaaaaaaaaaa"]["failed"])
         self.assertTrue(report["projects"]["bbbbbbbbbbbbbbbb"]["failed"])
 
+    def test_counts_only_pack_without_search_rows_stays_quiet(self) -> None:
+        self._write_events(_healthy_pack_events("dddddddddddddddd"))
+        report = analyze_diary(diary=diary_dir())
+        self.assertTrue(report["ok"])
+        search = report["projects"]["dddddddddddddddd"]["signals"]["search_mix"]
+        self.assertEqual(search["n"], 0)
+        self.assertFalse(search["failed"])
+
+    def test_zero_hit_searches_fail_analyze(self) -> None:
+        project_id = "eeeeeeeeeeeeeeee"
+        events = _healthy_pack_events(project_id)
+        for i in range(5):
+            events.append(
+                {
+                    **_base_envelope(project_id, "search.run", f"2026-09-03T12:0{i}:00Z"),
+                    "backend": "ripgrep",
+                    "hit_n": 0,
+                    "ms": 12.0,
+                    "query_len": 24,
+                    "token_n": 4,
+                    "content_token_n": 3,
+                    "candidate_n": 0,
+                    "phrase_hit": False,
+                }
+            )
+        self._write_events(events)
+        report = analyze_diary(diary=diary_dir())
+        self.assertFalse(report["ok"])
+        project = report["projects"][project_id]
+        self.assertTrue(project["failed"])
+        self.assertTrue(any("zero-hit" in f for f in project["failures"]))
+
+    def test_candidate_cap_searches_fail_analyze(self) -> None:
+        project_id = "ffffffffffffffff"
+        events = _healthy_pack_events(project_id)
+        for i in range(5):
+            events.append(
+                {
+                    **_base_envelope(project_id, "search.run", f"2026-09-03T13:0{i}:00Z"),
+                    "backend": "ripgrep",
+                    "hit_n": 10,
+                    "ms": 40.0,
+                    "query_len": 18,
+                    "token_n": 3,
+                    "content_token_n": 2,
+                    "candidate_n": 200,
+                    "phrase_hit": False,
+                }
+            )
+        self._write_events(events)
+        report = analyze_diary(diary=diary_dir())
+        self.assertFalse(report["ok"])
+        project = report["projects"][project_id]
+        self.assertTrue(any("candidate-cap" in f for f in project["failures"]))
+
+    def test_few_search_rows_under_minimum_stay_quiet(self) -> None:
+        project_id = "1111111111111111"
+        events = _healthy_pack_events(project_id)
+        events.append(
+            {
+                **_base_envelope(project_id, "search.run", "2026-09-03T14:00:00Z"),
+                "backend": "index",
+                "hit_n": 0,
+                "ms": 5.0,
+                "query_len": 10,
+                "token_n": 2,
+                "content_token_n": 2,
+                "candidate_n": 0,
+                "phrase_hit": False,
+            }
+        )
+        self._write_events(events)
+        report = analyze_diary(diary=diary_dir())
+        self.assertTrue(report["ok"])
+        self.assertFalse(report["projects"][project_id]["signals"]["search_mix"]["failed"])
+
 
 class PostureSlotRecordingTests(_DiaryHome):
     def test_current_posture_records_included_without_store_path(self) -> None:

@@ -46,6 +46,36 @@ def local_server_binary() -> Path | None:
     return sibling if sibling.exists() else None
 
 
+def _cli_binary_works(path: Path) -> bool:
+    """True when *path* starts and imports this package (rejects broken shims)."""
+    if not path.is_file():
+        return False
+    try:
+        import subprocess
+
+        proc = subprocess.run(
+            [str(path), "--version"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired, TypeError, AttributeError):
+        # TypeError/AttributeError: tests may stub subprocess.run with a Mock.
+        return False
+    try:
+        code = int(proc.returncode)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return False
+    if code != 0:
+        return False
+    out = f"{proc.stdout or ''}{proc.stderr or ''}"
+    # Accept version lines from this CLI; reject unrelated tools named ai-memory.
+    return "memory-fabric" in out.lower() or __version__ in out
+
+
 def resolve_cli_binary() -> tuple[str, str | None]:
     """Resolve the ``ai-memory`` CLI that a git hook or a client lifecycle hook
     (Claude Code SessionStart/Stop/PreCompact, etc.) should invoke.
@@ -58,13 +88,36 @@ def resolve_cli_binary() -> tuple[str, str | None]:
     ``client_hooks.py`` (client-side lifecycle hooks) so both resolve the same
     binary the same way.
     """
+    import site
+    import sysconfig
+
     exe_name = "ai-memory.exe" if os.name == "nt" else "ai-memory"
-    sibling = Path(sys.executable).with_name(exe_name)
-    if sibling.exists():
-        return sibling.as_posix(), None
+    candidates: list[Path] = [
+        Path(sys.executable).with_name(exe_name),
+        Path(sysconfig.get_path("scripts")) / exe_name,
+    ]
+    try:
+        user_site = site.getusersitepackages()
+        if user_site:
+            # pip --user on Windows: .../PythonXY/site-packages → .../PythonXY/Scripts
+            candidates.append(Path(user_site).parent / "Scripts" / exe_name)
+            candidates.append(Path(user_site).parent / "bin" / exe_name)
+    except Exception:  # noqa: BLE001 - site may be unavailable in frozen embeds
+        pass
     on_path = shutil.which("ai-memory")
     if on_path:
-        return Path(on_path).as_posix(), None
+        candidates.append(Path(on_path))
+    seen: set[str] = set()
+    for candidate in candidates:
+        try:
+            key = str(candidate.resolve())
+        except OSError:
+            key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        if _cli_binary_works(candidate):
+            return candidate.as_posix(), None
     return "ai-memory", (
         "Could not resolve an absolute path for the ai-memory CLI; hooks will rely on "
         "PATH lookup and may be skipped in shells where memory-fabric is not available."

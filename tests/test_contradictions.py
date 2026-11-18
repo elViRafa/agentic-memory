@@ -338,6 +338,231 @@ class ContradictionLlmTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(spy.await_count, 1)
 
 
+class ContradictionHeuristicUpgradeTests(unittest.TestCase):
+    def test_unrelated_numbers_in_similar_notes_are_not_numeric_hits(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            write_memory_store(
+                temp,
+                "fine-tuning/note-date",
+                "Fine-tuning refusal notes for the RAG probe. "
+                "Dataset updated 2026-10-31. Keep the refusal eval harness.",
+                title="Note Date",
+            )
+            write_memory_store(
+                temp,
+                "fine-tuning/note-port",
+                "Fine-tuning refusal notes for the RAG probe. "
+                "Dashboard listens on port 8080. Keep the refusal eval harness.",
+                title="Note Port",
+            )
+            hits = detect_contradictions(local_memory_dir(temp))
+            numeric = [h for h in hits if h.kind == "numeric"]
+            self.assertEqual(numeric, [])
+
+    def test_aligned_refusal_quantities_produce_numeric_hit(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            write_memory_store(
+                temp,
+                "fine-tuning/refusal-a",
+                "Measure refusal 0.46 on the held-out RAG set before shipping.",
+                title="Refusal A",
+            )
+            write_memory_store(
+                temp,
+                "fine-tuning/refusal-b",
+                "Measure refusal 0.44 on the held-out RAG set before shipping.",
+                title="Refusal B",
+            )
+            hits = detect_contradictions(local_memory_dir(temp))
+            numeric = [h for h in hits if h.kind == "numeric"]
+            self.assertEqual(len(numeric), 1, hits)
+            self.assertIn("refusal", numeric[0].evidence.casefold())
+
+    def test_portuguese_and_english_polarity_on_lora(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            write_memory_store(
+                temp,
+                "fine-tuning/pt-neg",
+                "Para embeddings: não usar LoRA nos embeddings deste checkpoint.",
+                title="PT Neg",
+            )
+            write_memory_store(
+                temp,
+                "fine-tuning/pt-pos",
+                "Para embeddings: usar LoRA nos embeddings deste checkpoint.",
+                title="PT Pos",
+            )
+            hits = detect_contradictions(local_memory_dir(temp))
+            polarity = [h for h in hits if h.kind == "polarity"]
+            self.assertTrue(polarity, hits)
+            self.assertTrue(any("lora" in h.evidence.casefold() for h in polarity))
+
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            write_memory_store(
+                temp,
+                "fine-tuning/en-neg",
+                "For embeddings: do not use LoRA on the embeddings of this checkpoint.",
+                title="EN Neg",
+            )
+            write_memory_store(
+                temp,
+                "fine-tuning/en-pos",
+                "For embeddings: use LoRA on the embeddings of this checkpoint.",
+                title="EN Pos",
+            )
+            hits_en = detect_contradictions(local_memory_dir(temp))
+            polarity_en = [h for h in hits_en if h.kind == "polarity"]
+            self.assertTrue(
+                any(
+                    "lora" in h.evidence.casefold()
+                    and {"fine-tuning/en-neg", "fine-tuning/en-pos"}
+                    <= {h.store_path_a, h.store_path_b}
+                    for h in polarity_en
+                ),
+                hits_en,
+            )
+
+    def test_folder_plus_generic_lora_is_not_enough(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            write_memory_store(
+                temp,
+                "fine-tuning/alpha-notes",
+                "LoRA rank notes for alpha wave. Scheduler warmup is separate.",
+                title="Alpha Notes",
+            )
+            write_memory_store(
+                temp,
+                "fine-tuning/beta-notes",
+                "LoRA dropout notes for beta wave. Optimizer choice is separate.",
+                title="Beta Notes",
+            )
+            for i in range(8):
+                write_memory_store(
+                    temp,
+                    f"fine-tuning/pad-{i:02d}",
+                    f"Pad {i} LoRA vocabulary filler with unrelated training chatter.",
+                    title=f"Pad {i}",
+                )
+            hits = detect_contradictions(local_memory_dir(temp))
+            between = [
+                h
+                for h in hits
+                if {h.store_path_a, h.store_path_b}
+                == {"fine-tuning/alpha-notes", "fine-tuning/beta-notes"}
+            ]
+            self.assertEqual(between, [], hits)
+
+    def test_intra_file_successive_next_steps(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            write_memory_store(
+                temp,
+                "fine-tuning/current-posture",
+                "## 2026-10-31\n\n"
+                "Next: RAG re-SFT\n\n"
+                "## 2026-11-12\n\n"
+                "Next: OT fine-tune\n",
+                title="Current Posture",
+            )
+            hits = detect_contradictions(local_memory_dir(temp))
+            intra = [
+                h
+                for h in hits
+                if h.store_path_a == h.store_path_b == "fine-tuning/current-posture"
+            ]
+            self.assertTrue(intra, hits)
+            self.assertIn("intra-file", intra[0].message)
+
+    def test_per_category_scan_reaches_pretraining(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            for i in range(150):
+                write_memory_store(
+                    temp,
+                    f"fine-tuning/pad-{i:03d}",
+                    "Fine-tuning schedule chatter about checkpoints and adapters.",
+                    title=f"FT Pad {i}",
+                )
+            write_memory_store(
+                temp,
+                "pretraining/cpt-a",
+                "We use Django REST Framework (DRF) for every CPT eval API.",
+                title="CPT A",
+            )
+            write_memory_store(
+                temp,
+                "pretraining/cpt-b",
+                "Do not use Django REST Framework (DRF) for CPT eval APIs.",
+                title="CPT B",
+            )
+            hits = detect_contradictions(local_memory_dir(temp))
+            pretraining = [
+                h
+                for h in hits
+                if "pretraining/" in h.store_path_a and "pretraining/" in h.store_path_b
+            ]
+            self.assertTrue(pretraining, hits)
+
+    def test_replacement_hit_does_not_modify_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            write_memory_store(
+                temp,
+                "pretraining/next-session-cpt-improve",
+                "Live CPT handoff. Continue corpus cleanup next session.",
+                title="CPT Improve",
+            )
+            target = (
+                Path(temp)
+                / ".ai-memory"
+                / "memory-store"
+                / "pretraining"
+                / "next-session-cpt-improve.md"
+            )
+            before = target.read_text(encoding="utf-8")
+            write_memory_store(
+                temp,
+                "pretraining/cpt-next-session-handoff",
+                "Superseded pointer: start at pretraining/next-session-cpt-improve",
+                title="Old CPT Handoff",
+            )
+            hits = detect_contradictions(local_memory_dir(temp))
+            replacement = [h for h in hits if h.kind == "replacement"]
+            self.assertTrue(replacement, hits)
+            self.assertEqual(
+                replacement[0].evidence, "pretraining/next-session-cpt-improve"
+            )
+            after = target.read_text(encoding="utf-8")
+            self.assertEqual(before, after)
+            self.assertNotIn("superseded_by", after)
+
+    def test_pair_budget_keeps_large_category_under_one_second(self) -> None:
+        import time
+
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            for i in range(150):
+                bullets = "\n".join(
+                    f"- Claim {j} for file {i} uses metric-{i}-{j} value {1000 + j}."
+                    for j in range(20)
+                )
+                write_memory_store(
+                    temp,
+                    f"notes/bulk-{i:03d}",
+                    bullets,
+                    title=f"Bulk {i}",
+                )
+            started = time.perf_counter()
+            hits = detect_contradictions(local_memory_dir(temp))
+            elapsed = time.perf_counter() - started
+            self.assertLess(elapsed, 1.0, f"scan took {elapsed:.3f}s; hits={len(hits)}")
+
+
 class ContradictionPackTokenTests(unittest.TestCase):
     def test_pack_stays_under_the_eval_token_cap(self) -> None:
         long = "conflict " * 400

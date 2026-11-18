@@ -327,13 +327,17 @@ def run_smoke(cwd: str, *, mode: str) -> dict[str, Any]:
             included = list(pack.get("included_sections") or [])
             metrics["task_included_n"] = len(included)
             has_live = any("next-session-handoff" in s for s in included)
+            # Age-only stale on standing decisions is no longer a hide (age is
+            # not truth). Gate C only requires the live handoff to pack.
             stale_key = f"store/{STALE_DECISION}"
-            excludes_stale = stale_key not in included
-            gates["C"] = "pass" if has_live and excludes_stale else "fail"
+            gates["C"] = "pass" if has_live else "fail"
             if not has_live:
                 details["C"] = f"missing next-session-handoff in {included[:12]}"
-            elif not excludes_stale:
-                details["C"] = f"stale decision still included: {stale_key}"
+            elif stale_key in included:
+                details["C"] = (
+                    f"note: age-stale standing decision {stale_key} may still "
+                    "pack (expected under close-event rules)"
+                )
         except Exception as exc:  # noqa: BLE001
             gates["C"] = "fail"
             details["C"] = str(exc)

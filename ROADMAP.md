@@ -4,7 +4,7 @@
 > one command in VS Code, Claude (Code + Desktop), Codex, Antigravity, Cursor, Windsurf,
 > Gemini CLI, Cline, and anything MCP-compatible.
 
-Last updated: 2026-11-02 · Current version: 1.4.5 · Tests: 479 passing (+1 skipped on Windows by design) · Lint: ruff (E4,E7,E9,F,I,B,UP,SIM,RUF,BLE001,S110,S112) + mypy clean · No `src/` file >25 KB except 4 tracked borderline files · Phase 0 exit criteria met · Phase 2.2 migration tooling shipped · Phase 2.3 store-first cutover shipped (flat fact-writes removed) · Phase 3 capture reliability (filter, roll-up, multi-client hooks) shipped · v1.1 project directives (sync/context routing, managed markers, `sync-agents --check`) shipped · v1.1.2 instruction-template graceful degradation shipped · v1.2.0 conflict-free team merges shipped (generated-view union merge, block-level store merge, `resolve-conflicts`) · v1.3.0 maps-first retrieval + Cursor hooks + coding-memory bench shipped · v1.4.1 field write/read hygiene from dogfood stores shipped · v1.4.2 field pack precision (contradictions, stale ranking, dream churn) shipped · v1.4.3 SSH field sentence search, eval probe, and index hygiene shipped
+Last updated: 2026-11-18 · Current version: 1.4.6 · Tests: 541 passing (+1 skipped on Windows by design) · Lint: ruff (E4,E7,E9,F,I,B,UP,SIM,RUF,BLE001,S110,S112) + mypy clean · No `src/` file >25 KB except 4 tracked borderline files · Phase 0 exit criteria met · Phase 2.2 migration tooling shipped · Phase 2.3 store-first cutover shipped (flat fact-writes removed) · Phase 3 capture reliability (filter, roll-up, multi-client hooks) shipped · v1.1 project directives (sync/context routing, managed markers, `sync-agents --check`) shipped · v1.1.2 instruction-template graceful degradation shipped · v1.2.0 conflict-free team merges shipped (generated-view union merge, block-level store merge, `resolve-conflicts`) · v1.3.0 maps-first retrieval + Cursor hooks + coding-memory bench shipped · v1.4.1 field write/read hygiene from dogfood stores shipped · v1.4.2 field pack precision (contradictions, stale ranking, dream churn) shipped · v1.4.3 SSH field sentence search, eval probe, and index hygiene shipped · v1.4.6 close events for outdated memory (age is not truth) shipped
 
 ---
 
@@ -719,9 +719,12 @@ conflict markers; `ai-memory verify` flags a citation to a deleted file; two cal
 Keep the zero-dependency, no-vector-DB default. Add optional layers that degrade gracefully
 — the same pattern already used for `rg` and LLM providers.
 
-- [ ] **Hybrid retrieval.** Keep BM25 (shipped). Add optional local embeddings via a
-      small ONNX model (e.g. fastembed) + `sqlite-vec` stored inside `.ai-memory/` local
-      (gitignored) cache. Blend scores: BM25 + cosine + priority + recency. No cloud calls.
+- [~] **Hybrid retrieval.** BM25 over the SQLite frontmatter index is the default
+      `keyword_search` path (full-corpus IDF; ripgrep/Python only when the index is
+      missing). Optional local embeddings via `memory-fabric[semantic]` (fastembed)
+      blend cosine for paraphrase hits; absent the extra, search stays lexical.
+      Persistent `sqlite-vec` cache remains future work — embeddings are computed
+      on demand today. No cloud calls.
 - [ ] **Temporal facts.** Frontmatter gains optional `valid_from` / `superseded_by`.
       Dreaming marks contradicted facts as superseded instead of deleting — the agent can
       answer "when did we change X?" This is Zep's headline feature, done file-first.
@@ -737,16 +740,13 @@ Keep the zero-dependency, no-vector-DB default. Add optional layers that degrade
       **Precision + pack surface (2026-09-21):** IDF / same-topic / successive-version /
       bugs-skip gates; `index.md` keeps ≤5 pack hits; full list in
       `evals/contradictions.json`.
-- [ ] **Latency budget.** Measured 2026-07-13 (§2.1 Q10, `test_robustness.py`):
-      p95 is **~390 ms at 500 files, ~740 ms at 1000** — 2-5x over the 150 ms target
-      here, and the gap is structural, not incidental: `read_combined_context`
-      reads and parses every store file before ranking/trimming to the token
-      budget, so cost scales with total store size regardless of the budget or
-      whether a query is given. Hitting 150 ms needs a read path that stops once
-      the budget is full (an on-disk index of frontmatter — priority/summary/tags
-      — read first, full file bodies only pulled for what actually makes the cut)
-      — this is now the concrete first task of this bullet, not "add a perf test",
-      which is already done and passing as a regression guard (not yet the target).
+- [x] **Latency budget (no-query startup).** Maps-first packing + SQLite frontmatter
+      index: `test_read_combined_context_p95_latency_budget` asserts **p95 < 150 ms
+      at 1000 files** for a no-query startup call (the packer reads root maps +
+      `memory-store/index.md`, not the full granular tree). July 2026 full-scan
+      figures (~390 ms / ~740 ms) were the pre-index baseline and are no longer the
+      current result. Queried packs still sync/rank the index; that path stays
+      measured separately from the startup budget.
 
 ## 8. Phase 5 — Prove it (benchmarks nobody can argue with)
 
@@ -850,11 +850,14 @@ depend on the v1.0.0 tag going live.
 Measurements: [FIELD_SSH_2026-10.md](FIELD_SSH_2026-10.md).
 Build list for later sessions: [PLAN_SSH_FIELD_IMPROVEMENTS.md](PLAN_SSH_FIELD_IMPROVEMENTS.md).
 
-- [ ] 0. Release the token-search tree and upgrade pipx plus any SSH workspace venv still on 1.2.2.
-- [ ] 1. Fail `retrieval_quality` on a sentence query that matches a stored memory.
-- [ ] 2. Point sentence queries at a tool that can answer them, matching that version's search.
-- [ ] 3. Report the fabric version in MCP `serverInfo`, not the SDK version (`1.30.0`).
-- [ ] 4. Keep startup maps in step with the store, and cap the contradiction pack on dream.
-- [ ] 5. Install Cursor hooks on both SSH projects.
-- [ ] 6. Stop one journal or frontend file from taking a query pack; warn on a large absolute high-priority count.
-- [ ] 7. Doctor warns when the project venv `ai-memory` is older than the MCP server.
+Code shipped in **1.4.3** (and diary/posture follow-ups in **1.4.5**). Item 5 remains
+an operator step on each host that still lacks `.cursor/hooks.json`.
+
+- [x] 0. Release the token-search tree (1.4.3+). Host pipx / SSH venv upgrades are operator steps.
+- [x] 1. Fail `retrieval_quality` on a sentence query that matches a stored memory (`sentence_search_probe`).
+- [x] 2. Point sentence queries at `keyword_search_tool` in shipped agent instructions.
+- [x] 3. Report the fabric version in MCP `serverInfo`, not the SDK version.
+- [x] 4. Keep startup maps in step with the store, and cap the contradiction pack on dream.
+- [ ] 5. Install Cursor hooks on both SSH projects (operator: `ai-memory install --client cursor --with-hooks`).
+- [x] 6. Stop one journal or frontend file from taking a query pack; warn on a large absolute high-priority count.
+- [x] 7. Doctor warns when the project venv `ai-memory` is older than the MCP server.

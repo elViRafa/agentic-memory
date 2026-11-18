@@ -641,6 +641,7 @@ def _live_posture_pack_probe(cwd: str, memory_dir: Path) -> EvalCheck | None:
             f"included={included[:12]}",
             "Pin current-posture in every pack and demote superseded next-session notes.",
         )
+    pack_text = str(pack.get("text") or "")
     leaked: list[str] = []
     for path in _iter_markdown_files(store):
         if path.name == "index.md":
@@ -652,8 +653,21 @@ def _live_posture_pack_probe(cwd: str, memory_dir: Path) -> EvalCheck | None:
             metadata, _body = parse_frontmatter(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, FrontmatterError, ValueError):
             continue
-        if str(metadata.get("superseded_by") or "").strip():
+        successor = str(metadata.get("superseded_by") or "").strip()
+        if not successor:
+            continue
+        # Closed-by one-liners are intentional; only fail when the full body leaks.
+        marker = f"<!-- memory-fabric:store/{store_path} -->"
+        start = pack_text.find(marker)
+        if start < 0:
             leaked.append(store_path)
+            continue
+        rest = pack_text[start + len(marker) :]
+        next_marker = rest.find("<!-- memory-fabric:")
+        fragment = rest if next_marker < 0 else rest[:next_marker]
+        if f"closed by `{successor}`" in fragment and "\n---\n" not in fragment:
+            continue
+        leaked.append(store_path)
     if leaked:
         return _check(
             "live_posture_pack_probe",
@@ -661,7 +675,8 @@ def _live_posture_pack_probe(cwd: str, memory_dir: Path) -> EvalCheck | None:
             "high",
             f"query='current posture' leaked superseded files {leaked}; "
             f"posture hits={hit}",
-            "Keep superseded_by files out of the posture pack.",
+            "Keep superseded_by files out of the posture pack "
+            "(closed-by one-liners are allowed).",
         )
     return _check(
         "live_posture_pack_probe",

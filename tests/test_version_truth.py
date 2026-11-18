@@ -52,6 +52,24 @@ class VersionTruthTests(unittest.TestCase):
         self.assertIn("mcpb/manifest.json", workflow)
         self.assertIn("Sync manifest version to release tag", workflow)
 
+    def test_readme_does_not_claim_never_slice_files(self) -> None:
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        self.assertNotIn("never slices files mid-document", readme)
+        self.assertIn("per-file share", readme)
+
+    def test_roadmap_latency_budget_is_marked_met(self) -> None:
+        roadmap = (ROOT / "ROADMAP.md").read_text(encoding="utf-8")
+        self.assertIn("Latency budget (no-query startup)", roadmap)
+        self.assertRegex(
+            roadmap,
+            r"- \[x\] \*\*Latency budget \(no-query startup\)\.\*\*",
+        )
+        # The unmet July full-scan figures must not be stated as the current result.
+        self.assertNotRegex(
+            roadmap,
+            r"p95 is \*\*~390 ms at 500 files, ~740 ms at 1000\*\*",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

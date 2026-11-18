@@ -801,12 +801,11 @@ class DriverRegistrationTests(unittest.TestCase):
             self.assertFalse(status["registered"])
             self.assertFalse(status["active"])
 
-    def test_registered_command_prefers_path_over_the_installing_interpreter(self) -> None:
-        """A driver command is stored per-clone in `.git/config`, where it long
-        outlives the venv that wrote it. Hardcoding that venv's absolute
-        interpreter path means the driver silently stops resolving the moment
-        the venv moves — and git then writes conflict markers into memory files
-        with no indication why."""
+    def test_registered_command_keeps_path_fallback_beside_absolute_cli(self) -> None:
+        """A driver command is stored per-clone in `.git/config`. Prefer the
+        absolute CLI that imports this package, and keep a PATH ``ai-memory``
+        branch so a relocated install can still merge when that path is gone.
+        """
         command = build_driver_command()
 
         self.assertIn("ai-memory merge-driver", command)

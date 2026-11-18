@@ -68,9 +68,19 @@ def context_for_task(
         meta = item.get("metadata") or {}
         status = str(meta.get("review_status") or "").strip().lower()
         superseded = str(meta.get("superseded_by") or "").strip()
-        if float(item.get("score") or 0) <= 0 and (
-            status in {"stale", "broken-evidence"} or superseded
-        ):
+        score = float(item.get("score") or 0)
+        if score <= 0 and (status in {"stale", "broken-evidence"} or superseded):
+            # Keep a one-line successor pointer so the close is visible.
+            if superseded and remaining > 0:
+                line = f"`{item['key']}` closed by `{superseded}`"
+                fragment = _format_fragment(item["key"], line)
+                cost = estimate_tokens(fragment)
+                if cost <= remaining and taken < top_k:
+                    fragments.append(fragment)
+                    included.append(item["key"])
+                    remaining -= cost
+                    taken += 1
+                    continue
             omitted.append(item["key"])
             continue
         if not _ensure_section_body(item, warnings, omitted):

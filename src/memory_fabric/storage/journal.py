@@ -23,8 +23,10 @@ def write_session_journal(
     in this session" that agents can use to build temporal awareness.
 
     Journal entries are written to ``episodic/YYYY-MM-DD`` store paths and
-    accumulate as append-mode Markdown. Dreaming's light mode consolidates
-    entries older than 7 days into monthly summaries.
+    accumulate as append-mode Markdown. They are history: current-constraint
+    packs omit them. Deep dream folds ``episodic/commits/`` daily captures
+    after 14 days; session journals are not auto-folded into monthly
+    summaries.
 
     Args:
         cwd:            Project root (same as all other tools).

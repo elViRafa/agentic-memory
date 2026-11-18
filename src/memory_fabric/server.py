@@ -493,6 +493,8 @@ if FastMCP is not None:
         priority: str = "",
         mode: str = "replace",
         evidence: str = "",
+        supersedes: str = "",
+        close_kind: str = "update",
     ) -> StoreWriteResult:
         """Write a memory file to a semantic store path (e.g. 'architecture/decisions/auth-service').
 
@@ -506,10 +508,19 @@ if FastMCP is not None:
                       flags this memory if the cited file/line/commit stops
                       existing — catching rot automatically instead of relying
                       on a human to notice a stale citation.
+            supersedes: Optional comma-separated store paths this write closes.
+                        Also accepted as a leading ``supersedes: path`` line in
+                        content. Only closes when this writer is at least as
+                        entrenched as the target.
+            close_kind: ``update`` (world changed) or ``revision`` (earlier
+                        record was wrong).
         """
         safe = _safe_cwd(cwd)
         tag_list = [t.strip() for t in tags.split(",") if t.strip()] if tags else None
         evidence_list = [e.strip() for e in evidence.split(",") if e.strip()] if evidence else None
+        supersedes_list = (
+            [s.strip() for s in supersedes.split(",") if s.strip()] if supersedes else None
+        )
         return write_memory_store(
             safe,
             store_path=store_path,
@@ -519,6 +530,8 @@ if FastMCP is not None:
             priority=priority or None,
             mode=mode,  # type: ignore[arg-type]
             evidence=evidence_list,
+            supersedes=supersedes_list,
+            close_kind=close_kind or "update",
         )
 
     @mcp.tool()
@@ -568,7 +581,9 @@ if FastMCP is not None:
 
         Creates or appends to an `episodic/YYYY-MM-DD` store entry that records
         what was accomplished this session. Multiple calls on the same day accumulate
-        into a single dated journal file. Dreaming consolidates old entries (>7 days)
+        into a single dated journal file. Journals are history (omitted from
+        current-constraint packs). Deep dream folds episodic/commits/ after
+        14 days; session journals are not auto-folded at 7 days.
         into monthly summaries.
 
         Args:

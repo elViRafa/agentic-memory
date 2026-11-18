@@ -20,6 +20,10 @@ _PRIORITY_MIN_N = 5
 _PRIORITY_OMITTED_HIGH = 8
 _TOOL_MIN_N = 10
 _TOOL_MAX_FAIL_RATE = 0.25
+_SEARCH_MIN_N = 5
+_SEARCH_ZERO_HIT_RATE = 0.40
+_SEARCH_CAP = 200
+_SEARCH_CAP_RATE = 0.40
 _TOP_QUERIES = 10
 
 
@@ -152,6 +156,7 @@ def _read_events(source: Path, kind: str, warnings: list[str]) -> list[dict[str,
 def _analyze_project(project_id: str, events: list[dict[str, Any]]) -> dict[str, Any]:
     packs = [e for e in events if e.get("event") == "context.pack"]
     tools = [e for e in events if e.get("event") in {"tool.call", "dream.result"}]
+    searches = [e for e in events if e.get("event") == "search.run"]
     failures: list[str] = []
 
     posture = _posture_signal(packs)
@@ -170,6 +175,10 @@ def _analyze_project(project_id: str, events: list[dict[str, Any]]) -> dict[str,
     if tool_mix.get("failed"):
         failures.append(str(tool_mix["detail"]))
 
+    search_mix = _search_signal(searches)
+    if search_mix.get("failed"):
+        failures.append(str(search_mix["detail"]))
+
     queries = _top_queries(events)
 
     return {
@@ -180,6 +189,7 @@ def _analyze_project(project_id: str, events: list[dict[str, Any]]) -> dict[str,
             "steering_share": steering,
             "priority_shape": priority,
             "tool_mix": tool_mix,
+            "search_mix": search_mix,
             "top_queries": queries,
         },
         "failed": bool(failures),
@@ -311,6 +321,49 @@ def _tool_signal(tools: list[dict[str, Any]]) -> dict[str, Any]:
         "fail_rate": fail_rate,
         "by_name": dict(by_name.most_common()),
         "failed": failed,
+        "detail": detail,
+    }
+
+
+def _search_signal(searches: list[dict[str, Any]]) -> dict[str, Any]:
+    """Fail when content-token searches often return zero hits or hit the scan cap.
+
+    Counts-only packs with no ``search.run`` rows stay quiet. Rows with
+    ``content_token_n == 0`` (stopword-only queries) are ignored.
+    """
+    content_rows = [
+        event
+        for event in searches
+        if isinstance(event.get("content_token_n"), (int, float))
+        and int(event["content_token_n"]) > 0
+    ]
+    n = len(content_rows)
+    zero_n = 0
+    cap_n = 0
+    for event in content_rows:
+        hit_n = event.get("hit_n")
+        if isinstance(hit_n, (int, float)) and int(hit_n) == 0:
+            zero_n += 1
+        candidate_n = event.get("candidate_n")
+        if isinstance(candidate_n, (int, float)) and int(candidate_n) >= _SEARCH_CAP:
+            cap_n += 1
+    zero_rate = (zero_n / n) if n else None
+    cap_rate = (cap_n / n) if n else None
+    reasons: list[str] = []
+    if n >= _SEARCH_MIN_N and zero_rate is not None and zero_rate >= _SEARCH_ZERO_HIT_RATE:
+        reasons.append(f"zero-hit rate {zero_rate:.2f} (n={n})")
+    if n >= _SEARCH_MIN_N and cap_rate is not None and cap_rate >= _SEARCH_CAP_RATE:
+        reasons.append(f"candidate-cap rate {cap_rate:.2f} at {_SEARCH_CAP} (n={n})")
+    detail = ""
+    if reasons:
+        detail = "search.run: " + "; ".join(reasons)
+    return {
+        "n": n,
+        "zero_n": zero_n,
+        "cap_n": cap_n,
+        "zero_rate": zero_rate,
+        "cap_rate": cap_rate,
+        "failed": bool(reasons),
         "detail": detail,
     }
 

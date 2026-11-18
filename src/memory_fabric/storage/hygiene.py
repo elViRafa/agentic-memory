@@ -136,11 +136,17 @@ def sibling_high_handoffs(store_root: Path, store_path: str) -> list[str]:
     return found
 
 
-def demote_sibling_next_session_files(store_root: Path, posture_store_path: str) -> list[str]:
+def demote_sibling_next_session_files(
+    store_root: Path,
+    posture_store_path: str,
+    *,
+    keep_paths: list[str] | None = None,
+) -> list[str]:
     """Demote sibling ``*next-session*`` files under the same first segment.
 
     Sets ``priority: low`` and ``superseded_by`` to *posture_store_path*.
     Does not bump ``last_updated`` (recency must stay meaningful).
+    Paths listed in *keep_paths* (still named by the live posture slice) stay open.
     Returns the demoted store paths.
     """
     parts = [p for p in posture_store_path.replace("\\", "/").strip("/").split("/") if p]
@@ -151,11 +157,18 @@ def demote_sibling_next_session_files(store_root: Path, posture_store_path: str)
     if not folder.is_dir():
         return []
     current = "/".join(parts)
+    keep = {
+        p.replace("\\", "/").strip("/")
+        for p in (keep_paths or [])
+        if str(p).strip()
+    }
     demoted: list[str] = []
     for path in folder.rglob("*.md"):
         relative = path.relative_to(store_root).as_posix()
         sp = relative[:-3] if relative.endswith(".md") else relative
         if sp == current or not is_next_session_path(sp):
+            continue
+        if sp in keep:
             continue
         try:
             metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
@@ -166,7 +179,11 @@ def demote_sibling_next_session_files(store_root: Path, posture_store_path: str)
             metadata["priority"] = "low"
             changed = True
         if str(metadata.get("superseded_by") or "").strip() != current:
-            metadata["superseded_by"] = current
+            from memory_fabric.storage.close import apply_close_metadata
+
+            metadata = apply_close_metadata(
+                metadata, successor=current, close_kind="update"
+            )
             changed = True
         if not changed:
             continue

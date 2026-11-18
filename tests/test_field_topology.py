@@ -353,13 +353,18 @@ class StaleSupersededRankingTests(unittest.TestCase):
                 query_present=True,
                 superseded_by="pretraining/next-session-handoff",
             )
-            self.assertGreater(live, stale)
+            # Age-only stale on a standing decision is not a hide.
+            self.assertGreater(stale, 0.0)
+            self.assertEqual(superseded, 0.0)
             self.assertGreater(live, superseded)
             pack = context_for_task(temp, "next CPT session handoff C-eval")
             included = pack["included_sections"]
             self.assertIn("store/pretraining/next-session-handoff", included)
-            self.assertNotIn("store/decisions/gemma4-finetuning", included)
             if "store/pretraining/cpt-s5-handoff" in included:
+                self.assertIn(
+                    "closed by `pretraining/next-session-handoff`",
+                    pack["text"],
+                )
                 self.assertLess(
                     included.index("store/pretraining/next-session-handoff"),
                     included.index("store/pretraining/cpt-s5-handoff"),
@@ -470,12 +475,18 @@ class AskSpurgeonPostureShapeTests(unittest.TestCase):
             )
             included = pack["included_sections"]
             self.assertIn("store/fine-tuning/current-posture-2026-10-31", included)
-            self.assertNotIn("store/fine-tuning/open-theology-qa-next-session", included)
-            self.assertNotIn("store/fine-tuning/next-session-sft-reach-gates", included)
 
             text = pack["text"]
-            self.assertIn("stale steering — full body omitted", text)
-            self.assertNotIn("Prefer write_local_memory_tool.", text)
+            # Historical siblings surface as closed-by one-liners, not live bodies.
+            self.assertIn(
+                "closed by `fine-tuning/current-posture-2026-10-31`",
+                text,
+            )
+            self.assertNotIn("Do not treat this file as the live queue", text)
+            self.assertNotIn("Not the live queue — see current-posture", text)
+            # Age-only stale on steering must not replace the body with a stub.
+            self.assertNotIn("full body omitted", text)
+            self.assertIn("Prefer write_local_memory_tool.", text)
 
     def test_resolved_historical_write_demotes_to_low(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
