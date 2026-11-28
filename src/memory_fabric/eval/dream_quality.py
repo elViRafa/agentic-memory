@@ -220,9 +220,7 @@ def _is_index_only_change(changed_files: list[str]) -> bool:
     return True
 
 
-def _dream_score_delta_category(
-    delta: int, changed_files: list[str] | None = None
-) -> EvalCategory:
+def _dream_score_delta_category(delta: int, changed_files: list[str] | None = None) -> EvalCategory:
     if changed_files is not None and _is_index_only_change(changed_files) and delta > 0:
         checks = [
             _check(

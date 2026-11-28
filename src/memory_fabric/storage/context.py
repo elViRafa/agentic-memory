@@ -25,7 +25,6 @@ from memory_fabric.storage._shared import (
     estimate_tokens,
 )
 from memory_fabric.storage.close import (
-    closed_by_line,
     is_history_role,
     live_posture_body,
     role_for_section_key,
@@ -256,17 +255,10 @@ def _load_always_on(
         # successor closed it or evidence is broken.
         if successor or status == "broken-evidence":
             summary = str(metadata.get("summary") or "").strip()
-            reason = (
-                f"closed by `{successor}`" if successor else "broken-evidence"
-            )
-            stub_body = (
-                f"Summary: {summary}\n\n"
-                f"[closed steering — full body omitted ({reason})]\n"
-            )
+            reason = f"closed by `{successor}`" if successor else "broken-evidence"
+            stub_body = f"Summary: {summary}\n\n[closed steering — full body omitted ({reason})]\n"
             full_text = dump_frontmatter(metadata, stub_body)
-            warnings.append(
-                f"Packed closed steering `{path.name}` as summary only ({reason})."
-            )
+            warnings.append(f"Packed closed steering `{path.name}` as summary only ({reason}).")
         else:
             full_text = dump_frontmatter(metadata, body)
         key = f"local/{section_name}"
@@ -347,9 +339,7 @@ def _collect_sections_full_scan(
             continue
         section_key = _section_key(path, section_name)
         if query is None and is_history_role(
-            role_for_section_key(
-                section_key, role=str(metadata.get("role") or "") or None
-            )
+            role_for_section_key(section_key, role=str(metadata.get("role") or "") or None)
         ):
             continue
         full_text = dump_frontmatter(metadata, body)
@@ -490,9 +480,7 @@ def _iter_posture_candidate_paths(store_root: Path) -> list[Path]:
     return found
 
 
-def _select_live_posture(
-    memory_dir: Path, sections: list[dict[str, Any]]
-) -> dict[str, Any] | None:
+def _select_live_posture(memory_dir: Path, sections: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Pick the newest eligible posture file from ranked sections or cheap path scan."""
     candidates: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -580,9 +568,7 @@ def _pin_posture_section(
     if key in included:
         return 0, "included"
     if not _ensure_section_body(chosen, warnings, omitted):
-        return 0, _posture_slot_for_choice(
-            key, found=True, included=included, omitted=omitted
-        )
+        return 0, _posture_slot_for_choice(key, found=True, included=included, omitted=omitted)
     # Pack only the live dated slice so earlier next-steps stay out of context.
     meta = chosen.get("metadata") or {}
     raw_text = str(chosen.get("text") or "")
@@ -592,7 +578,7 @@ def _pin_posture_section(
         _m, body_only = _pf(raw_text) if raw_text.lstrip().startswith("---") else ({}, raw_text)
         packed_body, _keep = live_posture_body(body_only)
         chosen["text"] = dump_frontmatter(meta or _m, packed_body)
-    except Exception:  # noqa: BLE001 - posture slice is best-effort.
+    except Exception:  # noqa: BLE001, S110 - posture slice is best-effort.
         pass
     cap = _file_share_cap_tokens(max_tokens)
     capped, truncated = _cap_section_text(chosen["text"], chosen["metadata"], cap)

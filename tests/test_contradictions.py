@@ -76,9 +76,7 @@ class ContradictionPrecisionTests(unittest.TestCase):
             self.assertNotIn("lora", evidence)
             # bugs vs pretraining polarity must not fire even without IDF.
             crossed = [
-                h
-                for h in polarity
-                if ("bugs/" in h.store_path_a) != ("bugs/" in h.store_path_b)
+                h for h in polarity if ("bugs/" in h.store_path_a) != ("bugs/" in h.store_path_b)
             ]
             self.assertEqual(crossed, [])
 
@@ -463,17 +461,12 @@ class ContradictionHeuristicUpgradeTests(unittest.TestCase):
             write_memory_store(
                 temp,
                 "fine-tuning/current-posture",
-                "## 2026-10-31\n\n"
-                "Next: RAG re-SFT\n\n"
-                "## 2026-11-12\n\n"
-                "Next: OT fine-tune\n",
+                "## 2026-10-31\n\nNext: RAG re-SFT\n\n## 2026-11-12\n\nNext: OT fine-tune\n",
                 title="Current Posture",
             )
             hits = detect_contradictions(local_memory_dir(temp))
             intra = [
-                h
-                for h in hits
-                if h.store_path_a == h.store_path_b == "fine-tuning/current-posture"
+                h for h in hits if h.store_path_a == h.store_path_b == "fine-tuning/current-posture"
             ]
             self.assertTrue(intra, hits)
             self.assertIn("intra-file", intra[0].message)
@@ -534,9 +527,7 @@ class ContradictionHeuristicUpgradeTests(unittest.TestCase):
             hits = detect_contradictions(local_memory_dir(temp))
             replacement = [h for h in hits if h.kind == "replacement"]
             self.assertTrue(replacement, hits)
-            self.assertEqual(
-                replacement[0].evidence, "pretraining/next-session-cpt-improve"
-            )
+            self.assertEqual(replacement[0].evidence, "pretraining/next-session-cpt-improve")
             after = target.read_text(encoding="utf-8")
             self.assertEqual(before, after)
             self.assertNotIn("superseded_by", after)

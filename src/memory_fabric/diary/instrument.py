@@ -145,6 +145,7 @@ def record_search_run(
     content_token_n: int = 0,
     candidate_n: int = 0,
     phrase_hit: bool = False,
+    scan_capped: bool = False,
 ) -> None:
     if not is_approved(cwd):
         return
@@ -169,6 +170,7 @@ def record_search_run(
         "token_n": token_n,
         "content_token_n": content_token_n,
         "candidate_n": candidate_n,
+        "scan_capped": scan_capped,
         "phrase_hit": phrase_hit,
         "top_hit_role": top_role,
         "top_hit_score": top_score,

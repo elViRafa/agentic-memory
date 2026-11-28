@@ -99,7 +99,7 @@ def classify_role(key: str) -> str:
     if known:
         return known
     slug = re.sub(r"[^a-z0-9]+", "-", parts[0].casefold()).strip("-")
-    return (slug[:32] if slug else "other")
+    return slug[:32] if slug else "other"
 
 
 def classify_priority(raw: str | None) -> str:

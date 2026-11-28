@@ -27,6 +27,12 @@ from memory_fabric.storage._shared import (
     _should_skip_diff_path,
     _validate_store_path,
 )
+from memory_fabric.storage.close import (
+    clear_age_only_stale_on_standing,
+    is_standing_role,
+    live_posture_body,
+    role_for_section_key,
+)
 from memory_fabric.storage.consolidation import (
     _apply_candidate_to_live,
     _build_rewrite_tasks,
@@ -38,13 +44,6 @@ from memory_fabric.storage.contradictions import (
     detect_contradictions,
     pack_contradiction_messages,
     write_contradiction_report,
-)
-from memory_fabric.storage.close import (
-    clear_age_only_stale_on_standing,
-    is_standing_role,
-    live_posture_body,
-    role_for_section_key,
-    role_for_store_path,
 )
 from memory_fabric.storage.hygiene import (
     demote_sibling_next_session_files,
@@ -82,16 +81,12 @@ def _mark_dream_apply(memory_dir: Path) -> None:
         private.mkdir(parents=True, exist_ok=True)
         stamp = now_iso()
         fingerprint = _store_fingerprint(memory_dir)
-        (private / _LAST_DREAM_APPLY).write_text(
-            f"{stamp}\n{fingerprint}\n", encoding="utf-8"
-        )
+        (private / _LAST_DREAM_APPLY).write_text(f"{stamp}\n{fingerprint}\n", encoding="utf-8")
     except OSError:
         return
 
 
-def _discard_noop_artifacts(
-    memory_dir: Path, snapshot: str | None, candidate_root: Path
-) -> None:
+def _discard_noop_artifacts(memory_dir: Path, snapshot: str | None, candidate_root: Path) -> None:
     """Remove the snapshot + candidate created for a dream that did not apply."""
     import shutil
 
@@ -437,9 +432,7 @@ async def _process_and_finalize_candidate(
         warnings.append(
             f"…and {len(det_hits) - 5} more contradiction(s); see evals/contradictions.json"
         )
-    _pack_messages, contradiction_count = pack_contradiction_messages(
-        det_hits, llm_contradictions
-    )
+    _pack_messages, contradiction_count = pack_contradiction_messages(det_hits, llm_contradictions)
     # Index surface shows open review count — not truncated polarity spam.
     # Full advisory list stays in evals/contradictions.json.
     dream_contradictions: list[str] = []
@@ -586,9 +579,7 @@ async def _process_and_finalize_candidate(
         try:
             metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
             key = _get_section_key(candidate_root, path)
-            role = role_for_section_key(
-                key, role=str(metadata.get("role") or "") or None
-            )
+            role = role_for_section_key(key, role=str(metadata.get("role") or "") or None)
             if is_standing_role(role):
                 # Standing decisions / steering are never age-stamped.
                 continue
@@ -611,9 +602,7 @@ async def _process_and_finalize_candidate(
             elif age_days <= 30 and status == "stale":
                 metadata.pop("review_status", None)
                 path.write_text(dump_frontmatter(metadata, body), encoding="utf-8")
-                warnings.append(
-                    f"Cleared sticky stale on `{key}` (last_updated within 30 days)."
-                )
+                warnings.append(f"Cleared sticky stale on `{key}` (last_updated within 30 days).")
         except (OSError, UnicodeDecodeError, FrontmatterError, ValueError) as exc:
             warnings.append(f"Skipped staleness check for {path.name}: {exc}")
 
@@ -632,9 +621,7 @@ async def _process_and_finalize_candidate(
             if not store_path:
                 rel = path.relative_to(candidate_store).as_posix()
                 store_path = rel[:-3] if rel.endswith(".md") else rel
-            if not is_posture_path(
-                store_path, role=str(metadata.get("role") or "") or None
-            ):
+            if not is_posture_path(store_path, role=str(metadata.get("role") or "") or None):
                 continue
             if str(metadata.get("superseded_by") or "").strip():
                 continue

@@ -262,14 +262,10 @@ def blended_score(
     return (
         base
         * priority_weight(priority)
-        * recency_weight(
-            last_updated, half_life_days=_half_life_for_key(key, role=role)
-        )
+        * recency_weight(last_updated, half_life_days=_half_life_for_key(key, role=role))
         * category_penalty(key)
         * lifecycle_penalty(key, role=role)
-        * review_status_penalty(
-            review_status, role=resolved_role, superseded_by=superseded_by
-        )
+        * review_status_penalty(review_status, role=resolved_role, superseded_by=superseded_by)
         * superseded_penalty(superseded_by)
         * query_map_penalty(key, query_present=query_present)
     )

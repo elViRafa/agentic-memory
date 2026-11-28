@@ -231,7 +231,7 @@ class QueryPackAndRetrieveTests(unittest.TestCase):
             self.assertGreaterEqual(len(results), 2)
             self.assertEqual(results[0]["section"], "store:fine-tuning/next-session-handoff")
 
-    def test_context_for_task_uses_index_and_keeps_live_files(self) -> None:
+    def test_context_for_task_uses_index_and_keeps_relevant_files(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             initialize_memory_fabric(temp)
             _write_store_file(
@@ -255,13 +255,15 @@ class QueryPackAndRetrieveTests(unittest.TestCase):
             _write_store_file(
                 temp,
                 "pretraining/wave-s3-handoff",
-                "S3 handoff done. Pointer only.",
+                "S3 session handoff done. Pointer only.",
                 last_updated="2026-08-29T11:22:00-04:00",
             )
             pack = context_for_task(temp, "continue SFT GATE-0 next session handoff")
             self.assertTrue((pack.get("pack_stats") or {}).get("index_used"))
             self.assertIn("store/fine-tuning/next-session-handoff", pack["included_sections"])
-            self.assertIn("store/fine-tuning/vultr-spend-risk-controls", pack["included_sections"])
+            self.assertNotIn(
+                "store/fine-tuning/vultr-spend-risk-controls", pack["included_sections"]
+            )
             store = [s for s in pack["included_sections"] if s.startswith("store/")]
             self.assertLess(
                 store.index("store/fine-tuning/next-session-handoff"),
@@ -284,11 +286,7 @@ class StaleSupersededRankingTests(unittest.TestCase):
                 last_updated="2026-09-20T12:00:00-04:00",
             )
             stale_path = (
-                Path(temp)
-                / ".ai-memory"
-                / "memory-store"
-                / "decisions"
-                / "gemma4-finetuning.md"
+                Path(temp) / ".ai-memory" / "memory-store" / "decisions" / "gemma4-finetuning.md"
             )
             stale_path.parent.mkdir(parents=True, exist_ok=True)
             stale_path.write_text(
@@ -308,11 +306,7 @@ class StaleSupersededRankingTests(unittest.TestCase):
                 encoding="utf-8",
             )
             old_handoff = (
-                Path(temp)
-                / ".ai-memory"
-                / "memory-store"
-                / "pretraining"
-                / "cpt-s5-handoff.md"
+                Path(temp) / ".ai-memory" / "memory-store" / "pretraining" / "cpt-s5-handoff.md"
             )
             old_handoff.write_text(
                 dump_frontmatter(
@@ -465,9 +459,7 @@ class AskSpurgeonPostureShapeTests(unittest.TestCase):
             )
             meta1, _ = parse_frontmatter(ns1.read_text(encoding="utf-8"))
             self.assertEqual(meta1.get("priority"), "low")
-            self.assertEqual(
-                meta1.get("superseded_by"), "fine-tuning/current-posture-2026-10-31"
-            )
+            self.assertEqual(meta1.get("superseded_by"), "fine-tuning/current-posture-2026-10-31")
             self.assertEqual(meta1.get("last_updated"), self._TS)
 
             pack = read_combined_context(
@@ -621,7 +613,9 @@ class DreamChurnTests(unittest.TestCase):
             private = Path(temp) / ".ai-memory" / "private"
             private.mkdir(parents=True, exist_ok=True)
             fp = _store_fingerprint(Path(temp) / ".ai-memory")
-            (private / "last_dream_apply").write_text(now_iso() + "\n" + fp + "\n", encoding="utf-8")
+            (private / "last_dream_apply").write_text(
+                now_iso() + "\n" + fp + "\n", encoding="utf-8"
+            )
             os.environ["MEMORY_FABRIC_DREAM_COOLDOWN_MINUTES"] = "30"
             try:
                 snaps_before = list((Path(temp) / ".ai-memory" / "snapshots").glob("memory-*"))

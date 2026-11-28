@@ -8,15 +8,29 @@ import shutil
 import subprocess
 import time
 import unicodedata
+from dataclasses import dataclass, replace
+from functools import lru_cache
 from pathlib import Path
 
 from memory_fabric.contracts import SearchResult
+from memory_fabric.frontmatter import FrontmatterError, parse_frontmatter
 from memory_fabric.paths import global_memory_dir, local_memory_dir
+from memory_fabric.storage._evidence import (
+    EvidenceState,
+    evidence_state,
+    identifiers,
+    note_rank_text,
+    query_passage,
+    query_tokens,
+    topical_match,
+)
 from memory_fabric.storage._shared import (
     _is_ignored_local_memory_path,
     _iter_markdown_files,
     _path_to_store_path,
+    _validate_store_path,
 )
+from memory_fabric.storage.context import _section_key
 from memory_fabric.storage.ranking import blended_score, bm25_scores, tokenize
 
 # Fallback candidate cap when the SQLite index is missing. Index-backed search
@@ -24,100 +38,6 @@ from memory_fabric.storage.ranking import blended_score, bm25_scores, tokenize
 _CANDIDATE_CAP = 200
 # A verbatim phrase should outrank a file that only repeats the same words apart.
 _PHRASE_BOOST = 4.0
-
-# Function words only. Dropped before candidate generation so "the" / "de"
-# do not pull every file. BM25 then ranks the remaining content tokens.
-_STOPWORDS = frozenset(
-    {
-        "a",
-        "an",
-        "the",
-        "and",
-        "or",
-        "of",
-        "to",
-        "in",
-        "on",
-        "for",
-        "with",
-        "from",
-        "by",
-        "at",
-        "as",
-        "is",
-        "are",
-        "was",
-        "were",
-        "be",
-        "been",
-        "being",
-        "this",
-        "that",
-        "these",
-        "those",
-        "it",
-        "its",
-        "how",
-        "what",
-        "when",
-        "where",
-        "why",
-        "who",
-        "which",
-        "does",
-        "do",
-        "did",
-        "not",
-        "no",
-        "into",
-        "about",
-        "over",
-        "under",
-        "than",
-        "then",
-        "so",
-        "if",
-        "but",
-        "we",
-        "our",
-        "you",
-        "your",
-        "can",
-        "should",
-        "would",
-        "could",
-        "o",
-        "os",
-        "um",
-        "uma",
-        "uns",
-        "umas",
-        "de",
-        "da",
-        "das",
-        "dos",
-        "e",
-        "ou",
-        "em",
-        "na",
-        "nos",
-        "nas",
-        "para",
-        "por",
-        "com",
-        "que",
-        "se",
-        "ao",
-        "aos",
-        "como",
-        "quando",
-        "onde",
-        "porque",
-        "qual",
-        "quais",
-        "nao",
-    }
-)
 
 
 def _is_generated_store_index(memory_dir: Path, path: Path) -> bool:
@@ -165,7 +85,7 @@ def keyword_search(cwd: str, query: str, max_results: int = 10) -> list[SearchRe
         return []
 
     started = time.perf_counter()
-    tokens, content = _search_tokens(query)
+    tokens, content = query_tokens(query)
     if not content:
         _record_search(
             cwd,
@@ -216,14 +136,14 @@ def keyword_search(cwd: str, query: str, max_results: int = 10) -> list[SearchRe
     candidate_cap = max(_CANDIDATE_CAP, max_results)
     backend = "python"
     patterns = _rg_patterns(query, content)
+    raw: list[SearchResult] = []
+    scan_capped = False
     if shutil.which("rg"):
-        raw = _keyword_search_rg(patterns, roots, candidate_cap)
+        raw, scan_capped = _keyword_search_rg(patterns, roots, candidate_cap)
         if raw:
             backend = "ripgrep"
-        else:
-            raw = _keyword_search_python(content, roots, candidate_cap)
-    else:
-        raw = _keyword_search_python(content, roots, candidate_cap)
+    if not raw:
+        raw, scan_capped = _keyword_search_python(content, roots, candidate_cap)
 
     ranked, phrase_hit = _rank_search_results(query, content, raw, max_results)
     for result in ranked:
@@ -238,19 +158,9 @@ def keyword_search(cwd: str, query: str, max_results: int = 10) -> list[SearchRe
         content_token_n=len(content),
         candidate_n=len({result["path"] for result in raw}),
         phrase_hit=phrase_hit,
+        scan_capped=scan_capped,
     )
     return ranked
-
-
-def _search_tokens(query: str) -> tuple[list[str], list[str]]:
-    """Return ``(all folded tokens, content tokens)`` with stopwords removed."""
-    tokens = tokenize(query)
-    content = list(
-        dict.fromkeys(
-            token for token in tokens if token not in _STOPWORDS and len(token) >= 2
-        )
-    )
-    return tokens, content
 
 
 def _rg_patterns(query: str, content: list[str]) -> list[str]:
@@ -277,6 +187,7 @@ def _record_search(
     content_token_n: int,
     candidate_n: int,
     phrase_hit: bool,
+    scan_capped: bool = False,
 ) -> None:
     from memory_fabric.diary.instrument import record_search_run
 
@@ -290,9 +201,11 @@ def _record_search(
         content_token_n=content_token_n,
         candidate_n=candidate_n,
         phrase_hit=phrase_hit,
+        scan_capped=scan_capped,
     )
 
 
+@lru_cache(maxsize=1024)
 def _folded_phrase(text: str) -> str:
     nfkd = unicodedata.normalize("NFKD", text)
     stripped = "".join(ch for ch in nfkd if not unicodedata.combining(ch)).casefold()
@@ -306,14 +219,59 @@ def _contains_phrase(query: str, text: str) -> bool:
     return phrase in _folded_phrase(text)
 
 
+@dataclass(frozen=True)
+class _SearchNote:
+    path: Path
+    key: str
+    rank_text: str
+    priority: str
+    updated: str
+    review_status: str
+    successor: str
+    role: str
+    body: str | None = None
+    first_line: int = 0
+
+    @property
+    def state(self) -> EvidenceState:
+        return evidence_state(self.key, self.review_status, self.successor, self.role)
+
+
+@dataclass(frozen=True)
+class _SearchHit:
+    note: _SearchNote
+    score: float
+    predecessor: str = ""
+
+
+def _load_search_note(path: Path) -> _SearchNote | None:
+    try:
+        raw = path.read_text(encoding="utf-8")
+        metadata, body = parse_frontmatter(raw) if raw.startswith("---\n") else ({}, raw)
+    except (OSError, UnicodeDecodeError, FrontmatterError):
+        return None
+    section = str(metadata.get("section") or path.stem)
+    return _SearchNote(
+        path=path,
+        key=_section_key(path, section),
+        rank_text=note_rank_text(path.stem, metadata, body),
+        priority=str(metadata.get("priority") or "medium"),
+        updated=str(metadata.get("last_updated") or ""),
+        review_status=str(metadata.get("review_status") or ""),
+        successor=str(metadata.get("superseded_by") or "").strip(),
+        role=str(metadata.get("role") or ""),
+        body=body,
+        first_line=raw[: len(raw) - len(body)].count("\n"),
+    )
+
+
 def _keyword_search_index(
     cwd: str,
     query: str,
     content: list[str],
     max_results: int,
 ) -> tuple[list[SearchResult], bool, int] | None:
-    """Rank the full local corpus from ``index.db``. None → use scan fallback."""
-    from memory_fabric.storage.index import IndexRow, close_quietly, load_rows, sync_index
+    from memory_fabric.storage.index import close_quietly, load_rows, sync_index
 
     memory_dir = local_memory_dir(cwd)
     if not memory_dir.exists():
@@ -325,154 +283,111 @@ def _keyword_search_index(
         rows = load_rows(conn, memory_dir)
     finally:
         close_quietly(conn)
-    if not rows:
-        return None
 
-    searchable: list[IndexRow] = [
-        row
+    notes = [
+        _SearchNote(
+            row.path,
+            row.section_key,
+            row.rank_text,
+            row.priority,
+            row.last_updated,
+            row.review_status or "",
+            (row.superseded_by or "").strip(),
+            row.role,
+        )
         for row in rows
         if _is_searchable_memory_path(memory_dir, row.path) and row.rank_text.strip()
     ]
-    if not searchable:
+    if not notes:
         return None
 
-    docs = [tokenize(row.rank_text) for row in searchable]
-    # Corpus-wide IDF over every indexed searchable file.
-    scores = bm25_scores(content, docs)
-
-    phrase_hit = False
-    decorated: list[tuple[float, int, SearchResult]] = []
-    for index, (row, score) in enumerate(zip(searchable, scores, strict=True)):
-        if score <= 0:
-            continue
-        blended = blended_score(
-            score,
-            row.priority,
-            row.last_updated,
-            key=row.section_key,
-            query_present=True,
-            review_status=row.review_status or None,
-            superseded_by=row.superseded_by or None,
-        )
-        if blended > 0 and _contains_phrase(query, row.rank_text):
-            blended *= _PHRASE_BOOST
-            phrase_hit = True
-        if blended <= 0:
-            successor = (row.superseded_by or "").strip()
-            if successor and score > 0:
-                # Label closed matches so the agent sees the successor.
-                decorated.append(
-                    (
-                        0.0001,
-                        -index,
-                        {
-                            "section": _search_section_label(row.path),
-                            "path": str(row.path),
-                            "line": 1,
-                            "snippet": f"Closed by `{successor}`",
-                            "score": 0.0,
-                        },
-                    )
-                )
-            continue
-        # Snippet filled after top-k selection so a common token does not
-        # force a full-corpus re-read.
-        decorated.append(
-            (
-                blended,
-                -index,
-                {
-                    "section": _search_section_label(row.path),
-                    "path": str(row.path),
-                    "line": 1,
-                    "snippet": "",
-                    "score": round(float(blended), 6),
-                },
-            )
-        )
-
-    # Global memory sits outside the project index — scan and merge by score.
+    hits, phrase_hit = _rank_notes(query, content, notes)
+    _blend_semantic_hits(query, content, notes, hits)
     global_root = global_memory_dir()
     if global_root.exists():
-        global_raw = _keyword_search_python(content, [global_root], _CANDIDATE_CAP)
-        global_ranked, global_phrase = _rank_search_results(
-            query, content, global_raw, max_results
-        )
+        raw, _ = _keyword_search_python(content, [global_root], _CANDIDATE_CAP)
+        global_hits, global_phrase = _rank_notes(query, content, _load_candidates(raw))
+        hits.update(global_hits)
         phrase_hit = phrase_hit or global_phrase
-        for offset, result in enumerate(global_ranked):
-            decorated.append((float(result.get("score") or 0.0), -(10_000 + offset), result))
+    return _search_results(hits, content, max_results), phrase_hit, len(notes)
 
-    decorated = _apply_semantic_blend(query, content, searchable, docs, decorated)
 
-    if not decorated:
-        semantic = _semantic_rerank(query, content, searchable, docs, max_results)
-        if semantic is not None:
-            return semantic
-        return [], False, len(searchable)
+@lru_cache(maxsize=1024)
+def _rank_tokens(text: str) -> tuple[str, ...]:
+    # The index refreshes rank text from disk; changed text always has a new cache key.
+    return tuple(tokenize(text))
 
-    decorated.sort(key=lambda item: (item[0], item[1]), reverse=True)
-    ranked: list[SearchResult] = []
-    seen: set[str] = set()
-    for score, _neg, result in decorated:
-        if result["path"] in seen:
+
+def _rank_notes(
+    query: str, terms: list[str], notes: list[_SearchNote]
+) -> tuple[dict[Path, _SearchHit], bool]:
+    docs = [_rank_tokens(note.rank_text) for note in notes]
+    scores = bm25_scores(terms, docs)
+    exact = identifiers(terms)
+    by_path = {note.path: note for note in notes}
+    hits: dict[Path, _SearchHit] = {}
+    successors: dict[Path, _SearchHit] = {}
+    phrase_hit = False
+    for note, raw, words in zip(notes, scores, docs, strict=True):
+        if raw <= 0 or not topical_match(terms, exact, set(words), note.path.stem):
             continue
-        seen.add(result["path"])
-        if not result.get("snippet"):
-            line_number, snippet = _snippet_from_path(Path(result["path"]), content)
-            result["line"] = line_number
-            result["snippet"] = snippet
-        result["score"] = round(float(score), 6)
-        ranked.append(result)
-        if len(ranked) >= max_results:
-            break
+        if note.state == "broken":
+            continue
+        score = blended_score(
+            raw,
+            note.priority,
+            note.updated,
+            key=note.key,
+            query_present=True,
+            role=note.role,
+        )
+        if _contains_phrase(query, note.rank_text):
+            score *= _PHRASE_BOOST
+            phrase_hit = True
+        hits[note.path] = _SearchHit(note, score)
+        if note.state == "closed":
+            target = _follow_successor(note, by_path)
+            if target and (target.path not in successors or score > successors[target.path].score):
+                successors[target.path] = _SearchHit(target, score, note.key.removeprefix("store/"))
 
-    if not ranked:
-        semantic = _semantic_rerank(query, content, searchable, docs, max_results)
-        if semantic is not None:
-            return semantic
-
-    return ranked, phrase_hit, len(searchable)
-
-
-def _first_match_snippet(text: str, content: list[str]) -> tuple[int, str]:
-    needles = set(content)
-    for number, line in enumerate(text.splitlines(), start=1):
-        if needles & set(tokenize(line)):
-            return number, line.strip()
-    first = text.strip().splitlines()
-    if first:
-        return 1, first[0].strip()[:200]
-    return 1, ""
+    for path, hit in successors.items():
+        if path in hits:
+            hit = replace(hit, score=max(hit.score, hits[path].score))
+        hits[path] = hit
+    return hits, phrase_hit
 
 
-def _snippet_from_path(path: Path, content: list[str]) -> tuple[int, str]:
-    """Read the file for a body-accurate snippet (rank_text joins title/summary)."""
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        return 1, ""
-    return _first_match_snippet(text, content)
+def _follow_successor(note: _SearchNote, by_path: dict[Path, _SearchNote]) -> _SearchNote | None:
+    if not note.key.startswith("store/"):
+        return None
+    root = note.path.parents[note.key.count("/") - 1]
+    seen = {note.path}
+    while note.state == "closed":
+        try:
+            parts = _validate_store_path(note.successor)
+        except ValueError:
+            return None
+        path = root.joinpath(*parts).with_suffix(".md")
+        if (
+            path in seen
+            or _is_generated_store_index(root.parent, path)
+            or not path.resolve().is_relative_to(root.resolve())
+        ):
+            return None
+        seen.add(path)
+        target = by_path.get(path) or _load_search_note(path)
+        if target is None:
+            return None
+        note = target
+    return note if note.state == "current" else None
 
 
-def _semantic_enabled() -> bool:
+def _blend_semantic_hits(
+    query: str, terms: list[str], notes: list[_SearchNote], hits: dict[Path, _SearchHit]
+) -> None:
+    """Rerank current evidence and admit current paraphrases for ordinary questions."""
     import os
 
-    flag = (os.environ.get("MEMORY_FABRIC_SEMANTIC") or "1").strip().lower()
-    return flag not in {"0", "false", "no", "off"}
-
-
-def _apply_semantic_blend(
-    query: str,
-    content: list[str],
-    searchable: list,
-    docs: list[list[str]],
-    decorated: list[tuple[float, int, SearchResult]],
-) -> list[tuple[float, int, SearchResult]]:
-    """Blend cosine into lexical scores and append strong paraphrase-only hits."""
-    from memory_fabric.storage.index import IndexRow
-
-    if not _semantic_enabled():
-        return decorated
     from memory_fabric.storage.semantic import (
         blend_scores,
         cosine_similarity,
@@ -480,233 +395,82 @@ def _apply_semantic_blend(
         semantic_available,
     )
 
-    rows: list[IndexRow] = list(searchable)
-    if not semantic_available() or not rows:
-        return decorated
-    texts = [query] + [row.rank_text for row in rows]
+    flag = (os.environ.get("MEMORY_FABRIC_SEMANTIC") or "1").strip().lower()
+    if flag in {"0", "false", "no", "off"} or identifiers(terms) or not semantic_available():
+        return
+
+    current = [note for note in notes if note.state == "current"]
+    if not current:
+        return
+    texts = [query, *(note.rank_text for note in current)]
     vectors = embed_texts(texts)
     if not vectors or len(vectors) != len(texts):
-        return decorated
-    query_vec = vectors[0]
-    path_to_cosine: dict[str, float] = {}
-    path_to_tokens: dict[str, set[str]] = {}
-    for row, vec, tokens in zip(rows, vectors[1:], docs, strict=True):
-        path_to_cosine[str(row.path)] = cosine_similarity(query_vec, vec)
-        path_to_tokens[str(row.path)] = set(tokens)
-
-    content_set = set(content)
-    seen_paths = {result["path"] for _score, _neg, result in decorated}
-    blended_rows: list[tuple[float, int, SearchResult]] = []
-    for score, neg_index, result in decorated:
-        path = result["path"]
-        cosine = path_to_cosine.get(path, 0.0)
-        has_exact = bool(content_set & path_to_tokens.get(path, set()))
-        if has_exact:
-            new_score = blend_scores(score, cosine, lexical_weight=0.85)
-        else:
-            new_score = blend_scores(score, cosine, lexical_weight=0.35)
-        blended_rows.append((new_score, neg_index, result))
-
-    # Paraphrase-only files (no shared content token) with strong cosine.
-    for index, row in enumerate(rows):
-        path = str(row.path)
-        if path in seen_paths:
-            continue
-        cosine = path_to_cosine.get(path, 0.0)
-        if cosine < 0.55:
-            continue
-        if content_set & path_to_tokens.get(path, set()):
-            continue
-        line_number, snippet = _snippet_from_path(row.path, content)
-        if not snippet:
-            first = row.rank_text.strip().splitlines()
-            snippet = first[0].strip()[:200] if first else ""
-            line_number = 1
-        blended_rows.append(
-            (
-                cosine * 0.5,
-                -(100_000 + index),
-                {
-                    "section": _search_section_label(row.path),
-                    "path": path,
-                    "line": line_number,
-                    "snippet": snippet,
-                    "score": round(cosine * 0.5, 6),
-                },
+        return
+    threshold = 0.55 if hits else 0.35
+    for note, vector in zip(current, vectors[1:], strict=True):
+        cosine = cosine_similarity(vectors[0], vector)
+        if hit := hits.get(note.path):
+            hits[note.path] = replace(
+                hit, score=blend_scores(hit.score, cosine, lexical_weight=0.85)
             )
-        )
-    return blended_rows
+        elif cosine >= threshold:
+            hits[note.path] = _SearchHit(note, cosine * 0.5)
 
 
-def _semantic_rerank(
-    query: str,
-    content: list[str],
-    searchable: list,
-    docs: list[list[str]],
-    max_results: int,
-) -> tuple[list[SearchResult], bool, int] | None:
-    """When BM25 finds nothing, surface paraphrase hits via embeddings."""
-    from memory_fabric.storage.index import IndexRow
-
-    if not _semantic_enabled():
-        return None
-    from memory_fabric.storage.semantic import (
-        cosine_similarity,
-        embed_texts,
-        semantic_available,
+def _search_results(
+    hits: dict[Path, _SearchHit], terms: list[str], max_results: int
+) -> list[SearchResult]:
+    ranked = sorted(
+        hits.values(), key=lambda hit: (hit.note.state == "current", hit.score), reverse=True
     )
-
-    rows: list[IndexRow] = list(searchable)
-    if not semantic_available() or not rows:
-        return None
-    texts = [query] + [row.rank_text for row in rows]
-    vectors = embed_texts(texts)
-    if not vectors or len(vectors) != len(texts):
-        return None
-    query_vec = vectors[0]
-    content_set = set(content)
-    scored: list[tuple[float, int, IndexRow, str]] = []
-    for index, (row, vec, tokens) in enumerate(
-        zip(rows, vectors[1:], docs, strict=True)
-    ):
-        sim = cosine_similarity(query_vec, vec)
-        if sim < 0.35:
+    results: list[SearchResult] = []
+    for hit in ranked:
+        note = hit.note if hit.note.body is not None else _load_search_note(hit.note.path)
+        if note is None or note.state != hit.note.state:
             continue
-        exact = bool(content_set & set(tokens))
-        weight = sim * (0.5 if exact else 1.0)
-        scored.append((weight, index, row, row.rank_text))
-    if not scored:
-        return None
-    scored.sort(key=lambda item: item[0], reverse=True)
-    ranked: list[SearchResult] = []
-    for weight, _index, row, text in scored[:max_results]:
-        line_number, snippet = _snippet_from_path(row.path, content) if content else (1, "")
-        if not snippet:
-            first = text.strip().splitlines()
-            snippet = first[0].strip()[:200] if first else ""
-            line_number = 1
-        ranked.append(
+        if note.state == "closed":
+            line = 1
+            snippet = f"Historical lead (closed). Closed by `{note.successor}`."
+        else:
+            number, snippet = query_passage(note.body or "", terms, 360)
+            line = note.first_line + number
+            if not snippet:
+                snippet = note.rank_text.strip()[:360]
+            if note.state == "historical":
+                snippet = f"Historical lead (stale). Verify before applying. {snippet}"
+            elif hit.predecessor:
+                snippet = f"Successor to `{hit.predecessor}`. {snippet}"
+        results.append(
             {
-                "section": _search_section_label(row.path),
-                "path": str(row.path),
-                "line": line_number,
+                "section": _search_section_label(note.path),
+                "path": str(note.path),
+                "line": line,
                 "snippet": snippet,
-                "score": round(float(weight), 6),
+                "score": round(hit.score, 6),
             }
         )
-    return ranked, False, len(rows)
+        if len(results) >= max_results:
+            break
+    return results
+
+
+def _load_candidates(results: list[SearchResult]) -> list[_SearchNote]:
+    paths = dict.fromkeys(Path(result["path"]) for result in results)
+    return [note for path in paths if (note := _load_search_note(path)) is not None]
 
 
 def _rank_search_results(
     query: str, content_tokens: list[str], results: list[SearchResult], max_results: int
 ) -> tuple[list[SearchResult], bool]:
-    if not results:
-        return [], False
-    unique_paths: list[Path] = []
-    seen: set[str] = set()
-    for result in results:
-        key = result["path"]
-        if key in seen:
-            continue
-        seen.add(key)
-        unique_paths.append(Path(key))
-
-    docs: list[list[str]] = []
-    metas: list[tuple[str, str, str, str, str]] = []
-    texts: list[str] = []
-    for path in unique_paths:
-        try:
-            text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            text = ""
-        texts.append(text)
-        docs.append(tokenize(text))
-        metas.append(_rank_metadata(text))
-
-    scores = bm25_scores(content_tokens, docs)
-    phrase_hit = False
-    path_scores: dict[str, float] = {}
-    for path, score, text, (priority, last_updated, review_status, superseded_by, role) in zip(
-        unique_paths, scores, texts, metas, strict=True
-    ):
-        blended = blended_score(
-            score,
-            priority,
-            last_updated,
-            key=str(path),
-            query_present=True,
-            review_status=review_status or None,
-            superseded_by=superseded_by or None,
-            role=role or None,
-        )
-        if blended > 0 and _contains_phrase(query, text):
-            blended *= _PHRASE_BOOST
-            phrase_hit = True
-        if blended <= 0 and (superseded_by or "").strip() and score > 0:
-            # Keep a tiny score so the closed file can surface as a label.
-            blended = 0.0001
-        path_scores[str(path)] = blended
-
-    decorated: list[tuple[float, int, SearchResult]] = []
-    for index, result in enumerate(results):
-        decorated.append((path_scores.get(result["path"], 0.0), -index, result))
-    decorated.sort(key=lambda item: (item[0], item[1]), reverse=True)
-
-    ranked: list[SearchResult] = []
-    seen_ranked: set[str] = set()
-    for score, _neg_index, result in decorated:
-        if result["path"] in seen_ranked:
-            continue
-        seen_ranked.add(result["path"])
-        result["score"] = round(float(score), 6)
-        # Label closed matches on the scan fallback the same way as the index path.
-        try:
-            text = Path(result["path"]).read_text(encoding="utf-8")
-            _p, _lu, _rs, superseded, _role = _rank_metadata(text)
-            if (superseded or "").strip() and score <= 0.0001:
-                result["snippet"] = f"Closed by `{superseded.strip()}`"
-                result["score"] = 0.0
-        except (OSError, UnicodeDecodeError):
-            pass
-        ranked.append(result)
-        if len(ranked) >= max_results:
-            break
-    return ranked, phrase_hit
-
-
-def _priority_and_updated(text: str) -> tuple[str, str]:
-    priority, last_updated, _review, _superseded, _role = _rank_metadata(text)
-    return priority, last_updated
-
-
-def _rank_metadata(text: str) -> tuple[str, str, str, str, str]:
-    priority = "medium"
-    last_updated = ""
-    review_status = ""
-    superseded_by = ""
-    role = ""
-    if not text.lstrip().startswith("---"):
-        return priority, last_updated, review_status, superseded_by, role
-    try:
-        from memory_fabric.frontmatter import parse_frontmatter
-
-        metadata, _body = parse_frontmatter(text)
-    except Exception:  # noqa: BLE001 - ranking metadata is best-effort.
-        return priority, last_updated, review_status, superseded_by, role
-    return (
-        str(metadata.get("priority") or "medium"),
-        str(metadata.get("last_updated") or ""),
-        str(metadata.get("review_status") or ""),
-        str(metadata.get("superseded_by") or ""),
-        str(metadata.get("role") or ""),
-    )
+    hits, phrase_hit = _rank_notes(query, content_tokens, _load_candidates(results))
+    return _search_results(hits, content_tokens, max_results), phrase_hit
 
 
 def _keyword_search_rg(
     patterns: list[str], roots: list[Path], max_files: int
-) -> list[SearchResult]:
+) -> tuple[list[SearchResult], bool]:
     if not patterns:
-        return []
+        return [], False
     command = [
         "rg",
         "--json",
@@ -739,9 +503,9 @@ def _keyword_search_rg(
             timeout=5.0,
         )
     except (OSError, subprocess.SubprocessError):
-        return []
+        return [], False
     if completed.returncode not in {0, 1}:
-        return []
+        return [], False
 
     results: list[SearchResult] = []
     seen: set[str] = set()
@@ -757,6 +521,8 @@ def _keyword_search_rg(
         path_key = str(path)
         if path_key in seen or not _path_is_searchable(path, roots):
             continue
+        if len(results) == max_files:
+            return results, True
         seen.add(path_key)
         results.append(
             {
@@ -766,17 +532,15 @@ def _keyword_search_rg(
                 "snippet": data["lines"]["text"].strip(),
             }
         )
-        if len(results) >= max_files:
-            break
-    return results
+    return results, False
 
 
 def _keyword_search_python(
     content_tokens: list[str], roots: list[Path], max_files: int
-) -> list[SearchResult]:
+) -> tuple[list[SearchResult], bool]:
     needles = set(content_tokens)
     if not needles:
-        return []
+        return [], False
     results: list[SearchResult] = []
     for root in roots:
         for path in _iter_markdown_files(root):
@@ -788,6 +552,8 @@ def _keyword_search_python(
                 continue
             if not needles & set(tokenize(text)):
                 continue
+            if len(results) == max_files:
+                return results, True
             line_number = 1
             snippet = ""
             for number, line in enumerate(text.splitlines(), start=1):
@@ -803,9 +569,7 @@ def _keyword_search_python(
                     "snippet": snippet,
                 }
             )
-            if len(results) >= max_files:
-                return results
-    return results
+    return results, False
 
 
 def _search_section_label(path: Path) -> str:

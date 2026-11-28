@@ -9,9 +9,7 @@ from types import ModuleType
 
 
 def _load_smoke_module() -> ModuleType:
-    script_path = (
-        Path(__file__).resolve().parent.parent / "scripts" / "field_pack_usage_smoke.py"
-    )
+    script_path = Path(__file__).resolve().parent.parent / "scripts" / "field_pack_usage_smoke.py"
     spec = importlib.util.spec_from_file_location("field_pack_usage_smoke", script_path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)

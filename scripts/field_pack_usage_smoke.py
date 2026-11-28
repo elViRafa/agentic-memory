@@ -209,8 +209,7 @@ def seed_store(cwd: str) -> None:
     _write_store_file(
         cwd,
         "failures/opc-subscription-timeout-sim",
-        "asyncua subscription watchdog timeout on industrial PLC link. "
-        "Not a training failure.",
+        "asyncua subscription watchdog timeout on industrial PLC link. Not a training failure.",
         title="OPC Subscription Timeout Sim",
         priority="medium",
         last_updated="2026-08-11T00:00:00-04:00",
@@ -285,18 +284,18 @@ def run_smoke(cwd: str, *, mode: str) -> dict[str, Any]:
         seed_store(cwd)
         handoff = memory_dir / "memory-store" / "fine-tuning" / "next-session-handoff.md"
         gates["A"] = "pass" if handoff.exists() else "fail"
-        metrics["seed_files"] = sum(
-            1 for _ in (memory_dir / "memory-store").rglob("*.md")
-        )
+        metrics["seed_files"] = sum(1 for _ in (memory_dir / "memory-store").rglob("*.md"))
     else:
         if not memory_dir.exists():
             gates["A"] = "fail"
             details["A"] = f"missing memory dir: {memory_dir}"
         else:
             gates["A"] = "pass"
-            metrics["seed_files"] = sum(
-                1 for _ in (memory_dir / "memory-store").rglob("*.md")
-            ) if (memory_dir / "memory-store").exists() else 0
+            metrics["seed_files"] = (
+                sum(1 for _ in (memory_dir / "memory-store").rglob("*.md"))
+                if (memory_dir / "memory-store").exists()
+                else 0
+            )
 
     # --- B: startup pack ---
     if gates.get("A") == "pass":
@@ -430,8 +429,7 @@ def run_smoke(cwd: str, *, mode: str) -> dict[str, Any]:
             metrics["doctor_warning_n"] = len(report.get("warnings") or [])
             if mode == "synthetic":
                 ok = any(
-                    tok in joined
-                    for tok in ("placeholder", "ubiquitous-language", "steering")
+                    tok in joined for tok in ("placeholder", "ubiquitous-language", "steering")
                 )
             else:
                 ok = any(
@@ -462,9 +460,7 @@ def run_smoke(cwd: str, *, mode: str) -> dict[str, Any]:
             ul = _find_check(eval_result, "ubiquitous_language_placeholder")
             if ul is None:
                 ul = _find_check(eval_result, "ubiquitous-language_placeholder")
-            metrics["contradiction_pack_hygiene"] = (
-                hygiene.get("status") if hygiene else None
-            )
+            metrics["contradiction_pack_hygiene"] = hygiene.get("status") if hygiene else None
             metrics["ul_placeholder_status"] = ul.get("status") if ul else None
             hygiene_ok = hygiene is None or hygiene.get("status") != "fail"
             if mode == "synthetic":

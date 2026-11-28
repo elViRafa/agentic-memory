@@ -66,10 +66,8 @@ mcp: FastMCP[Any] | None
 def _memory_fabric_server() -> Any:
     """Build FastMCP so initialize reports the fabric version, not the SDK version."""
     params = inspect.signature(FastMCP).parameters
-    if "version" in params:
-        server = FastMCP("Memory Fabric", version=__version__)
-    else:
-        server = FastMCP("Memory Fabric")
+    options: dict[str, Any] = {"version": __version__} if "version" in params else {}
+    server = FastMCP("Memory Fabric", **options)
     low = getattr(server, "_mcp_server", None)
     if low is not None and getattr(low, "version", None) != __version__:
         low.version = __version__
@@ -205,10 +203,10 @@ if FastMCP is not None:
         files_open: str = "",
         max_tokens: int | None = None,
     ) -> ContextBundle:
-        """Return a task-scoped memory pack: steering + top-k ranked store entries.
+        """Return steering, relevant passages, and a retrieval status for the task.
 
         Call this mid-session instead of re-dumping ``read_combined_context_tool``.
-        Pass the files currently open so related ``failures/`` entries are boosted.
+        Pass the files currently open to include related ``failures/`` entries.
 
         Args:
             cwd:        Absolute path to the project root.

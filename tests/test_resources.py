@@ -19,9 +19,7 @@ def _get_resource_fn(name: str):
     """Retrieve a resource handler by its Python function name from server.py."""
     fn = getattr(server_module, name, None)
     if fn is None:
-        raise unittest.SkipTest(
-            f"Resource function '{name}' not found (MCP optional dep missing?)"
-        )
+        raise unittest.SkipTest(f"Resource function '{name}' not found (MCP optional dep missing?)")
     return fn
 
 
@@ -51,9 +49,7 @@ class MemoryContextResourceTests(unittest.TestCase):
     def test_invalid_path_returns_advisory(self) -> None:
         fn = _get_resource_fn("memory_context_resource")
         result = fn(_encode("/absolutely/does/not/exist/xyz123"))
-        self.assertTrue(
-            "Invalid project path" in result or "No memory initialized" in result
-        )
+        self.assertTrue("Invalid project path" in result or "No memory initialized" in result)
 
     def test_windows_path_roundtrip(self) -> None:
         win_path = r"C:\Users\rafael\Projetos\my-project"

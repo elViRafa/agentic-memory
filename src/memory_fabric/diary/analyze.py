@@ -21,8 +21,7 @@ _PRIORITY_OMITTED_HIGH = 8
 _TOOL_MIN_N = 10
 _TOOL_MAX_FAIL_RATE = 0.25
 _SEARCH_MIN_N = 5
-_SEARCH_ZERO_HIT_RATE = 0.40
-_SEARCH_CAP = 200
+_LEGACY_SEARCH_CAP = 200
 _SEARCH_CAP_RATE = 0.40
 _TOP_QUERIES = 10
 
@@ -52,13 +51,17 @@ def analyze_diary(
         if report.get("failed"):
             failed = True
 
-    rollup = _analyze_project("all", events) if events else {
-        "project_id": "all",
-        "event_n": 0,
-        "signals": {},
-        "failed": False,
-        "failures": [],
-    }
+    rollup = (
+        _analyze_project("all", events)
+        if events
+        else {
+            "project_id": "all",
+            "event_n": 0,
+            "signals": {},
+            "failed": False,
+            "failures": [],
+        }
+    )
     # Rollup never drives exit code by itself.
     rollup["failed"] = False
     rollup["failures"] = []
@@ -224,9 +227,7 @@ def _posture_signal(packs: list[dict[str, Any]]) -> dict[str, Any]:
     failed_labels = [k for k, v in cohorts.items() if v["failed"]]
     detail = ""
     if failed_labels:
-        bits = [
-            f"{k} rate={cohorts[k]['rate']:.2f} (n={cohorts[k]['n']})" for k in failed_labels
-        ]
+        bits = [f"{k} rate={cohorts[k]['rate']:.2f} (n={cohorts[k]['n']})" for k in failed_labels]
         detail = "posture_slot below 0.80: " + "; ".join(bits)
     return {
         "cohorts": cohorts,
@@ -289,8 +290,7 @@ def _priority_signal(packs: list[dict[str, Any]]) -> dict[str, Any]:
     detail = ""
     if failed:
         detail = (
-            f"priority inflation: median omitted_high={med_omit} "
-            f"> included_high={med_incl} (n={n})"
+            f"priority inflation: median omitted_high={med_omit} > included_high={med_incl} (n={n})"
         )
     return {
         "n": n,
@@ -326,7 +326,7 @@ def _tool_signal(tools: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _search_signal(searches: list[dict[str, Any]]) -> dict[str, Any]:
-    """Fail when content-token searches often return zero hits or hit the scan cap.
+    """Report misses and fail on frequent confirmed fallback truncation.
 
     Counts-only packs with no ``search.run`` rows stay quiet. Rows with
     ``content_token_n == 0`` (stopword-only queries) are ignored.
@@ -340,31 +340,37 @@ def _search_signal(searches: list[dict[str, Any]]) -> dict[str, Any]:
     n = len(content_rows)
     zero_n = 0
     cap_n = 0
+    inferred_cap_n = 0
     for event in content_rows:
         hit_n = event.get("hit_n")
         if isinstance(hit_n, (int, float)) and int(hit_n) == 0:
             zero_n += 1
+        if event.get("backend") not in ("python", "ripgrep"):
+            continue
         candidate_n = event.get("candidate_n")
-        if isinstance(candidate_n, (int, float)) and int(candidate_n) >= _SEARCH_CAP:
+        if event.get("scan_capped") is True:
             cap_n += 1
+        elif (
+            "scan_capped" not in event
+            and isinstance(candidate_n, (int, float))
+            and candidate_n >= _LEGACY_SEARCH_CAP
+        ):
+            inferred_cap_n += 1
     zero_rate = (zero_n / n) if n else None
     cap_rate = (cap_n / n) if n else None
-    reasons: list[str] = []
-    if n >= _SEARCH_MIN_N and zero_rate is not None and zero_rate >= _SEARCH_ZERO_HIT_RATE:
-        reasons.append(f"zero-hit rate {zero_rate:.2f} (n={n})")
-    if n >= _SEARCH_MIN_N and cap_rate is not None and cap_rate >= _SEARCH_CAP_RATE:
-        reasons.append(f"candidate-cap rate {cap_rate:.2f} at {_SEARCH_CAP} (n={n})")
-    detail = ""
-    if reasons:
-        detail = "search.run: " + "; ".join(reasons)
+    failed = n >= _SEARCH_MIN_N and cap_rate is not None and cap_rate >= _SEARCH_CAP_RATE
     return {
         "n": n,
         "zero_n": zero_n,
         "cap_n": cap_n,
+        "inferred_cap_n": inferred_cap_n,
         "zero_rate": zero_rate,
         "cap_rate": cap_rate,
-        "failed": bool(reasons),
-        "detail": detail,
+        "inferred_cap_rate": inferred_cap_n / n if n else None,
+        "failed": failed,
+        "detail": (
+            f"search.run: confirmed candidate-cap rate {cap_rate:.2f} (n={n})" if failed else ""
+        ),
     }
 
 

@@ -202,9 +202,13 @@ def _migrate_frontmatter(metadata: dict[str, Any], path: Path) -> dict[str, Any]
     return metadata
 
 
-def _read_memory_path(path: Path) -> tuple[str, dict[str, Any], str, str | None]:
+def _read_memory_path(
+    path: Path, *, text: str | None = None
+) -> tuple[str, dict[str, Any], str, str | None]:
     try:
-        metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+        if text is None:
+            text = path.read_text(encoding="utf-8")
+        metadata, body = parse_frontmatter(text)
     except (OSError, UnicodeDecodeError, FrontmatterError) as exc:
         return path.stem, {}, "", f"{path}: {exc}"
     # Apply schema migration transparently on every read (no file write).
@@ -227,6 +231,9 @@ def _iter_markdown_files(root: Path) -> Iterable[Path]:
     return sorted(path for path in root.rglob("*.md") if path.is_file())
 
 
+_IGNORED_LOCAL_MEMORY_DIRS = frozenset({"private", "snapshots", "evals", "candidates"})
+
+
 def _is_ignored_local_memory_path(memory_dir: Path, path: Path) -> bool:
     try:
         relative_parts = path.relative_to(memory_dir).parts
@@ -234,7 +241,7 @@ def _is_ignored_local_memory_path(memory_dir: Path, path: Path) -> bool:
         return False
     if path.name == "consolidated_memory.md":
         return True
-    return bool({"private", "snapshots", "evals", "candidates"}.intersection(relative_parts))
+    return bool(_IGNORED_LOCAL_MEMORY_DIRS.intersection(relative_parts))
 
 
 def _is_generated_store_index(memory_dir: Path, path: Path) -> bool:

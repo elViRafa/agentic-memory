@@ -319,7 +319,7 @@ class DiaryAnalyzeTests(_DiaryHome):
         self.assertEqual(search["n"], 0)
         self.assertFalse(search["failed"])
 
-    def test_zero_hit_searches_fail_analyze(self) -> None:
+    def test_zero_hit_searches_are_reported_without_failing_analyze(self) -> None:
         project_id = "eeeeeeeeeeeeeeee"
         events = _healthy_pack_events(project_id)
         for i in range(5):
@@ -338,33 +338,48 @@ class DiaryAnalyzeTests(_DiaryHome):
             )
         self._write_events(events)
         report = analyze_diary(diary=diary_dir())
-        self.assertFalse(report["ok"])
-        project = report["projects"][project_id]
-        self.assertTrue(project["failed"])
-        self.assertTrue(any("zero-hit" in f for f in project["failures"]))
+        self.assertTrue(report["ok"])
+        search = report["projects"][project_id]["signals"]["search_mix"]
+        self.assertEqual(search["zero_n"], 5)
+        self.assertEqual(search["zero_rate"], 1.0)
 
-    def test_candidate_cap_searches_fail_analyze(self) -> None:
-        project_id = "ffffffffffffffff"
-        events = _healthy_pack_events(project_id)
-        for i in range(5):
-            events.append(
-                {
-                    **_base_envelope(project_id, "search.run", f"2026-09-03T13:0{i}:00Z"),
-                    "backend": "ripgrep",
-                    "hit_n": 10,
-                    "ms": 40.0,
-                    "query_len": 18,
-                    "token_n": 3,
-                    "content_token_n": 2,
-                    "candidate_n": 200,
-                    "phrase_hit": False,
-                }
-            )
+    def test_only_confirmed_candidate_cap_searches_fail_analyze(self) -> None:
+        events = []
+        for project_id, backend, count, fields in (
+            ("aaaaaaaaaaaaaaaa", "index", 495, {}),
+            ("bbbbbbbbbbbbbbbb", "ripgrep", 200, {}),
+            ("cccccccccccccccc", "python", 200, {"scan_capped": False}),
+            ("dddddddddddddddd", "ripgrep", 250, {"scan_capped": True}),
+        ):
+            for i in range(5):
+                events.append(
+                    {
+                        **_base_envelope(project_id, "search.run", f"2026-09-03T13:0{i}:00Z"),
+                        "backend": backend,
+                        "hit_n": 10,
+                        "content_token_n": 2,
+                        "candidate_n": count,
+                        **fields,
+                    }
+                )
         self._write_events(events)
-        report = analyze_diary(diary=diary_dir())
+        report = analyze_diary(pack=build_pack()["path"])
         self.assertFalse(report["ok"])
-        project = report["projects"][project_id]
-        self.assertTrue(any("candidate-cap" in f for f in project["failures"]))
+        for project_id, confirmed, inferred in (
+            ("aaaaaaaaaaaaaaaa", 0, 0),
+            ("bbbbbbbbbbbbbbbb", 0, 5),
+            ("cccccccccccccccc", 0, 0),
+            ("dddddddddddddddd", 5, 0),
+        ):
+            with self.subTest(project=project_id):
+                project = report["projects"][project_id]
+                search = project["signals"]["search_mix"]
+                self.assertEqual(search["cap_n"], confirmed)
+                self.assertEqual(search["inferred_cap_n"], inferred)
+                self.assertEqual(project["failed"], bool(confirmed))
+                self.assertEqual(
+                    any("candidate-cap" in f for f in project["failures"]), bool(confirmed)
+                )
 
     def test_few_search_rows_under_minimum_stay_quiet(self) -> None:
         project_id = "1111111111111111"

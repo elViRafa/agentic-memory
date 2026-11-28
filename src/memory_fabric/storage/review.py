@@ -164,9 +164,7 @@ def queue_prose_superseded_reviews(cwd: str, *, max_new: int = 20) -> list[str]:
             continue
         named = extract_named_store_paths(body[:1200])
         successor = next((p for p in named if p != store_path), "")
-        digest = hashlib.md5(f"prose:{store_path}:{successor}".encode("utf-8")).hexdigest()[
-            :10
-        ]
+        digest = hashlib.md5(f"prose:{store_path}:{successor}".encode()).hexdigest()[:10]
         safe = re.sub(r"[^a-z0-9]+", "-", store_path.casefold()).strip("-")[:40]
         review_path = f"reviews/prose-superseded-{safe}-{digest}"
         body_out = (
@@ -233,9 +231,7 @@ def promote_review(cwd: str, store_path: str, target_store_path: str) -> ReviewA
         metadata["promoted_to"] = close_successor
         source.write_text(dump_frontmatter(metadata, body), encoding="utf-8")
         if closed:
-            warnings.append(
-                f"Closed `{close_candidate}` with superseded_by: {close_successor}."
-            )
+            warnings.append(f"Closed `{close_candidate}` with superseded_by: {close_successor}.")
         else:
             warnings.append(
                 f"Promote recorded but `{close_candidate}` was missing or already closed."

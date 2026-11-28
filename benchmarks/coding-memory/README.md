@@ -31,6 +31,8 @@ From the Memory Fabric repo (after `pip install -e .` or `PYTHONPATH=src`):
 ```sh
 ai-memory bench
 ai-memory bench --json
+ai-memory bench --fixture recall
+ai-memory bench --fixture recall --json
 python benchmarks/coding-memory/run.py
 ```
 
@@ -51,21 +53,60 @@ A suite file is a YAML/JSON list of:
     - JWT refresh
 ```
 
+## Field-report cases
+
+The `recall` fixture uses synthetic English and Portuguese questions in a
+temporary store. It covers a current decision, an open-file failure, two stale
+fixes, a closed decision with a successor, a late answer in a long note, and
+questions with no stored answer. The 320-token probe isolates a disagreement
+between the inclusion list and the rendered text. [1.4.6 baseline](recall-baseline-1.4.6.md) ·
+[Step 2 results](recall-step-2.md)
+
+The case definitions record each expected path, phrase, and status. Custom
+YAML and JSON suites can opt in to the same checks by adding `expected_status`.
+Use `matched` for current guidance, `historical_only` for a historical lead,
+or `no_match` for an unanswerable query. The report compares the expected
+status with the task pack's `retrieval_status` and checks the delivered
+source and phrase.
+Optional `files_open` and `max_tokens` configure task context. The
+`search_expected_store_paths` override can specify a separate search target or
+an empty list for an open-file case that expects zero keyword hits.
+
 ## Scoring
 
-For each task the harness runs `keyword_search` and `context_for_task` at top-k
-(default 5):
+- **Keyword search** reports the one-based rank of the first expected source
+  among all hits and the fraction of expected sources in the first five.
+  Queries with zero expected hits pass this check when search returns zero hits.
+- **Task context** reads section markers in the returned text and checks each
+  expected phrase within the expected source fragments. Unanswerable queries
+  pass the evidence check when the text contains zero evidence fragments.
+  Steering can still appear. The report compares rendered section keys with
+  `included_sections` independently.
+- **Memory-off control** uses an empty initialized store. The original fixture
+  and cases with `expected_status` require both memory-on checks to pass,
+  agreement between rendered and listed sections, and absence of the expected
+  evidence in the control.
 
-- **memory-on recall** — fraction of `expected_store_paths` that appear
-- **memory-off recall** — the same queries against an empty initialized store
-- **token hit** — all `expected_tokens` appear in the task pack
-- **lift** — on-recall minus off-recall
+`--k` sets the task pack limit and the legacy search cutoff. The search
+recall-at-five measurement always checks the first five results. The original
+JSON fields remain available. Legacy recall uses the union of search paths
+and inclusion metadata, legacy token hits inspect the whole pack, and lift is
+memory-on recall minus memory-off recall. Existing custom suites that omit
+`expected_status` retain their legacy pass criteria and also report the new
+measurements.
 
-The builtin fixture **passes** only when on-recall is 1.0, off-recall is 0.0,
-every on-side token check hits, and lift is positive.
+## Search latency
 
-This is a retrieval proof, not a statistical study of live agent compliance.
-An optional LLM answer pass can be layered later without changing the fixture.
+Run `python benchmarks/coding-memory/search_latency.py --engine-src src` from
+the repository root to measure cold indexed search and warm p95 on 500
+deterministic notes. The [Step 3 report](recall-step-3.md) includes the
+comparison against 1.4.6 and the separate embedding measurement.
+
+## Paired agent outcomes
+
+Step 4 runs four synthetic tasks in fresh Codex sessions with Memory Fabric on
+and off. The outcome scorer uses workspace changes, tool evidence, and the
+agent's final report. [Fixtures, results, and reproduction](recall-step-4.md)
 
 ## Extract as a standalone repo
 

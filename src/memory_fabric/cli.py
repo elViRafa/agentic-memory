@@ -821,7 +821,7 @@ def build_parser() -> argparse.ArgumentParser:
     bench_parser.add_argument(
         "--fixture",
         default="builtin",
-        help="builtin (default field fixture) or a project path whose store is the memory-on side",
+        help="builtin (original fixture), recall (synthetic field-report cases), or a project path",
     )
     bench_parser.add_argument(
         "--suite",
@@ -829,7 +829,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="YAML/JSON task file ({query, expected_store_paths}). "
         "Default for a project fixture: .ai-memory/evals/bench.yaml",
     )
-    bench_parser.add_argument("--k", type=int, default=5, help="Top-k for retrieval scoring")
+    bench_parser.add_argument(
+        "--k", type=int, default=5, help="Task context limit and legacy cutoff (default 5)"
+    )
 
     eval_parser = add_command("eval", help="Evaluate memory and Dreaming quality")
     eval_parser.add_argument(
@@ -849,11 +851,11 @@ def build_parser() -> argparse.ArgumentParser:
     query_parser.add_argument("--max-results", type=int, default=10)
 
     retrieve_parser = add_command(
-        "retrieve", help="Task-scoped context pack (steering + top-k ranked memories)"
+        "retrieve", help="Task-scoped context pack with steering, passages, and retrieval status"
     )
     retrieve_parser.add_argument("query", help="Natural-language task query")
     retrieve_parser.add_argument(
-        "--files", default="", help="Comma-separated open file paths (boosts related failures)"
+        "--files", default="", help="Comma-separated open file paths (includes related failures)"
     )
     retrieve_parser.add_argument("--max-tokens", type=int, default=None)
 
@@ -1038,13 +1040,13 @@ def _run_diary_command(args: argparse.Namespace, cwd: str, parser: argparse.Argu
         _print_result(result, args.json)
         return 0
     if action == "analyze":
-        result = analyze_diary(
+        analysis_result = analyze_diary(
             pack=getattr(args, "analyze_pack", None),
             diary=getattr(args, "analyze_diary", None),
             project=getattr(args, "analyze_project", None),
         )
-        _print_result(result, args.json)
-        return 0 if result.get("ok") else 1
+        _print_result(analysis_result, args.json)
+        return 0 if analysis_result.get("ok") else 1
     if action == "approve":
         if not _diary_confirmed(args, APPROVE_NOTICE, prompt="Approve the field diary? [y/N]: "):
             _print_result(

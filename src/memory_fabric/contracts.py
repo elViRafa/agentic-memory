@@ -65,6 +65,9 @@ class PackStats(TypedDict):
     warning_codes: list[str]
 
 
+RetrievalStatus = Literal["matched", "historical_only", "no_match", "budget_limited"]
+
+
 class ContextBundle(TypedDict):
     text: str
     included_sections: list[str]
@@ -73,6 +76,7 @@ class ContextBundle(TypedDict):
     estimated_tokens: int
     warnings: list[str]
     pack_stats: NotRequired[PackStats | None]
+    retrieval_status: NotRequired[RetrievalStatus | None]
 
 
 class MemorySection(TypedDict):
@@ -412,6 +416,23 @@ class EvalResult(TypedDict):
     llm_notes: list[str]
 
 
+class BenchSearchScore(TypedDict):
+    hit_count: int
+    first_correct_rank: int | None
+    recall_at_5: float | None
+    passed: bool
+
+
+class BenchContextScore(TypedDict):
+    evidence_fragments: int
+    matched_store_paths: list[str]
+    phrase_hit: bool
+    metadata_only_sections: list[str]
+    text_only_sections: list[str]
+    passed: bool
+    retrieval_status: NotRequired[RetrievalStatus | None]
+
+
 class BenchTaskScore(TypedDict):
     id: str
     query: str
@@ -422,10 +443,17 @@ class BenchTaskScore(TypedDict):
     memory_off_recall: float
     memory_on_token_hit: bool
     memory_off_token_hit: bool
+    expected_tokens: list[str]
+    expected_status: str | None
+    search_expected_store_paths: list[str]
+    search: dict[Literal["memory_on", "memory_off"], BenchSearchScore]
+    task_context: dict[Literal["memory_on", "memory_off"], BenchContextScore]
+    passed: bool
 
 
 class BenchResult(TypedDict):
     kind: Literal["coding-memory"]
+    engine_version: str
     generated_at: str
     fixture: str
     k: int

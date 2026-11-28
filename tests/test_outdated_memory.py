@@ -16,19 +16,19 @@ from memory_fabric.storage import (
     write_session_journal,
 )
 from memory_fabric.storage import dream as _async_dream
-
-
-def dream(*args, **kwargs):
-    return asyncio.run(_async_dream(*args, **kwargs))
 from memory_fabric.storage.close import (
     can_close,
     can_close_by_valid_time,
     clear_age_only_stale_on_standing,
     live_posture_body,
 )
+from memory_fabric.storage.contradictions import Contradiction
 from memory_fabric.storage.ranking import blended_score
 from memory_fabric.storage.review import promote_review, queue_contradiction_reviews
-from memory_fabric.storage.contradictions import Contradiction
+
+
+def dream(*args, **kwargs):
+    return asyncio.run(_async_dream(*args, **kwargs))
 
 
 def _write_store(
@@ -79,10 +79,7 @@ class OutdatedMemoryFieldTests(unittest.TestCase):
             _write_store(
                 temp,
                 "decisions/lab-only-sem-prontuario",
-                (
-                    "# Lab-only\n\n"
-                    "Study uses lab reports only. Chart review is forbidden.\n"
-                ),
+                ("# Lab-only\n\nStudy uses lab reports only. Chart review is forbidden.\n"),
                 last_updated="2026-08-15T12:00:00-03:00",
             )
             pack = context_for_task(
@@ -138,12 +135,8 @@ class OutdatedMemoryFieldTests(unittest.TestCase):
                 "# Defects\n\nv1.2.0 retrieval bugs still open.\n",
                 last_updated="2026-08-15T00:00:00-03:00",
             )
-            pack = context_for_task(
-                temp, "read-path retrieval defects v1.2.0", max_tokens=3000
-            )
-            self.assertIn(
-                "store/debt/read-path-retrieval-defects", pack["included_sections"]
-            )
+            pack = context_for_task(temp, "read-path retrieval defects v1.2.0", max_tokens=3000)
+            self.assertIn("store/debt/read-path-retrieval-defects", pack["included_sections"])
 
             result = write_memory_store(
                 temp,
@@ -155,7 +148,9 @@ class OutdatedMemoryFieldTests(unittest.TestCase):
                 title="Read Path Fixed",
                 priority="high",
             )
-            self.assertTrue(any("Closed `debt/read-path-retrieval-defects`" in w for w in result["warnings"]))
+            self.assertTrue(
+                any("Closed `debt/read-path-retrieval-defects`" in w for w in result["warnings"])
+            )
             closed = read_memory_store(temp, "debt/read-path-retrieval-defects")
             self.assertIn("Closed by `architecture/decisions/read-path-fixed`", closed["text"])
             self.assertEqual(
@@ -165,9 +160,7 @@ class OutdatedMemoryFieldTests(unittest.TestCase):
             self.assertIn(closed["metadata"].get("close_kind"), {"update", "revision"})
             self.assertTrue(str(closed["metadata"].get("closed_at") or "").strip())
 
-            pack2 = context_for_task(
-                temp, "read-path retrieval defects v1.2.0", max_tokens=3000
-            )
+            pack2 = context_for_task(temp, "read-path retrieval defects v1.2.0", max_tokens=3000)
             text2 = pack2["text"]
             self.assertIn(
                 "`store/debt/read-path-retrieval-defects` closed by "
@@ -307,7 +300,7 @@ class OutdatedMemoryFieldTests(unittest.TestCase):
                 "decisions/backfill-note",
                 (
                     "---\n"
-                    "valid_from: \"2026-01-01T00:00:00-03:00\"\n"
+                    'valid_from: "2026-01-01T00:00:00-03:00"\n'
                     "supersedes: decisions/later-rule\n"
                     "---\n\n"
                     "Backfilled earlier belief.\n"
@@ -316,7 +309,10 @@ class OutdatedMemoryFieldTests(unittest.TestCase):
                 priority="high",
             )
             self.assertTrue(
-                any("valid_from` is earlier" in w or "valid_from is earlier" in w for w in result["warnings"]),
+                any(
+                    "valid_from` is earlier" in w or "valid_from is earlier" in w
+                    for w in result["warnings"]
+                ),
                 result["warnings"],
             )
             meta, _ = parse_frontmatter(decision.read_text(encoding="utf-8"))
