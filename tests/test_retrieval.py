@@ -352,7 +352,9 @@ class IndexBuriedFileTests(unittest.TestCase):
             _write_store_file(temp, "decisions/lease", "active_lease_policy")
             os.utime(path, ns=(mtime, mtime + 2_000_000_000))
             self.assertEqual(keyword_search(temp, "legacy_lease_policy"), [])
-            self.assertEqual(keyword_search(temp, "active_lease_policy")[0]["path"], str(path))
+            self.assertEqual(
+                keyword_search(temp, "active_lease_policy")[0]["path"], str(path.resolve())
+            )
 
             path.unlink()
             self.assertEqual(keyword_search(temp, "active_lease_policy"), [])
