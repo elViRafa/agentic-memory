@@ -1,0 +1,371 @@
+{
+  "model": "gpt-6.2-sol",
+  "client": "codex-cli 0.171.0-alpha.13.2",
+  "python": "3.14.0",
+  "mcp_sdk": "1.27.2",
+  "context_budget": 32768,
+  "memory_budget": 1200,
+  "reasoning_effort": "low",
+  "engine_source_sha256": "e03a8e4702b6ea98e50b52367fb528b6e1adcc972328df4a713599bd5cf7cb16",
+  "fixtures_sha256": "dc919a31dcaeb8cd8ee8ba4c85df18c681905bf835ad5011daaf1edb3ff8686f",
+  "scorer_sha256": "d571705b33d62dcd4389252f445cff2debbbcdc7f7978589739900d15509c3a8",
+  "pairs_planned": 4,
+  "pairs_completed": 0,
+  "seeds": {
+    "harbor-columns": {
+      "engine_version": "1.4.6",
+      "mcp_protocol_version": "2025-11-25",
+      "writes": [
+        "decisions/harbor-label-v1",
+        "decisions/harbor-label-release"
+      ],
+      "preflight_status": "matched",
+      "preflight_sources": [
+        "store/decisions/harbor-label-release",
+        "store/decisions/harbor-label-v1"
+      ]
+    },
+    "orchid-line-breaks": {
+      "engine_version": "1.4.6",
+      "mcp_protocol_version": "2025-11-25",
+      "writes": [
+        "failures/orchid-literal-escape"
+      ],
+      "preflight_status": "matched",
+      "preflight_sources": [
+        "store/failures/orchid-literal-escape"
+      ]
+    },
+    "spruce-cache": {
+      "engine_version": "1.4.6",
+      "mcp_protocol_version": "2025-11-25",
+      "writes": [
+        "episodic/spruce-cache-fix"
+      ],
+      "preflight_status": "historical_only",
+      "preflight_sources": [
+        "store/episodic/spruce-cache-fix"
+      ]
+    },
+    "juniper-routing": {
+      "engine_version": "1.4.6",
+      "mcp_protocol_version": "2025-11-25",
+      "writes": [
+        "decisions/juniper-rollout-gate"
+      ],
+      "preflight_status": "matched",
+      "preflight_sources": [
+        "store/decisions/juniper-rollout-gate"
+      ]
+    }
+  },
+  "runs": [
+    {
+      "case": "harbor-columns",
+      "arm": "on",
+      "status": "unavailable",
+      "session": "unavailable-session-01",
+      "snapshot_sha256": "c563eaeb70d7f13b4971a2e12e8461e159d475fa495c8162aecde01822dd22da",
+      "prompt_sha256": "6db9ac8444983a1a6500ad828f53275b55cbae38810d949583fc104ed4a36de1",
+      "tokens": {
+        "input_tokens": 40377,
+        "cached_input_tokens": 26112,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 209,
+        "reasoning_output_tokens": 0
+      },
+      "tool_calls": [
+        "list_files",
+        "lookup_history",
+        "read_file"
+      ],
+      "final": {
+        "status": "blocked",
+        "summary": "The approval policy blocked the trial workspace tools from reading labels.json and looking up the approved Harbor export order. No changes were made.",
+        "requested_evidence": [
+          "The release approval record or the exact approved column order",
+          "The current contents of labels.json if trial workspace access remains unavailable"
+        ]
+      },
+      "workspace_calls": [],
+      "changed_paths": [],
+      "files_after": {
+        "labels.json": {
+          "format": "csv",
+          "columns": [
+            "parcel_id",
+            "depot",
+            "service"
+          ]
+        },
+        "README.md": "# Harbor label export\n\nlabels.json sets the column order for the label vendor export. The export supports the columns depot, parcel_id and service. Preserve the format and scope of the configuration.\n"
+      },
+      "reason": "Codex approval policy denied calls to the workspace MCP server."
+    },
+    {
+      "case": "harbor-columns",
+      "arm": "off",
+      "status": "unavailable",
+      "session": "unavailable-session-02",
+      "snapshot_sha256": "c563eaeb70d7f13b4971a2e12e8461e159d475fa495c8162aecde01822dd22da",
+      "prompt_sha256": "6db9ac8444983a1a6500ad828f53275b55cbae38810d949583fc104ed4a36de1",
+      "tokens": {
+        "input_tokens": 40382,
+        "cached_input_tokens": 36224,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 219,
+        "reasoning_output_tokens": 0
+      },
+      "tool_calls": [
+        "list_files",
+        "lookup_history",
+        "read_file"
+      ],
+      "final": {
+        "status": "blocked",
+        "summary": "The trial tools rejected checkout inspection and history lookup because tool approval is disabled. I couldn’t verify the approved column order or update labels.json.",
+        "requested_evidence": [
+          "Provide the approved column order or the release decision that records it, along with the current contents of labels.json, if trial workspace access remains unavailable."
+        ]
+      },
+      "workspace_calls": [],
+      "changed_paths": [],
+      "files_after": {
+        "labels.json": {
+          "format": "csv",
+          "columns": [
+            "parcel_id",
+            "depot",
+            "service"
+          ]
+        },
+        "README.md": "# Harbor label export\n\nlabels.json sets the column order for the label vendor export. The export supports the columns depot, parcel_id and service. Preserve the format and scope of the configuration.\n"
+      },
+      "reason": "Codex approval policy denied calls to the workspace MCP server."
+    },
+    {
+      "case": "orchid-line-breaks",
+      "arm": "off",
+      "status": "unavailable",
+      "session": "unavailable-session-03",
+      "snapshot_sha256": "e3d439acfc14e10c81f653cf7c3d014a1b19439bc51a9c2886305fcdc2b291da",
+      "prompt_sha256": "36c6a347130fe3e7bfd27169a8752023c7aef12125ea929adae9e063dcc83b9f",
+      "tokens": {
+        "input_tokens": 40410,
+        "cached_input_tokens": 26112,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 222,
+        "reasoning_output_tokens": 0
+      },
+      "tool_calls": [
+        "read_file",
+        "list_files",
+        "lookup_history"
+      ],
+      "final": {
+        "status": "blocked",
+        "summary": "The trial workspace tools require approval, and the session’s approval policy prevented checkout inspection and history lookup. orchid.json remains unchanged.",
+        "requested_evidence": [
+          "The current orchid.json and any exporter code or fixtures that define how notes are serialized.",
+          "Vendor importer documentation or a known-good import sample showing how multiline notes are encoded."
+        ]
+      },
+      "workspace_calls": [],
+      "changed_paths": [],
+      "files_after": {
+        "orchid.json": {
+          "line_break_mode": "reject",
+          "single_line_mode": "passthrough"
+        },
+        "README.md": "# Orchid batch-note exporter\n\norchid.json configures the exporter. line_break_mode supports reject, literal_escape (backslash escapes), and base64_utf8 (a tagged UTF-8 payload when the note spans lines). Preserve the single_line_mode unless asked to change it. The import service is external.\n"
+      },
+      "reason": "Codex approval policy denied calls to the workspace MCP server."
+    },
+    {
+      "case": "orchid-line-breaks",
+      "arm": "on",
+      "status": "unavailable",
+      "session": "unavailable-session-04",
+      "snapshot_sha256": "e3d439acfc14e10c81f653cf7c3d014a1b19439bc51a9c2886305fcdc2b291da",
+      "prompt_sha256": "36c6a347130fe3e7bfd27169a8752023c7aef12125ea929adae9e063dcc83b9f",
+      "tokens": {
+        "input_tokens": 54586,
+        "cached_input_tokens": 50176,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 233,
+        "reasoning_output_tokens": 0
+      },
+      "tool_calls": [
+        "read_file",
+        "list_files",
+        "lookup_history"
+      ],
+      "final": {
+        "status": "blocked",
+        "summary": "The trial tools require approval to list files, read orchid.json, and look up project history. This session cannot grant approval, so orchid.json is unchanged.",
+        "requested_evidence": [
+          "A session with trial workspace read and write access, or the current orchid.json and a vendor importer example showing the expected multiline note format."
+        ]
+      },
+      "workspace_calls": [],
+      "changed_paths": [],
+      "files_after": {
+        "orchid.json": {
+          "line_break_mode": "reject",
+          "single_line_mode": "passthrough"
+        },
+        "README.md": "# Orchid batch-note exporter\n\norchid.json configures the exporter. line_break_mode supports reject, literal_escape (backslash escapes), and base64_utf8 (a tagged UTF-8 payload when the note spans lines). Preserve the single_line_mode unless asked to change it. The import service is external.\n"
+      },
+      "reason": "Codex approval policy denied calls to the workspace MCP server."
+    },
+    {
+      "case": "spruce-cache",
+      "arm": "on",
+      "status": "unavailable",
+      "session": "unavailable-session-05",
+      "snapshot_sha256": "40553e69427ca2001331f20f1d4559a4b1da09b3057cdc392a2f8359977884ca",
+      "prompt_sha256": "5f99f883b70b4c30e8022fd48d2f07e823405e5c03d24304ddbb4968bd8f2bd5",
+      "tokens": {
+        "input_tokens": 54605,
+        "cached_input_tokens": 40064,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 261,
+        "reasoning_output_tokens": 18
+      },
+      "tool_calls": [
+        "list_files",
+        "lookup_history",
+        "read_file"
+      ],
+      "final": {
+        "status": "blocked",
+        "summary": "The Spruce manifest cache collision fix remains unverified on this checkout. The trial workspace tools rejected file listing, file reading, and project history lookup because they require approval and approval is disabled. No cache probe ran. The workspace was left unchanged.",
+        "requested_evidence": [
+          "The current checkout’s cache-key implementation and the probe output for the previously reported colliding manifest pair, including both input records and their resulting keys."
+        ]
+      },
+      "workspace_calls": [],
+      "changed_paths": [],
+      "files_after": {
+        "README.md": "# Spruce manifest cache\n\nManifest records contain warehouse, route, and revision. The key dimensions in spruce.json determine which record fields the cache uses. The workspace probe computes the production key for two supplied manifest records and reports whether they collide.\n",
+        "spruce.json": {
+          "key_dimensions": [
+            "warehouse",
+            "route"
+          ]
+        }
+      },
+      "reason": "Codex approval policy denied calls to the workspace MCP server."
+    },
+    {
+      "case": "spruce-cache",
+      "arm": "off",
+      "status": "unavailable",
+      "session": "unavailable-session-06",
+      "snapshot_sha256": "40553e69427ca2001331f20f1d4559a4b1da09b3057cdc392a2f8359977884ca",
+      "prompt_sha256": "5f99f883b70b4c30e8022fd48d2f07e823405e5c03d24304ddbb4968bd8f2bd5",
+      "tokens": {
+        "input_tokens": 54628,
+        "cached_input_tokens": 40064,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 269,
+        "reasoning_output_tokens": 0
+      },
+      "tool_calls": [
+        "list_files",
+        "lookup_history",
+        "probe_cache"
+      ],
+      "final": {
+        "status": "blocked",
+        "summary": "The Spruce manifest cache collision fix remains unverified on this checkout. The trial tools rejected the file listing, project history lookup, and cache-key probe because tool calls require approval and the session cannot grant it. The workspace was left unchanged.",
+        "requested_evidence": [
+          "A trial session with read and probe access, or the original collision records and their cache-key probe output from this checkout."
+        ]
+      },
+      "workspace_calls": [],
+      "changed_paths": [],
+      "files_after": {
+        "README.md": "# Spruce manifest cache\n\nManifest records contain warehouse, route, and revision. The key dimensions in spruce.json determine which record fields the cache uses. The workspace probe computes the production key for two supplied manifest records and reports whether they collide.\n",
+        "spruce.json": {
+          "key_dimensions": [
+            "warehouse",
+            "route"
+          ]
+        }
+      },
+      "reason": "Codex approval policy denied calls to the workspace MCP server."
+    },
+    {
+      "case": "juniper-routing",
+      "arm": "off",
+      "status": "unavailable",
+      "session": "unavailable-session-07",
+      "snapshot_sha256": "33e93b88b4f36b0fdaed9020fe754ee2de83a77e2a2d888bfd1952f9642c67a8",
+      "prompt_sha256": "d2a089d6321f579179937488493ea63a9f89ec50d6af0e8815c9e9f89706325a",
+      "tokens": {
+        "input_tokens": 63721,
+        "cached_input_tokens": 50432,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 268,
+        "reasoning_output_tokens": 0
+      },
+      "tool_calls": [
+        "list_files",
+        "lookup_history",
+        "read_file"
+      ],
+      "final": {
+        "status": "blocked",
+        "summary": "The Juniper routing selection is unchanged. The trial tools rejected checkout inspection and history lookup because they require approval and this session cannot grant it. The workspace is read-only, so I couldn’t verify the rollout decision or apply a change.",
+        "requested_evidence": [
+          "Restore trial workspace tool access, or share the current routing configuration and the rollout decision or verification notes that identify the intended selection."
+        ]
+      },
+      "workspace_calls": [],
+      "changed_paths": [],
+      "files_after": {
+        "juniper.json": {
+          "rollout_lane": "north_loop"
+        },
+        "README.md": "# Juniper warehouse routing\n\nThe active lanes are north_loop and canal_loop. juniper.json carries the present selection. The next rollout needs a confirmed lane assignment from the warehouse team.\n"
+      },
+      "reason": "Codex approval policy denied calls to the workspace MCP server."
+    },
+    {
+      "case": "juniper-routing",
+      "arm": "on",
+      "status": "unavailable",
+      "session": "unavailable-session-08",
+      "snapshot_sha256": "33e93b88b4f36b0fdaed9020fe754ee2de83a77e2a2d888bfd1952f9642c67a8",
+      "prompt_sha256": "d2a089d6321f579179937488493ea63a9f89ec50d6af0e8815c9e9f89706325a",
+      "tokens": {
+        "input_tokens": 40193,
+        "cached_input_tokens": 25856,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 242,
+        "reasoning_output_tokens": 22
+      },
+      "tool_calls": [
+        "list_files",
+        "lookup_history"
+      ],
+      "final": {
+        "status": "blocked",
+        "summary": "The approval policy rejected both the trial checkout listing and the project history lookup. I couldn’t determine the intended Juniper route or verify rollout prerequisites. No configuration was changed.",
+        "requested_evidence": [
+          "The current Juniper routing config and the rollout decision record, including the warehouse, selected route, revision, and any required verification results."
+        ]
+      },
+      "workspace_calls": [],
+      "changed_paths": [],
+      "files_after": {
+        "juniper.json": {
+          "rollout_lane": "north_loop"
+        },
+        "README.md": "# Juniper warehouse routing\n\nThe active lanes are north_loop and canal_loop. juniper.json carries the present selection. The next rollout needs a confirmed lane assignment from the warehouse team.\n"
+      },
+      "reason": "Codex approval policy denied calls to the workspace MCP server."
+    }
+  ]
+}

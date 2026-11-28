@@ -68,6 +68,7 @@ _BY_EVENT: dict[str, frozenset[str]] = {
             "token_n",
             "content_token_n",
             "candidate_n",
+            "scan_capped",
             "phrase_hit",
             "top_hit_role",
             "top_hit_score",

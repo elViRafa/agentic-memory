@@ -11,24 +11,28 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import json
+import os
 import sqlite3
+import stat
+from collections.abc import Iterator
 from dataclasses import dataclass
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any
 
 from memory_fabric.paths import local_memory_dir
+from memory_fabric.storage._evidence import note_rank_text
 from memory_fabric.storage._shared import (
-    _is_ignored_local_memory_path,
+    _IGNORED_LOCAL_MEMORY_DIRS,
     _is_steering_file,
     _is_store_path,
-    _iter_markdown_files,
     _path_to_store_path,
     _read_memory_path,
     estimate_tokens,
 )
 from memory_fabric.storage.ranking import tokenize
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _CREATE_SQL = """
 CREATE TABLE IF NOT EXISTS meta (
@@ -46,6 +50,7 @@ CREATE TABLE IF NOT EXISTS files (
     last_updated TEXT,
     review_status TEXT,
     superseded_by TEXT,
+    role TEXT,
     body_tokens INTEGER,
     content_hash TEXT,
     mtime REAL,
@@ -77,6 +82,7 @@ class IndexRow:
     is_map: bool
     rank_text: str
     path: Path
+    role: str = ""
 
 
 def index_db_path(memory_dir: Path) -> Path:
@@ -131,6 +137,29 @@ def _open(db_path: Path) -> sqlite3.Connection | None:
         return None
 
 
+def _file_mtimes(memory_dir: Path) -> Iterator[tuple[Path, float]]:
+    """Walk markdown once, reusing directory-entry metadata where available."""
+    pending = [memory_dir]
+    while pending:
+        directory = pending.pop()
+        try:
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    if entry.name in _IGNORED_LOCAL_MEMORY_DIRS:
+                        continue
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            pending.append(Path(entry.path))
+                        elif entry.name != "consolidated_memory.md" and fnmatch(entry.name, "*.md"):
+                            file_stat = entry.stat()
+                            if stat.S_ISREG(file_stat.st_mode):
+                                yield Path(entry.path), file_stat.st_mtime
+                    except OSError:
+                        continue
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+
+
 def sync_index(cwd: str) -> sqlite3.Connection | None:
     """Incrementally update the index. Returns None on any failure."""
     memory_dir = local_memory_dir(cwd)
@@ -145,18 +174,9 @@ def sync_index(cwd: str) -> sqlite3.Connection | None:
             for row in conn.execute("SELECT relpath, mtime, content_hash FROM files")
         }
         seen: set[str] = set()
-        for path in _iter_markdown_files(memory_dir):
-            if _is_ignored_local_memory_path(memory_dir, path):
-                continue
-            try:
-                relpath = path.relative_to(memory_dir).as_posix()
-            except ValueError:
-                continue
+        for path, mtime in sorted(_file_mtimes(memory_dir)):
+            relpath = path.relative_to(memory_dir).as_posix()
             seen.add(relpath)
-            try:
-                mtime = path.stat().st_mtime
-            except OSError:
-                continue
             prev = existing.get(relpath)
             if prev is not None and abs(prev[0] - mtime) < 1e-6:
                 continue
@@ -168,7 +188,7 @@ def sync_index(cwd: str) -> sqlite3.Connection | None:
             if prev is not None and prev[1] == digest:
                 conn.execute("UPDATE files SET mtime = ? WHERE relpath = ?", (mtime, relpath))
                 continue
-            section_name, metadata, body, warning = _read_memory_path(path)
+            section_name, metadata, body, warning = _read_memory_path(path, text=raw)
             if warning:
                 continue
             title = str(metadata.get("title") or section_name)
@@ -181,16 +201,14 @@ def sync_index(cwd: str) -> sqlite3.Connection | None:
                     store_path = _path_to_store_path(memory_dir / "memory-store", path)
                 except ValueError:
                     store_path = ""
-            rank_text = " ".join(
-                part for part in (title, summary, " ".join(str(t) for t in tags), body) if part
-            )
+            rank_text = note_rank_text(path.stem, metadata, body)
             conn.execute(
                 """
                 INSERT INTO files (
                     relpath, section_key, store_path, priority, title, summary, tags,
-                    last_updated, review_status, superseded_by, body_tokens, content_hash,
+                    last_updated, review_status, superseded_by, role, body_tokens, content_hash,
                     mtime, is_generated, is_steering, is_map, rank_text
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(relpath) DO UPDATE SET
                     section_key=excluded.section_key,
                     store_path=excluded.store_path,
@@ -201,6 +219,7 @@ def sync_index(cwd: str) -> sqlite3.Connection | None:
                     last_updated=excluded.last_updated,
                     review_status=excluded.review_status,
                     superseded_by=excluded.superseded_by,
+                    role=excluded.role,
                     body_tokens=excluded.body_tokens,
                     content_hash=excluded.content_hash,
                     mtime=excluded.mtime,
@@ -220,6 +239,7 @@ def sync_index(cwd: str) -> sqlite3.Connection | None:
                     str(metadata.get("last_updated") or ""),
                     str(metadata.get("review_status") or ""),
                     str(metadata.get("superseded_by") or ""),
+                    str(metadata.get("role") or ""),
                     estimate_tokens(raw),
                     digest,
                     mtime,
@@ -272,6 +292,7 @@ def load_rows(conn: sqlite3.Connection, memory_dir: Path) -> list[IndexRow]:
                     is_map=bool(row["is_map"]),
                     rank_text=row["rank_text"] or "",
                     path=memory_dir / row["relpath"],
+                    role=row["role"] or "",
                 )
             )
     except sqlite3.Error:

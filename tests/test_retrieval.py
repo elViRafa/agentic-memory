@@ -341,6 +341,22 @@ class IndexBuriedFileTests(unittest.TestCase):
             self.assertEqual(results[0]["section"], "store:frontend/zones")
             self.assertEqual(results[0]["backend"], "python")
 
+    def test_warm_index_search_detects_edits_and_deletions(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            initialize_memory_fabric(temp)
+            _write_store_file(temp, "decisions/lease", "legacy_lease_policy")
+            path = Path(temp) / ".ai-memory" / "memory-store" / "decisions" / "lease.md"
+            self.assertEqual(keyword_search(temp, "legacy_lease_policy")[0]["backend"], "index")
+            mtime = path.stat().st_mtime_ns
+
+            _write_store_file(temp, "decisions/lease", "active_lease_policy")
+            os.utime(path, ns=(mtime, mtime + 2_000_000_000))
+            self.assertEqual(keyword_search(temp, "legacy_lease_policy"), [])
+            self.assertEqual(keyword_search(temp, "active_lease_policy")[0]["path"], str(path))
+
+            path.unlink()
+            self.assertEqual(keyword_search(temp, "active_lease_policy"), [])
+
 
 class SemanticSearchTests(unittest.TestCase):
     def tearDown(self) -> None:

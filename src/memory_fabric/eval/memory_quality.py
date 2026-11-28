@@ -487,9 +487,9 @@ def _sentence_search_probe(cwd: str) -> EvalCheck:
     phrase-only search missed in the field.
     """
     from memory_fabric.paths import memory_store_dir
+    from memory_fabric.storage._evidence import query_tokens
     from memory_fabric.storage._shared import _iter_markdown_files, _path_to_store_path
-    from memory_fabric.storage.ranking import tokenize
-    from memory_fabric.storage.search import _STOPWORDS, keyword_search
+    from memory_fabric.storage.search import keyword_search
 
     store = memory_store_dir(cwd)
     files: list[tuple[str, str, list[str]]] = []
@@ -502,11 +502,7 @@ def _sentence_search_probe(cwd: str) -> EvalCheck:
                 _metadata, body = parse_frontmatter(path.read_text(encoding="utf-8"))
             except (OSError, UnicodeDecodeError, FrontmatterError):
                 continue
-            unique: list[str] = []
-            for token in tokenize(body):
-                if token in _STOPWORDS or len(token) < 2 or token in unique:
-                    continue
-                unique.append(token)
+            _, unique = query_tokens(body)
             unique.sort(key=len, reverse=True)
             unique = unique[:12]
             if len(unique) < 2:
@@ -673,10 +669,8 @@ def _live_posture_pack_probe(cwd: str, memory_dir: Path) -> EvalCheck | None:
             "live_posture_pack_probe",
             "fail",
             "high",
-            f"query='current posture' leaked superseded files {leaked}; "
-            f"posture hits={hit}",
-            "Keep superseded_by files out of the posture pack "
-            "(closed-by one-liners are allowed).",
+            f"query='current posture' leaked superseded files {leaked}; posture hits={hit}",
+            "Keep superseded_by files out of the posture pack (closed-by one-liners are allowed).",
         )
     return _check(
         "live_posture_pack_probe",
@@ -1127,11 +1121,11 @@ def _evaluate_metadata_quality(
         )
 
     for steering in ("framework-rules", "ubiquitous-language"):
-        info = sections.get(steering)
+        steering_section = sections.get(steering)
         if (
-            info
-            and not info.get("error")
-            and steering_body_is_placeholder(str(info.get("body") or ""))
+            steering_section
+            and not steering_section.get("error")
+            and steering_body_is_placeholder(str(steering_section.get("body") or ""))
         ):
             checks.append(
                 _check(

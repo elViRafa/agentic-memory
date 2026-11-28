@@ -157,11 +157,7 @@ def demote_sibling_next_session_files(
     if not folder.is_dir():
         return []
     current = "/".join(parts)
-    keep = {
-        p.replace("\\", "/").strip("/")
-        for p in (keep_paths or [])
-        if str(p).strip()
-    }
+    keep = {p.replace("\\", "/").strip("/") for p in (keep_paths or []) if str(p).strip()}
     demoted: list[str] = []
     for path in folder.rglob("*.md"):
         relative = path.relative_to(store_root).as_posix()
@@ -181,9 +177,7 @@ def demote_sibling_next_session_files(
         if str(metadata.get("superseded_by") or "").strip() != current:
             from memory_fabric.storage.close import apply_close_metadata
 
-            metadata = apply_close_metadata(
-                metadata, successor=current, close_kind="update"
-            )
+            metadata = apply_close_metadata(metadata, successor=current, close_kind="update")
             changed = True
         if not changed:
             continue

@@ -66,7 +66,7 @@ def _cli_binary_works(path: Path) -> bool:
         # TypeError/AttributeError: tests may stub subprocess.run with a Mock.
         return False
     try:
-        code = int(proc.returncode)  # type: ignore[arg-type]
+        code = int(proc.returncode)
     except (TypeError, ValueError):
         return False
     if code != 0:
@@ -102,7 +102,7 @@ def resolve_cli_binary() -> tuple[str, str | None]:
             # pip --user on Windows: .../PythonXY/site-packages → .../PythonXY/Scripts
             candidates.append(Path(user_site).parent / "Scripts" / exe_name)
             candidates.append(Path(user_site).parent / "bin" / exe_name)
-    except Exception:  # noqa: BLE001 - site may be unavailable in frozen embeds
+    except Exception:  # noqa: BLE001, S110 - site may be unavailable in frozen embeds
         pass
     on_path = shutil.which("ai-memory")
     if on_path:

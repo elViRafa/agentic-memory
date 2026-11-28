@@ -178,11 +178,24 @@ class ToolContractTests(unittest.TestCase):
             async with mcp_session() as session:
                 ok = structured(await session.call_tool("read_combined_context_tool", {"cwd": tmp}))
                 self.assertIn("text", ok)
+                self.assertIsNone(ok.get("retrieval_status"))
 
                 bad = await session.call_tool(
                     "read_combined_context_tool", {"cwd": str(Path(tmp) / "nope")}
                 )
                 self.assertIn("does not exist", error_text(bad))
+
+    @async_test
+    async def test_context_for_task_tool_reports_a_miss(self) -> None:
+        with _tmp_project() as tmp:
+            async with mcp_session() as session:
+                pack = structured(
+                    await session.call_tool(
+                        "context_for_task_tool", {"cwd": tmp, "query": "NONEXISTENT_POLICY_72"}
+                    )
+                )
+                self.assertEqual(pack["retrieval_status"], "no_match")
+                self.assertFalse(any(key.startswith("store/") for key in pack["included_sections"]))
 
     @async_test
     async def test_read_section_tool(self) -> None:

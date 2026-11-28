@@ -8,6 +8,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-11-28
+
+### Added
+
+- **Explicit recall status.** Queried task packs report `matched`,
+  `historical_only`, `no_match`, or `budget_limited` through the CLI and MCP.
+- **Recall benchmarks.** The `ai-memory bench --fixture recall` suite checks
+  search rank and delivered passages separately, including queries with no
+  supporting evidence.
+
+### Changed
+
+- **Evidence selection.** Task packs require a query or open-file match for
+  retrieved notes while retaining required steering. Long notes return
+  query-centered passages. Stale fixes can appear as labeled historical leads,
+  and closed matches can point to eligible successor notes.
+- **Indexed search.** Index refresh reuses directory-entry metadata and caches
+  text analysis across queries. On the controlled 500-note lexical fixture,
+  warm p95 went from 293.8 ms in 1.4.6 to 65.1 ms in the candidate.
+
+### Fixed
+
+- Task pack section counts and token statistics reflect the rendered fragments
+  after final budget trimming.
+- Diary analysis counts confirmed caps on fallback scans. It reports legacy
+  inferred caps separately and excludes indexed candidate counts from that gate.
+
 ## [1.4.6] — 2026-11-18
 
 ### Added
@@ -853,7 +880,8 @@ with those fixed the final score is **96/100 with zero failing checks**
   {ubuntu, windows, macos} × {3.11–3.14}; `storage/_core.py` god module split
   into 12 focused modules.
 
-[Unreleased]: https://github.com/elViRafa/agentic-memory/compare/v1.4.1...HEAD
+[Unreleased]: https://github.com/elViRafa/agentic-memory/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/elViRafa/agentic-memory/compare/v1.4.6...v1.5.0
 [1.4.1]: https://github.com/elViRafa/agentic-memory/compare/v1.4.0...v1.4.1
 [1.4.0]: https://github.com/elViRafa/agentic-memory/compare/v1.3.1...v1.4.0
 [1.3.1]: https://github.com/elViRafa/agentic-memory/compare/v1.3.0...v1.3.1

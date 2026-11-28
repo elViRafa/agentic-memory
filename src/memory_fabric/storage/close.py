@@ -9,12 +9,13 @@ stronger one.
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from memory_fabric.diary.roles import classify_role
 from memory_fabric.frontmatter import FrontmatterError, dump_frontmatter, parse_frontmatter
-from memory_fabric.storage._shared import _iter_markdown_files, _path_to_store_path
+from memory_fabric.storage._shared import _iter_markdown_files
 from memory_fabric.templates import now_iso
 
 # Higher number = more entrenched. A writer may close only a target whose
@@ -38,9 +39,7 @@ ENTRENCHMENT_RANK: dict[str, int] = {
 # Age-based ``review_status: stale`` must never hit these roles.
 STANDING_ROLES = frozenset({"steering", "tier0", "decisions", "schema", "architecture"})
 
-_SUPERSEDES_LINE_RE = re.compile(
-    r"(?im)^\s*supersedes\s*:\s*(.+?)\s*$"
-)
+_SUPERSEDES_LINE_RE = re.compile(r"(?im)^\s*supersedes\s*:\s*(.+?)\s*$")
 _STORE_PATH_TOKEN_RE = re.compile(
     r"\b([a-z][a-z0-9_-]*(?:/[a-z0-9][a-z0-9_-]*)+)\b",
     re.IGNORECASE,
@@ -98,9 +97,7 @@ def can_close(writer_role: str | None, target_role: str | None) -> bool:
     return entrenchment_rank(writer_role) >= entrenchment_rank(target_role)
 
 
-def _parse_iso(value: str | None):
-    from datetime import datetime
-
+def _parse_iso(value: str | None) -> datetime | None:
     text = (value or "").strip()
     if not text:
         return None
@@ -255,9 +252,7 @@ def clear_age_only_stale_on_standing(
             store_path = rel[len("memory-store/") :]
             if store_path.endswith(".md"):
                 store_path = store_path[:-3]
-            role = role_for_store_path(
-                store_path, role=str(metadata.get("role") or "") or None
-            )
+            role = role_for_store_path(store_path, role=str(metadata.get("role") or "") or None)
             key = f"store/{store_path}"
         else:
             role = role_for_section_key(
@@ -338,9 +333,7 @@ def live_posture_body(body: str) -> tuple[str, list[str]]:
     undated = [s for s in sections if s[0] == "0000-00-00"]
     if not dated:
         named = extract_named_store_paths(body)
-        return (body or "").strip() + "\n", [
-            p for p in named if "next-session" in p.lower()
-        ]
+        return (body or "").strip() + "\n", [p for p in named if "next-session" in p.lower()]
 
     latest_key = max(s[0] for s in dated)
     latest = [s for s in dated if s[0] == latest_key][-1]
@@ -360,11 +353,7 @@ def live_posture_body(body: str) -> tuple[str, list[str]]:
     parts.append(latest_block)
 
     packed = "\n\n".join(parts).strip() + "\n"
-    named = [
-        p
-        for p in extract_named_store_paths(latest[2])
-        if "next-session" in p.lower()
-    ]
+    named = [p for p in extract_named_store_paths(latest[2]) if "next-session" in p.lower()]
     # Also keep bare ``Next: ...`` targets that are store paths.
     for match in _NEXT_STEP_RE.finditer(latest[2]):
         for path in extract_named_store_paths(match.group(1)):

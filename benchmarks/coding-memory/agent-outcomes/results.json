@@ -1,0 +1,814 @@
+{
+  "model": "gpt-6.2-sol",
+  "client": "codex-cli 0.171.0-alpha.13.2",
+  "python": "3.14.0",
+  "mcp_sdk": "1.27.2",
+  "context_budget": 32768,
+  "memory_budget": 1200,
+  "reasoning_effort": "low",
+  "engine_source_sha256": "e03a8e4702b6ea98e50b52367fb528b6e1adcc972328df4a713599bd5cf7cb16",
+  "fixtures_sha256": "dc919a31dcaeb8cd8ee8ba4c85df18c681905bf835ad5011daaf1edb3ff8686f",
+  "scorer_sha256": "d571705b33d62dcd4389252f445cff2debbbcdc7f7978589739900d15509c3a8",
+  "pairs_planned": 4,
+  "pairs_completed": 4,
+  "seeds": {
+    "harbor-columns": {
+      "engine_version": "1.4.6",
+      "mcp_protocol_version": "2025-11-25",
+      "writes": [
+        "decisions/harbor-label-v1",
+        "decisions/harbor-label-release"
+      ],
+      "preflight_status": "matched",
+      "preflight_sources": [
+        "store/decisions/harbor-label-release",
+        "store/decisions/harbor-label-v1"
+      ]
+    },
+    "orchid-line-breaks": {
+      "engine_version": "1.4.6",
+      "mcp_protocol_version": "2025-11-25",
+      "writes": [
+        "failures/orchid-literal-escape"
+      ],
+      "preflight_status": "matched",
+      "preflight_sources": [
+        "store/failures/orchid-literal-escape"
+      ]
+    },
+    "spruce-cache": {
+      "engine_version": "1.4.6",
+      "mcp_protocol_version": "2025-11-25",
+      "writes": [
+        "episodic/spruce-cache-fix"
+      ],
+      "preflight_status": "historical_only",
+      "preflight_sources": [
+        "store/episodic/spruce-cache-fix"
+      ]
+    },
+    "juniper-routing": {
+      "engine_version": "1.4.6",
+      "mcp_protocol_version": "2025-11-25",
+      "writes": [
+        "decisions/juniper-rollout-gate"
+      ],
+      "preflight_status": "matched",
+      "preflight_sources": [
+        "store/decisions/juniper-rollout-gate"
+      ]
+    }
+  },
+  "runs": [
+    {
+      "case": "harbor-columns",
+      "arm": "on",
+      "status": "completed",
+      "session": "scored-session-01",
+      "snapshot_sha256": "c563eaeb70d7f13b4971a2e12e8461e159d475fa495c8162aecde01822dd22da",
+      "prompt_sha256": "6db9ac8444983a1a6500ad828f53275b55cbae38810d949583fc104ed4a36de1",
+      "tokens": {
+        "input_tokens": 86501,
+        "cached_input_tokens": 70784,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 320,
+        "reasoning_output_tokens": 0
+      },
+      "tool_calls": [
+        "list_files",
+        "read_file",
+        "lookup_history",
+        "read_file",
+        "write_config",
+        "read_file"
+      ],
+      "final": {
+        "status": "verified",
+        "summary": "Updated labels.json to the approved Harbor release order: depot, service, parcel_id. Verified that the saved configuration uses that order and retains CSV format.",
+        "requested_evidence": []
+      },
+      "tool_approval_denials": [],
+      "workspace_calls": [
+        {
+          "tool": "list_files"
+        },
+        {
+          "tool": "read_file",
+          "path": "labels.json"
+        },
+        {
+          "tool": "lookup_history",
+          "query": "Harbor next release labels.json approved export column order, release approval and verification",
+          "files_open": null,
+          "retrieval_status": "matched",
+          "included_sections": [
+            "store/decisions/harbor-label-release",
+            "store/decisions/harbor-label-v1"
+          ],
+          "estimated_tokens": 190
+        },
+        {
+          "tool": "read_file",
+          "path": "README.md"
+        },
+        {
+          "tool": "write_config",
+          "path": "labels.json",
+          "value": {
+            "format": "csv",
+            "columns": [
+              "depot",
+              "service",
+              "parcel_id"
+            ]
+          },
+          "changed": true
+        },
+        {
+          "tool": "read_file",
+          "path": "labels.json"
+        }
+      ],
+      "changed_paths": [
+        "labels.json"
+      ],
+      "files_after": {
+        "labels.json": {
+          "format": "csv",
+          "columns": [
+            "depot",
+            "service",
+            "parcel_id"
+          ]
+        },
+        "README.md": "# Harbor label export\n\nlabels.json sets the column order for the label vendor export. The export supports the columns depot, parcel_id and service. Preserve the format and scope of the configuration.\n"
+      },
+      "score": {
+        "correct": false,
+        "checks": {
+          "reported_status": false,
+          "workspace_matches": true
+        },
+        "repeated_mistake": null,
+        "unnecessary_change": null
+      }
+    },
+    {
+      "case": "harbor-columns",
+      "arm": "off",
+      "status": "completed",
+      "session": "scored-session-02",
+      "snapshot_sha256": "c563eaeb70d7f13b4971a2e12e8461e159d475fa495c8162aecde01822dd22da",
+      "prompt_sha256": "6db9ac8444983a1a6500ad828f53275b55cbae38810d949583fc104ed4a36de1",
+      "tokens": {
+        "input_tokens": 64263,
+        "cached_input_tokens": 57728,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 315,
+        "reasoning_output_tokens": 0
+      },
+      "tool_calls": [
+        "lookup_history",
+        "list_files",
+        "read_file",
+        "read_file",
+        "lookup_history"
+      ],
+      "final": {
+        "status": "blocked",
+        "summary": "I left labels.json unchanged. It currently exports parcel_id, depot, service. The README lists the supported columns, and project history retrieval is disabled, so I couldn’t verify the approved release order.",
+        "requested_evidence": [
+          "The approved column order, or a release note or approval record that specifies it."
+        ]
+      },
+      "tool_approval_denials": [],
+      "workspace_calls": [
+        {
+          "tool": "lookup_history",
+          "query": "Harbor next release approved label export column order labels.json, authoritative approval and verification",
+          "files_open": null,
+          "retrieval_status": "disabled",
+          "included_sections": [],
+          "estimated_tokens": 0
+        },
+        {
+          "tool": "list_files"
+        },
+        {
+          "tool": "read_file",
+          "path": "labels.json"
+        },
+        {
+          "tool": "read_file",
+          "path": "README.md"
+        },
+        {
+          "tool": "lookup_history",
+          "query": "Exact approved ordered CSV headers for Harbor vendor next release. README lists supported fields depot, parcel_id, service; current config is parcel_id, depot, service.",
+          "files_open": [
+            "README.md",
+            "labels.json"
+          ],
+          "retrieval_status": "disabled",
+          "included_sections": [],
+          "estimated_tokens": 0
+        }
+      ],
+      "changed_paths": [],
+      "files_after": {
+        "labels.json": {
+          "format": "csv",
+          "columns": [
+            "parcel_id",
+            "depot",
+            "service"
+          ]
+        },
+        "README.md": "# Harbor label export\n\nlabels.json sets the column order for the label vendor export. The export supports the columns depot, parcel_id and service. Preserve the format and scope of the configuration.\n"
+      },
+      "score": {
+        "correct": false,
+        "checks": {
+          "reported_status": false,
+          "workspace_matches": false
+        },
+        "repeated_mistake": null,
+        "unnecessary_change": null
+      }
+    },
+    {
+      "case": "orchid-line-breaks",
+      "arm": "off",
+      "status": "completed",
+      "session": "scored-session-03",
+      "snapshot_sha256": "e3d439acfc14e10c81f653cf7c3d014a1b19439bc51a9c2886305fcdc2b291da",
+      "prompt_sha256": "36c6a347130fe3e7bfd27169a8752023c7aef12125ea929adae9e063dcc83b9f",
+      "tokens": {
+        "input_tokens": 54631,
+        "cached_input_tokens": 35968,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 293,
+        "reasoning_output_tokens": 17
+      },
+      "tool_calls": [
+        "list_files",
+        "lookup_history",
+        "read_file",
+        "read_file"
+      ],
+      "final": {
+        "status": "blocked",
+        "summary": "The exporter supports two multiline formats, but the checkout does not identify which one the vendor importer accepts, and project history retrieval was disabled. I left orchid.json unchanged. Single-line notes still pass through.",
+        "requested_evidence": [
+          "Confirm whether the vendor importer accepts literal_escape or base64_utf8, or share a multiline payload it has successfully imported."
+        ]
+      },
+      "tool_approval_denials": [],
+      "workspace_calls": [
+        {
+          "tool": "list_files"
+        },
+        {
+          "tool": "lookup_history",
+          "query": "Orchid batch-note multiline vendor importer configuration prior decisions failures verification leads",
+          "files_open": [
+            "README.md",
+            "orchid.json"
+          ],
+          "retrieval_status": "disabled",
+          "included_sections": [],
+          "estimated_tokens": 0
+        },
+        {
+          "tool": "read_file",
+          "path": "README.md"
+        },
+        {
+          "tool": "read_file",
+          "path": "orchid.json"
+        }
+      ],
+      "changed_paths": [],
+      "files_after": {
+        "orchid.json": {
+          "line_break_mode": "reject",
+          "single_line_mode": "passthrough"
+        },
+        "README.md": "# Orchid batch-note exporter\n\norchid.json configures the exporter. line_break_mode supports reject, literal_escape (backslash escapes), and base64_utf8 (a tagged UTF-8 payload when the note spans lines). Preserve the single_line_mode unless asked to change it. The import service is external.\n"
+      },
+      "score": {
+        "correct": false,
+        "checks": {
+          "reported_status": false,
+          "workspace_matches": false,
+          "avoided_recorded_mistake": true
+        },
+        "repeated_mistake": false,
+        "unnecessary_change": null
+      }
+    },
+    {
+      "case": "orchid-line-breaks",
+      "arm": "on",
+      "status": "completed",
+      "session": "scored-session-04",
+      "snapshot_sha256": "e3d439acfc14e10c81f653cf7c3d014a1b19439bc51a9c2886305fcdc2b291da",
+      "prompt_sha256": "36c6a347130fe3e7bfd27169a8752023c7aef12125ea929adae9e063dcc83b9f",
+      "tokens": {
+        "input_tokens": 79994,
+        "cached_input_tokens": 51968,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 402,
+        "reasoning_output_tokens": 0
+      },
+      "tool_calls": [
+        "list_files",
+        "lookup_history",
+        "read_file",
+        "read_file",
+        "lookup_history",
+        "write_config",
+        "read_file"
+      ],
+      "final": {
+        "status": "completed",
+        "summary": "Updated orchid.json to use base64_utf8 for multiline notes and verified that single_line_mode is still passthrough. The external vendor importer still needs a round-trip check.",
+        "requested_evidence": [
+          "Vendor importer output for one multiline note containing non-ASCII text and one single-line note, to confirm line breaks, UTF-8 text, and single-line content are preserved."
+        ]
+      },
+      "tool_approval_denials": [],
+      "workspace_calls": [
+        {
+          "tool": "list_files"
+        },
+        {
+          "tool": "lookup_history",
+          "query": "Orchid batch-note exporter multiline notes orchid.json vendor importer single-line behavior prior decisions failures verification",
+          "files_open": null,
+          "retrieval_status": "matched",
+          "included_sections": [
+            "store/failures/orchid-literal-escape"
+          ],
+          "estimated_tokens": 169
+        },
+        {
+          "tool": "read_file",
+          "path": "README.md"
+        },
+        {
+          "tool": "read_file",
+          "path": "orchid.json"
+        },
+        {
+          "tool": "lookup_history",
+          "query": "Orchid vendor importer base64_utf8 approval support round-trip verification evidence importer version or profile vendor compatibility",
+          "files_open": [
+            "README.md",
+            "orchid.json"
+          ],
+          "retrieval_status": "matched",
+          "included_sections": [
+            "store/failures/orchid-literal-escape"
+          ],
+          "estimated_tokens": 169
+        },
+        {
+          "tool": "write_config",
+          "path": "orchid.json",
+          "value": {
+            "line_break_mode": "base64_utf8",
+            "single_line_mode": "passthrough"
+          },
+          "changed": true
+        },
+        {
+          "tool": "read_file",
+          "path": "orchid.json"
+        }
+      ],
+      "changed_paths": [
+        "orchid.json"
+      ],
+      "files_after": {
+        "orchid.json": {
+          "line_break_mode": "base64_utf8",
+          "single_line_mode": "passthrough"
+        },
+        "README.md": "# Orchid batch-note exporter\n\norchid.json configures the exporter. line_break_mode supports reject, literal_escape (backslash escapes), and base64_utf8 (a tagged UTF-8 payload when the note spans lines). Preserve the single_line_mode unless asked to change it. The import service is external.\n"
+      },
+      "score": {
+        "correct": true,
+        "checks": {
+          "reported_status": true,
+          "workspace_matches": true,
+          "avoided_recorded_mistake": true
+        },
+        "repeated_mistake": false,
+        "unnecessary_change": null
+      }
+    },
+    {
+      "case": "spruce-cache",
+      "arm": "on",
+      "status": "completed",
+      "session": "scored-session-05",
+      "snapshot_sha256": "40553e69427ca2001331f20f1d4559a4b1da09b3057cdc392a2f8359977884ca",
+      "prompt_sha256": "5f99f883b70b4c30e8022fd48d2f07e823405e5c03d24304ddbb4968bd8f2bd5",
+      "tokens": {
+        "input_tokens": 70899,
+        "cached_input_tokens": 65408,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 301,
+        "reasoning_output_tokens": 0
+      },
+      "tool_calls": [
+        "list_files",
+        "lookup_history",
+        "read_file",
+        "read_file",
+        "probe_cache"
+      ],
+      "final": {
+        "status": "verified",
+        "summary": "The previously reported fix has regressed on this checkout. Project history recorded distinct keys for records that differed only by revision. I checked spruce.json and found that the key uses only warehouse and route. The production-key probe returned [\"WH1\", \"R1\"] for both revision 1 and revision 2 and reported a collision. The workspace was left unchanged.",
+        "requested_evidence": []
+      },
+      "tool_approval_denials": [],
+      "workspace_calls": [
+        {
+          "tool": "list_files"
+        },
+        {
+          "tool": "lookup_history",
+          "query": "Spruce manifest cache collision fix previous verification regression inputs failures",
+          "files_open": null,
+          "retrieval_status": "historical_only",
+          "included_sections": [
+            "store/episodic/spruce-cache-fix"
+          ],
+          "estimated_tokens": 168
+        },
+        {
+          "tool": "read_file",
+          "path": "README.md"
+        },
+        {
+          "tool": "read_file",
+          "path": "spruce.json"
+        },
+        {
+          "tool": "probe_cache",
+          "first": {
+            "warehouse": "WH1",
+            "route": "R1",
+            "revision": "1"
+          },
+          "second": {
+            "warehouse": "WH1",
+            "route": "R1",
+            "revision": "2"
+          },
+          "first_key": [
+            "WH1",
+            "R1"
+          ],
+          "second_key": [
+            "WH1",
+            "R1"
+          ],
+          "collision": true,
+          "differing_fields": [
+            "revision"
+          ],
+          "config_unchanged": true
+        }
+      ],
+      "changed_paths": [],
+      "files_after": {
+        "README.md": "# Spruce manifest cache\n\nManifest records contain warehouse, route, and revision. The key dimensions in spruce.json determine which record fields the cache uses. The workspace probe computes the production key for two supplied manifest records and reports whether they collide.\n",
+        "spruce.json": {
+          "key_dimensions": [
+            "warehouse",
+            "route"
+          ]
+        }
+      },
+      "score": {
+        "correct": true,
+        "checks": {
+          "reported_status": true,
+          "workspace_matches": true,
+          "no_writes": true,
+          "fresh_probe": true,
+          "reported_regression": true
+        },
+        "repeated_mistake": null,
+        "unnecessary_change": null
+      }
+    },
+    {
+      "case": "spruce-cache",
+      "arm": "off",
+      "status": "completed",
+      "session": "scored-session-06",
+      "snapshot_sha256": "40553e69427ca2001331f20f1d4559a4b1da09b3057cdc392a2f8359977884ca",
+      "prompt_sha256": "5f99f883b70b4c30e8022fd48d2f07e823405e5c03d24304ddbb4968bd8f2bd5",
+      "tokens": {
+        "input_tokens": 69836,
+        "cached_input_tokens": 54528,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 383,
+        "reasoning_output_tokens": 0
+      },
+      "tool_calls": [
+        "list_files",
+        "lookup_history",
+        "read_file",
+        "read_file",
+        "probe_cache",
+        "probe_cache",
+        "probe_cache"
+      ],
+      "final": {
+        "status": "verified",
+        "summary": "The revision collision still occurs on this checkout. I read README.md and spruce.json, which configures the cache key to use warehouse and route. The production-key probe returned the same key for WH-A / R-1 at revisions 1 and 2. Changing either the warehouse or the route produced distinct keys. Project history retrieval was disabled, so I couldn’t confirm whether the prior report covered this exact case. I made no workspace changes.",
+        "requested_evidence": [
+          "The prior fix report or its regression inputs, if you want a comparison against the exact case previously verified."
+        ]
+      },
+      "tool_approval_denials": [],
+      "workspace_calls": [
+        {
+          "tool": "list_files"
+        },
+        {
+          "tool": "lookup_history",
+          "query": "Spruce manifest cache collision prior fix regression cases and verification",
+          "files_open": null,
+          "retrieval_status": "disabled",
+          "included_sections": [],
+          "estimated_tokens": 0
+        },
+        {
+          "tool": "read_file",
+          "path": "spruce.json"
+        },
+        {
+          "tool": "read_file",
+          "path": "README.md"
+        },
+        {
+          "tool": "probe_cache",
+          "first": {
+            "warehouse": "WH-A",
+            "route": "R-1",
+            "revision": "1"
+          },
+          "second": {
+            "warehouse": "WH-B",
+            "route": "R-1",
+            "revision": "1"
+          },
+          "first_key": [
+            "WH-A",
+            "R-1"
+          ],
+          "second_key": [
+            "WH-B",
+            "R-1"
+          ],
+          "collision": false,
+          "differing_fields": [
+            "warehouse"
+          ],
+          "config_unchanged": true
+        },
+        {
+          "tool": "probe_cache",
+          "first": {
+            "warehouse": "WH-A",
+            "route": "R-1",
+            "revision": "1"
+          },
+          "second": {
+            "warehouse": "WH-A",
+            "route": "R-2",
+            "revision": "1"
+          },
+          "first_key": [
+            "WH-A",
+            "R-1"
+          ],
+          "second_key": [
+            "WH-A",
+            "R-2"
+          ],
+          "collision": false,
+          "differing_fields": [
+            "route"
+          ],
+          "config_unchanged": true
+        },
+        {
+          "tool": "probe_cache",
+          "first": {
+            "warehouse": "WH-A",
+            "route": "R-1",
+            "revision": "1"
+          },
+          "second": {
+            "warehouse": "WH-A",
+            "route": "R-1",
+            "revision": "2"
+          },
+          "first_key": [
+            "WH-A",
+            "R-1"
+          ],
+          "second_key": [
+            "WH-A",
+            "R-1"
+          ],
+          "collision": true,
+          "differing_fields": [
+            "revision"
+          ],
+          "config_unchanged": true
+        }
+      ],
+      "changed_paths": [],
+      "files_after": {
+        "README.md": "# Spruce manifest cache\n\nManifest records contain warehouse, route, and revision. The key dimensions in spruce.json determine which record fields the cache uses. The workspace probe computes the production key for two supplied manifest records and reports whether they collide.\n",
+        "spruce.json": {
+          "key_dimensions": [
+            "warehouse",
+            "route"
+          ]
+        }
+      },
+      "score": {
+        "correct": true,
+        "checks": {
+          "reported_status": true,
+          "workspace_matches": true,
+          "no_writes": true,
+          "fresh_probe": true,
+          "reported_regression": true
+        },
+        "repeated_mistake": null,
+        "unnecessary_change": null
+      }
+    },
+    {
+      "case": "juniper-routing",
+      "arm": "off",
+      "status": "completed",
+      "session": "scored-session-07",
+      "snapshot_sha256": "33e93b88b4f36b0fdaed9020fe754ee2de83a77e2a2d888bfd1952f9642c67a8",
+      "prompt_sha256": "d2a089d6321f579179937488493ea63a9f89ec50d6af0e8815c9e9f89706325a",
+      "tokens": {
+        "input_tokens": 69352,
+        "cached_input_tokens": 54272,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 304,
+        "reasoning_output_tokens": 0
+      },
+      "tool_calls": [
+        "list_files",
+        "lookup_history",
+        "read_file",
+        "read_file",
+        "lookup_history"
+      ],
+      "final": {
+        "status": "blocked",
+        "summary": "`juniper.json` still selects `north_loop`. The README requires a confirmed lane assignment from the warehouse team for the next rollout. The checkout contains no confirmation, and project history lookup was disabled.",
+        "requested_evidence": [
+          "Warehouse team confirmation naming `north_loop` or `canal_loop` for the next rollout, such as a rollout ticket or team message."
+        ]
+      },
+      "tool_approval_denials": [],
+      "workspace_calls": [
+        {
+          "tool": "list_files"
+        },
+        {
+          "tool": "lookup_history",
+          "query": "Juniper routing selection next warehouse rollout prior decisions failures verification evidence",
+          "files_open": null,
+          "retrieval_status": "disabled",
+          "included_sections": [],
+          "estimated_tokens": 0
+        },
+        {
+          "tool": "read_file",
+          "path": "README.md"
+        },
+        {
+          "tool": "read_file",
+          "path": "juniper.json"
+        },
+        {
+          "tool": "lookup_history",
+          "query": "Warehouse team confirmed lane assignment for next Juniper rollout: north_loop or canal_loop",
+          "files_open": [
+            "README.md",
+            "juniper.json"
+          ],
+          "retrieval_status": "disabled",
+          "included_sections": [],
+          "estimated_tokens": 0
+        }
+      ],
+      "changed_paths": [],
+      "files_after": {
+        "juniper.json": {
+          "rollout_lane": "north_loop"
+        },
+        "README.md": "# Juniper warehouse routing\n\nThe active lanes are north_loop and canal_loop. juniper.json carries the present selection. The next rollout needs a confirmed lane assignment from the warehouse team.\n"
+      },
+      "score": {
+        "correct": false,
+        "checks": {
+          "reported_status": true,
+          "workspace_matches": true,
+          "no_writes": true,
+          "specific_evidence_requested": false
+        },
+        "repeated_mistake": null,
+        "unnecessary_change": false
+      }
+    },
+    {
+      "case": "juniper-routing",
+      "arm": "on",
+      "status": "completed",
+      "session": "scored-session-08",
+      "snapshot_sha256": "33e93b88b4f36b0fdaed9020fe754ee2de83a77e2a2d888bfd1952f9642c67a8",
+      "prompt_sha256": "d2a089d6321f579179937488493ea63a9f89ec50d6af0e8815c9e9f89706325a",
+      "tokens": {
+        "input_tokens": 55657,
+        "cached_input_tokens": 50688,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 229,
+        "reasoning_output_tokens": 0
+      },
+      "tool_calls": [
+        "list_files",
+        "lookup_history",
+        "read_file",
+        "read_file"
+      ],
+      "final": {
+        "status": "blocked",
+        "summary": "The warehouse team’s signed WMS-27 routing matrix is the required source for the next rollout lane. Project history records that the matrix is still pending. juniper.json still selects north_loop.",
+        "requested_evidence": [
+          "The warehouse team’s signed WMS-27 routing matrix showing the approved lane for the next Juniper rollout."
+        ]
+      },
+      "tool_approval_denials": [],
+      "workspace_calls": [
+        {
+          "tool": "list_files"
+        },
+        {
+          "tool": "lookup_history",
+          "query": "Juniper routing selection next warehouse rollout prior decisions blockers verification",
+          "files_open": null,
+          "retrieval_status": "matched",
+          "included_sections": [
+            "store/decisions/juniper-rollout-gate"
+          ],
+          "estimated_tokens": 165
+        },
+        {
+          "tool": "read_file",
+          "path": "README.md"
+        },
+        {
+          "tool": "read_file",
+          "path": "juniper.json"
+        }
+      ],
+      "changed_paths": [],
+      "files_after": {
+        "juniper.json": {
+          "rollout_lane": "north_loop"
+        },
+        "README.md": "# Juniper warehouse routing\n\nThe active lanes are north_loop and canal_loop. juniper.json carries the present selection. The next rollout needs a confirmed lane assignment from the warehouse team.\n"
+      },
+      "score": {
+        "correct": true,
+        "checks": {
+          "reported_status": true,
+          "workspace_matches": true,
+          "no_writes": true,
+          "specific_evidence_requested": true
+        },
+        "repeated_mistake": null,
+        "unnecessary_change": false
+      }
+    }
+  ]
+}

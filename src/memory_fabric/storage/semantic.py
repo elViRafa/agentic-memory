@@ -111,8 +111,7 @@ def _load_fastembed() -> object | None:
         import os
 
         model_name = (
-            os.environ.get("MEMORY_FABRIC_EMBED_MODEL")
-            or "sentence-transformers/all-MiniLM-L6-v2"
+            os.environ.get("MEMORY_FABRIC_EMBED_MODEL") or "sentence-transformers/all-MiniLM-L6-v2"
         )
         _fastembed_model = TextEmbedding(model_name=model_name)
     except Exception:  # noqa: BLE001 - optional dependency may fail to init.

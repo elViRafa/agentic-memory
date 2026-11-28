@@ -202,15 +202,14 @@ def write_memory_store(
                 f"{store_path} looks finished (`-complete`); stored as priority=low "
                 "so it does not compete with live handoffs."
             )
-        elif looks_resolved_text(redacted) or looks_resolved_text(
-            str(metadata.get("summary") or "")
-        ):
-            if str(metadata.get("priority")) == "high":
-                metadata["priority"] = "low"
-                warnings.append(
-                    f"{store_path} reads as resolved/historical; stored as priority=low "
-                    "instead of high."
-                )
+        elif (
+            looks_resolved_text(redacted) or looks_resolved_text(str(metadata.get("summary") or ""))
+        ) and str(metadata.get("priority")) == "high":
+            metadata["priority"] = "low"
+            warnings.append(
+                f"{store_path} reads as resolved/historical; stored as priority=low "
+                "instead of high."
+            )
         # Body rewrite clears sticky stale — standing roles are not age-restamped.
         if str(metadata.get("review_status") or "").strip().lower() == "stale":
             metadata.pop("review_status", None)
@@ -280,9 +279,7 @@ def write_memory_store(
             path.write_text(dump_frontmatter(metadata, new_body), encoding="utf-8")
 
     store_root = memory_store_dir(cwd)
-    writer_role = role_for_store_path(
-        store_path, role=str(metadata.get("role") or "") or None
-    )
+    writer_role = role_for_store_path(store_path, role=str(metadata.get("role") or "") or None)
     named_closes = parse_supersedes_paths(redacted if changed else content, explicit=supersedes)
     if changed and named_closes:
         for target in named_closes:
@@ -296,9 +293,7 @@ def write_memory_store(
             target_meta: dict = {}
             if target_path.is_file():
                 try:
-                    target_meta, _ = parse_frontmatter(
-                        target_path.read_text(encoding="utf-8")
-                    )
+                    target_meta, _ = parse_frontmatter(target_path.read_text(encoding="utf-8"))
                     target_role = role_for_store_path(
                         target, role=str(target_meta.get("role") or "") or None
                     )
@@ -320,35 +315,26 @@ def write_memory_store(
                     "close a later claim)."
                 )
                 continue
-            if close_store_file(
-                store_root, target, successor=store_path, close_kind=kind
-            ):
+            if close_store_file(store_root, target, successor=store_path, close_kind=kind):
                 warnings.append(
-                    f"Closed `{target}` with superseded_by: {store_path} "
-                    f"(close_kind={kind})."
+                    f"Closed `{target}` with superseded_by: {store_path} (close_kind={kind})."
                 )
             else:
-                warnings.append(
-                    f"Could not close `{target}` (file missing or already closed)."
-                )
+                warnings.append(f"Could not close `{target}` (file missing or already closed).")
     elif changed and body_claims_superseded_without_field(metadata, redacted):
         warnings.append(
             f"`{store_path}` says a memory was superseded in prose but has no "
             "`supersedes:` field — queue it for review; nothing was closed."
         )
 
-    if changed and is_posture_path(
-        store_path, role=str(metadata.get("role") or "") or None
-    ):
+    if changed and is_posture_path(store_path, role=str(metadata.get("role") or "") or None):
         keep_paths: list[str] = []
         try:
             _meta, written_body = parse_frontmatter(path.read_text(encoding="utf-8"))
             _packed, keep_paths = live_posture_body(written_body)
         except (OSError, UnicodeDecodeError, FrontmatterError):
             _packed, keep_paths = live_posture_body(redacted)
-        demoted = demote_sibling_next_session_files(
-            store_root, store_path, keep_paths=keep_paths
-        )
+        demoted = demote_sibling_next_session_files(store_root, store_path, keep_paths=keep_paths)
         if demoted:
             sample = ", ".join(demoted[:5])
             extra = f" (+{len(demoted) - 5} more)" if len(demoted) > 5 else ""
@@ -364,9 +350,7 @@ def write_memory_store(
                 "further high writes stop discriminating in retrieval. "
                 "Use medium unless this is a live constraint."
             )
-        if is_live_handoff_path(
-            store_path, role=str(metadata.get("role") or "") or None
-        ):
+        if is_live_handoff_path(store_path, role=str(metadata.get("role") or "") or None):
             siblings = sibling_high_handoffs(store_root, store_path)
             if siblings:
                 sample = ", ".join(siblings[:5])

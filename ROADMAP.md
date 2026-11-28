@@ -4,7 +4,23 @@
 > one command in VS Code, Claude (Code + Desktop), Codex, Antigravity, Cursor, Windsurf,
 > Gemini CLI, Cline, and anything MCP-compatible.
 
-Last updated: 2026-11-18 · Current version: 1.4.6 · Tests: 541 passing (+1 skipped on Windows by design) · Lint: ruff (E4,E7,E9,F,I,B,UP,SIM,RUF,BLE001,S110,S112) + mypy clean · No `src/` file >25 KB except 4 tracked borderline files · Phase 0 exit criteria met · Phase 2.2 migration tooling shipped · Phase 2.3 store-first cutover shipped (flat fact-writes removed) · Phase 3 capture reliability (filter, roll-up, multi-client hooks) shipped · v1.1 project directives (sync/context routing, managed markers, `sync-agents --check`) shipped · v1.1.2 instruction-template graceful degradation shipped · v1.2.0 conflict-free team merges shipped (generated-view union merge, block-level store merge, `resolve-conflicts`) · v1.3.0 maps-first retrieval + Cursor hooks + coding-memory bench shipped · v1.4.1 field write/read hygiene from dogfood stores shipped · v1.4.2 field pack precision (contradictions, stale ranking, dream churn) shipped · v1.4.3 SSH field sentence search, eval probe, and index hygiene shipped · v1.4.6 close events for outdated memory (age is not truth) shipped
+## Shipped in 1.5.0 · Reliable recall
+
+Updated November 27, 2026. On version 1.4.6, keyword search returned zero hits
+for an invented identifier in three field workspaces. Task context still
+delivered 3 to 6 stored notes per workspace. In the largest store, indexed
+search took 1,997 ms at p95 and missed two known fixes marked stale.
+
+1. Score keyword-search rank and evidence delivered to the agent independently.
+2. Return matching passages, label historical leads, and identify queries with no supporting memory.
+3. Correct the diary's scan-cap signal and halve warm query p95 on a repeatable 500-note fixture.
+4. Compare fresh-session coding outcomes with and without project memory.
+
+The field report records the workspace CLI and MCP versions, historical usage,
+and reproduction steps. The checklist defines each milestone's release criteria.
+[November field report](docs/field-recall-2026-11.md) · [Implementation checklist](docs/recall-implementation.md)
+
+Release snapshot, November 28, 2026 · Current version: 1.5.0 · Tests: 553 passing on the Windows verification run (+1 symlink skip) · No `src/` file >25 KB except 4 tracked borderline files · Phase 0 exit criteria met · Phase 2.2 migration tooling shipped · Phase 2.3 store-first cutover shipped (flat fact-writes removed) · Phase 3 capture reliability (filter, roll-up, multi-client hooks) shipped · v1.1 project directives (sync/context routing, managed markers, `sync-agents --check`) shipped · v1.1.2 instruction-template graceful degradation shipped · v1.2.0 conflict-free team merges shipped (generated-view union merge, block-level store merge, `resolve-conflicts`) · v1.3.0 maps-first retrieval + Cursor hooks + coding-memory bench shipped · v1.4.1 field write/read hygiene from dogfood stores shipped · v1.4.2 field pack precision (contradictions, stale ranking, dream churn) shipped · v1.4.3 SSH field sentence search, eval probe, and index hygiene shipped · v1.4.6 close events for outdated memory (age is not truth) shipped
 
 ---
 
@@ -725,9 +741,11 @@ Keep the zero-dependency, no-vector-DB default. Add optional layers that degrade
       blend cosine for paraphrase hits; absent the extra, search stays lexical.
       Persistent `sqlite-vec` cache remains future work — embeddings are computed
       on demand today. No cloud calls.
-- [ ] **Temporal facts.** Frontmatter gains optional `valid_from` / `superseded_by`.
-      Dreaming marks contradicted facts as superseded instead of deleting — the agent can
-      answer "when did we change X?" This is Zep's headline feature, done file-first.
+- [~] **Temporal facts.** Version 1.4.6 stores `valid_from`, `closed_at`,
+      `close_kind`, and `superseded_by`. An explicit supersession or a promoted
+      review can close a claim. Contradiction detection queues candidates for review.
+      Version 1.5.0 exposes matching unclosed stale fixes as labeled
+      historical leads. General point-in-time queries remain open.
 - [ ] **Link graph.** `[[wiki-links]]` between memory files + a generated entity index.
       A cheap knowledge graph with zero database — retrieval follows links one hop out.
 - [ ] **Memory lifecycle.** Provenance (`source_session`), access-count decay, confidence
@@ -809,6 +827,8 @@ depend on the v1.0.0 tag going live.
 | Capture rate (hooks on) | **Met 2026-07-16**: episodic record per commit (100%), no agent cooperation | 100% of benchmark sessions journaled with a non-compliant agent — **measured at 100% in `scripts/capture_rate_benchmark.py`; real-world multi-client rollout is the 12-month target** |
 
 ## 11. Suggested execution order
+
+The sequence below records the earlier release plan.
 
 1. **Phase 1.1 PyPI publish** — small effort, unblocks every install story. Do first.
 2. **Phase 0 CI + module split** — in parallel; must be green before launch.

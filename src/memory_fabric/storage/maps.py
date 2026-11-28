@@ -137,8 +137,7 @@ def _build_map_body(category: str, entries: list[dict[str, Any]]) -> str:
             )
         else:
             line = (
-                f"- **{entry['title']}** (`{entry['store_path']}`, "
-                f"{entry['priority']}) — {summary}"
+                f"- **{entry['title']}** (`{entry['store_path']}`, {entry['priority']}) — {summary}"
             )
         if included > 0 and estimate_tokens("\n".join([*lines, line])) > cap:
             remaining = len(entries) - included

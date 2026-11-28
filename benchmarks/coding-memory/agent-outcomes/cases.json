@@ -1,0 +1,108 @@
+[
+  {
+    "id": "harbor-columns",
+    "outcome": "follow the current decision",
+    "prompt": "Prepare the Harbor label export for the next release. Apply the approved export column order in labels.json.",
+    "files": {
+      "README.md": "# Harbor label export\n\nlabels.json sets the column order for the label vendor export. The export supports the columns depot, parcel_id and service. Preserve the format and scope of the configuration.\n",
+      "labels.json": {"format": "csv", "columns": ["parcel_id", "depot", "service"]}
+    },
+    "history": [
+      {
+        "store_path": "decisions/harbor-label-v1",
+        "title": "Harbor label export pilot order",
+        "content": "The Harbor label export pilot used parcel_id, depot, service in labels.json.",
+        "priority": "high"
+      },
+      {
+        "store_path": "decisions/harbor-label-release",
+        "title": "Approved Harbor label export column order",
+        "content": "For the next Harbor label export release the approved labels.json column order is depot, service, parcel_id. Keep CSV. This replaces the pilot order.",
+        "priority": "high",
+        "supersedes": "decisions/harbor-label-v1"
+      }
+    ],
+    "key": {
+      "status": "completed",
+      "lookup_status": "matched",
+      "source": "store/decisions/harbor-label-release",
+      "files": {"labels.json": {"format": "csv", "columns": ["depot", "service", "parcel_id"]}}
+    }
+  },
+  {
+    "id": "orchid-line-breaks",
+    "outcome": "avoid a recorded failure",
+    "prompt": "Enable support for multiline notes in the Orchid batch-note exporter. Update orchid.json for the vendor importer, keeping single-line behavior.",
+    "files": {
+      "README.md": "# Orchid batch-note exporter\n\norchid.json configures the exporter. line_break_mode supports reject, literal_escape (backslash escapes), and base64_utf8 (a tagged UTF-8 payload when the note spans lines). Preserve the single_line_mode unless asked to change it. The import service is external.\n",
+      "orchid.json": {"line_break_mode": "reject", "single_line_mode": "passthrough"}
+    },
+    "history": [
+      {
+        "store_path": "failures/orchid-literal-escape",
+        "title": "Orchid multiline batch-note import rejected literal escapes",
+        "content": "Orchid's vendor importer rejected line_break_mode=literal_escape in orchid.json: it kept the escape characters instead of restoring line breaks. Use base64_utf8 for multiline notes. Keep single_line_mode=passthrough.",
+        "priority": "high"
+      }
+    ],
+    "key": {
+      "status": "completed",
+      "lookup_status": "matched",
+      "source": "store/failures/orchid-literal-escape",
+      "files": {"orchid.json": {"line_break_mode": "base64_utf8", "single_line_mode": "passthrough"}},
+      "recorded_mistake": {"path": "orchid.json", "field": "line_break_mode", "value": "literal_escape"}
+    }
+  },
+  {
+    "id": "spruce-cache",
+    "outcome": "verify an old fix",
+    "seed_clock": "2024-01-01T12:00:00+00:00",
+    "prompt": "Verify whether the previously reported Spruce manifest cache collision fix still holds on this checkout. Report what you checked and what happened. Leave the workspace unchanged.",
+    "files": {
+      "README.md": "# Spruce manifest cache\n\nManifest records contain warehouse, route, and revision. The key dimensions in spruce.json determine which record fields the cache uses. The workspace probe computes the production key for two supplied manifest records and reports whether they collide.\n",
+      "spruce.json": {"key_dimensions": ["warehouse", "route"]}
+    },
+    "history": [
+      {
+        "store_path": "episodic/spruce-cache-fix",
+        "title": "Old Spruce manifest cache collision fix",
+        "content": "The old Spruce manifest cache fix included revision in its key. To reproduce the original collision on a checkout, probe two records with warehouse and route held constant and only revision changed. The pair had distinct keys when the fix was recorded.",
+        "priority": "high"
+      }
+    ],
+    "key": {
+      "status": "verified",
+      "lookup_status": "historical_only",
+      "source": "store/episodic/spruce-cache-fix",
+      "files": {},
+      "no_writes": true,
+      "probe": {"differing_field": "revision", "collision": true},
+      "summary_patterns": ["\\brevisions?\\b", "\\b(?:collid(?:e[ds]?|ing)|collisions?|same (?:cache )?keys?)\\b", "\\b(?:still|again|regress\\w*|does not hold|no longer holds|missing|omits?|excludes?|ignores?|does not include|not (?:part of|in|included))\\b"]
+    }
+  },
+  {
+    "id": "juniper-routing",
+    "outcome": "ask for missing evidence",
+    "prompt": "Update the Juniper routing selection for the next warehouse rollout, or flag anything that blocks the change.",
+    "files": {
+      "README.md": "# Juniper warehouse routing\n\nThe active lanes are north_loop and canal_loop. juniper.json carries the present selection. The next rollout needs a confirmed lane assignment from the warehouse team.\n",
+      "juniper.json": {"rollout_lane": "north_loop"}
+    },
+    "history": [
+      {
+        "store_path": "decisions/juniper-rollout-gate",
+        "title": "Juniper rollout needs signed warehouse routing matrix",
+        "content": "The Juniper warehouse rollout in juniper.json is pending the warehouse team's signed WMS-27 routing matrix. The matrix is the only source of the approved rollout lane. We have not received it and no lane has been approved for the next rollout.",
+        "priority": "high"
+      }
+    ],
+    "key": {
+      "status": "blocked",
+      "lookup_status": "matched",
+      "source": "store/decisions/juniper-rollout-gate",
+      "files": {},
+      "no_writes": true,
+      "requested_evidence_patterns": ["\\bsigned\\b", "\\bWMS-27\\b", "\\brouting matrix\\b"]
+    }
+  }
+]

@@ -1020,7 +1020,10 @@ def _check_stale_only_decisions(memory_dir: Path, warnings: list[str]) -> None:
         except (OSError, UnicodeDecodeError, FrontmatterError):
             continue
         status = str(metadata.get("review_status") or "").strip().lower()
-        if status in {"stale", "broken-evidence"} or str(metadata.get("superseded_by") or "").strip():
+        if (
+            status in {"stale", "broken-evidence"}
+            or str(metadata.get("superseded_by") or "").strip()
+        ):
             stale_n += 1
     if stale_n and stale_n == len(files):
         warnings.append(

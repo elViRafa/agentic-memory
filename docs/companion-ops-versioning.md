@@ -8,7 +8,7 @@ A separate **private** companion repository, [`elViRafa/memory-fabric-ops`](http
 
 | Artifact | Current version | Where it is controlled |
 | --- | --- | --- |
-| Engine (`memory-fabric`) | `1.4.6` | [`src/memory_fabric/version.py`](../src/memory_fabric/version.py) |
+| Engine (`memory-fabric`) | `1.5.0` | [`src/memory_fabric/version.py`](../src/memory_fabric/version.py) |
 | Ops skill pack | `1.0.0` | Private repo `versions.json` → `skill_pack.version` |
 | Ops pack tested against engine | `1.4.6` | Private repo `versions.json` → `engine.tested_version` |
 | Ops pack minimum engine | `1.4.5` | Private repo `versions.json` → `engine.min_version` |

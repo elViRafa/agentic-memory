@@ -211,7 +211,7 @@ async def dream(
     fallback_files_touched = None
     is_fallback = False
 
-    resp_data = None
+    resp_data: dict[str, Any]
     current_consolidation_hash = None
 
     if llm_active:

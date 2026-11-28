@@ -1,0 +1,10 @@
+{
+  "type": "object",
+  "properties": {
+    "status": {"type": "string", "enum": ["completed", "verified", "blocked"]},
+    "summary": {"type": "string"},
+    "requested_evidence": {"type": "array", "items": {"type": "string"}}
+  },
+  "required": ["status", "summary", "requested_evidence"],
+  "additionalProperties": false
+}

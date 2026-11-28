@@ -41,7 +41,7 @@ _GENERIC_IDENT_FRAC = 0.25
 _SAME_TOPIC_JACCARD = 0.25
 _NUMERIC_BUCKET_CAP = 32
 _POLARITY_POSTING_CAP = 24
-# Decimals allow 1–2 fractional digits (0.46 / 0,46). Longer comma groups
+# Decimals allow 1 or 2 fractional digits (0.46 / 0,46). Longer comma groups
 # like ``147,163`` are two integers (line cites), not one decimal.
 _NUMBER_TOKEN_RE = re.compile(r"\d+(?:[.,]\d{1,2})?(?!\d)")
 _HEX_RE = re.compile(r"^[0-9a-f]{7,}$", re.IGNORECASE)
@@ -105,11 +105,9 @@ _STOP_WORDS = frozenset(
         "their",
         "de",
         "da",
-        "do",
         "dos",
         "das",
         "em",
-        "no",
         "na",
         "nos",
         "nas",
@@ -122,7 +120,6 @@ _STOP_WORDS = frozenset(
         "que",
         "se",
         "os",
-        "as",
         "o",
         "e",
         "ou",
@@ -607,9 +604,7 @@ def _top_level_prefix(store_path: str) -> str:
     return parts[0].casefold() if parts else ""
 
 
-def _same_topic_claims(
-    a: _Claim, b: _Claim, generic: frozenset[str], *, same_folder: bool
-) -> bool:
+def _same_topic_claims(a: _Claim, b: _Claim, generic: frozenset[str], *, same_folder: bool) -> bool:
     """Folder alone is not enough; require a rare shared token or claim Jaccard."""
     shared = (a.content_words & b.content_words) - generic
     if shared:
@@ -649,9 +644,7 @@ def _claim_index(entries: list[_Entry]) -> list[_Claim]:
     return claims
 
 
-def _detect_numeric(
-    entries: list[_Entry], generic: frozenset[str]
-) -> list[Contradiction]:
+def _detect_numeric(entries: list[_Entry], generic: frozenset[str]) -> list[Contradiction]:
     claims = _claim_index(entries)
     buckets: dict[tuple[str, str], list[tuple[_Claim, _Quantity]]] = defaultdict(list)
     for claim in claims:
@@ -721,9 +714,7 @@ def _detect_numeric(
     return hits
 
 
-def _detect_polarity(
-    entries: list[_Entry], generic: frozenset[str]
-) -> list[Contradiction]:
+def _detect_polarity(entries: list[_Entry], generic: frozenset[str]) -> list[Contradiction]:
     claims = _claim_index(entries)
     postings: dict[str, list[_Claim]] = defaultdict(list)
     for claim in claims:
@@ -969,9 +960,7 @@ def _unresolved_overlap_pairs(
             related = False
             for ca in a.claims:
                 for cb in b.claims:
-                    same_folder = _top_level_prefix(a.store_path) == _top_level_prefix(
-                        b.store_path
-                    )
+                    same_folder = _top_level_prefix(a.store_path) == _top_level_prefix(b.store_path)
                     if _same_topic_claims(ca, cb, generic, same_folder=same_folder):
                         related = True
                         break

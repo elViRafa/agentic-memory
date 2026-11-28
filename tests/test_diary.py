@@ -289,8 +289,48 @@ class PackStatsRecordingTests(_DiaryHome):
         self.assertEqual(events[0]["backend"], "python")
         self.assertGreater(events[0]["content_token_n"], 0)
         self.assertEqual(events[0]["candidate_n"], 0)
+        self.assertFalse(events[0]["scan_capped"])
         self.assertFalse(events[0]["phrase_hit"])
         self.assertNotIn("query", events[0])
+
+    def test_fallback_cap_requires_an_omitted_matching_file(self) -> None:
+        import shutil
+
+        from memory_fabric.storage import keyword_search, write_memory_store
+
+        initialize_memory_fabric(str(self.project))
+        approve("counts", confirmed=True)
+        notes = ("first", "second", "third")
+        for name in notes:
+            write_memory_store(
+                str(self.project),
+                store_path=f"notes/{name}",
+                content="specificsignal" if name != "third" else "unrelated",
+            )
+        backends = [("python", None)]
+        if rg := shutil.which("rg"):
+            backends.append(("ripgrep", rg))
+
+        with (
+            mock.patch("memory_fabric.storage.index.sync_index", return_value=None),
+            mock.patch("memory_fabric.storage.search._CANDIDATE_CAP", 2),
+        ):
+            for third_body in ("unrelated", "specificsignal"):
+                write_memory_store(
+                    str(self.project),
+                    store_path="notes/third",
+                    content=third_body,
+                )
+                for backend, executable in backends:
+                    with (
+                        self.subTest(backend=backend, third_body=third_body),
+                        mock.patch("shutil.which", return_value=executable),
+                    ):
+                        keyword_search(str(self.project), "specificsignal", max_results=1)
+                        event = [e for e in self._events() if e["event"] == "search.run"][-1]
+                        self.assertEqual(event["backend"], backend)
+                        self.assertEqual(event["candidate_n"], 2)
+                        self.assertEqual(event["scan_capped"], third_body == "specificsignal")
 
     def test_search_run_records_token_counts_without_query_text(self) -> None:
         from memory_fabric.storage import keyword_search, write_memory_store
@@ -310,6 +350,7 @@ class PackStatsRecordingTests(_DiaryHome):
         self.assertGreaterEqual(event["hit_n"], 1)
         self.assertGreater(event["token_n"], event["content_token_n"])
         self.assertGreaterEqual(event["candidate_n"], 1)
+        self.assertFalse(event["scan_capped"])
         self.assertNotIn("query", event)
         self.assertNotIn("dashboard", json.dumps(event))
 
